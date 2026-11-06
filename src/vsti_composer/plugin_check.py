@@ -7,9 +7,7 @@ with `python -m` is the worker.
 
 import argparse
 import json
-import subprocess
 import sys
-import tempfile
 import tomllib
 from dataclasses import asdict, dataclass, field, fields
 from enum import StrEnum
@@ -18,6 +16,8 @@ from typing import Any
 
 import mido
 import numpy as np
+
+from vsti_composer.worker import WorkerCrashedError, WorkerTimedOutError, run_isolated
 
 PROJECT_DIR = Path(__file__).resolve().parents[2]
 DEFAULT_CONFIG = PROJECT_DIR / "plugins.toml"
@@ -106,7 +106,7 @@ def _to_dbfs(peak: float) -> float:
     return FLOOR_DBFS if peak <= floor else 20.0 * float(np.log10(peak))
 
 
-def _peak_dbfs(samples: np.ndarray) -> float:
+def measure_peak_dbfs(samples: np.ndarray) -> float:
     return _to_dbfs(float(np.abs(samples[np.isfinite(samples)]).max(initial=0.0)))
 
 
@@ -116,7 +116,7 @@ def _note_peaks_dbfs(render: np.ndarray) -> list[float]:
         start_s = FIRST_NOTE_S + index * NOTE_SPACING_S
         start = round(start_s * SAMPLE_RATE)
         stop = round((start_s + NOTE_LENGTH_S) * SAMPLE_RATE)
-        peaks.append(_peak_dbfs(render[..., start:stop]))
+        peaks.append(measure_peak_dbfs(render[..., start:stop]))
     return peaks
 
 
@@ -131,7 +131,7 @@ def analyze(first: np.ndarray, second: np.ndarray) -> Analysis:
     both_finite = np.isfinite(first) & np.isfinite(second)
     difference = np.abs(first[both_finite] - second[both_finite]).max(initial=0.0)
 
-    peak_dbfs = min(_peak_dbfs(first), _peak_dbfs(second))
+    peak_dbfs = min(measure_peak_dbfs(first), measure_peak_dbfs(second))
     note_peaks_dbfs = [
         min(a, b) for a, b in zip(_note_peaks_dbfs(first), _note_peaks_dbfs(second), strict=True)
     ]
@@ -185,45 +185,13 @@ def worker_command(spec: PluginSpec) -> list[str]:
 
 
 def run_worker(command: list[str], timeout_s: float) -> dict[str, Any]:
-    """Run a worker, appending its result path as the last argument, and return its result.
-
-    Stdout and stderr avoid pipes, so a helper process left running by a plugin cannot hold them
-    open and make a finished worker look hung.
-    """
-    with tempfile.TemporaryDirectory() as directory:
-        result_path = Path(directory) / "result.json"
-        stderr_path = Path(directory) / "stderr.txt"
-        try:
-            with stderr_path.open("wb") as stderr:
-                completed = subprocess.run(
-                    [*command, str(result_path)],
-                    stdin=subprocess.DEVNULL,
-                    stdout=subprocess.DEVNULL,
-                    stderr=stderr,
-                    timeout=timeout_s,
-                    check=False,
-                )
-        except subprocess.TimeoutExpired:
-            return {
-                "status": Status.TIMED_OUT,
-                "detail": f"worker exceeded {timeout_s:g} seconds",
-            }
-
-        stderr_lines = stderr_path.read_text(errors="replace").strip().splitlines()
-        last_line = stderr_lines[-1] if stderr_lines else "no error output"
-        if completed.returncode != 0:
-            return {
-                "status": Status.CRASHED,
-                "detail": f"exit code {completed.returncode}: {last_line}",
-            }
-        return _read_worker_result(result_path)
-
-
-def _read_worker_result(result_path: Path) -> dict[str, Any]:
+    """Run a check worker and return its validated result, or a timed-out or crashed result."""
     try:
-        payload = json.loads(result_path.read_text())
-    except (OSError, ValueError):
-        return {"status": Status.CRASHED, "detail": "worker wrote no readable result"}
+        payload = run_isolated(command, timeout_s)
+    except WorkerTimedOutError as error:
+        return {"status": Status.TIMED_OUT, "detail": str(error)}
+    except WorkerCrashedError as error:
+        return {"status": Status.CRASHED, "detail": str(error)}
 
     if not isinstance(payload, dict) or not set(payload) <= WORKER_FIELDS:
         return {"status": Status.CRASHED, "detail": "worker wrote a malformed result"}
@@ -247,6 +215,14 @@ def exit_code(results: list[PluginResult]) -> int:
     return EXIT_ALL_PASS if all_pass else EXIT_SOME_FAILED
 
 
+def align_rows(rows: list[tuple[str, ...]]) -> list[str]:
+    widths = [max(len(row[column]) for row in rows) for column in range(len(rows[0]))]
+    return [
+        "  ".join(cell.ljust(w) for cell, w in zip(row, widths, strict=True)).rstrip()
+        for row in rows
+    ]
+
+
 def format_table(results: list[PluginResult]) -> str:
     def yes_no(value: bool | None) -> str:
         return "-" if value is None else ("yes" if value else "no")
@@ -267,9 +243,7 @@ def format_table(results: list[PluginResult]) -> str:
         if result.detail:
             details.append(f"{result.name}: {result.detail}")
 
-    widths = [max(len(row[column]) for row in rows) for column in range(len(rows[0]))]
-    lines = ["  ".join(cell.ljust(w) for cell, w in zip(row, widths, strict=True)) for row in rows]
-    return "\n".join(line.rstrip() for line in [*lines, *details])
+    return "\n".join([*align_rows(rows), *details])
 
 
 def main(argv: list[str] | None = None) -> int:
