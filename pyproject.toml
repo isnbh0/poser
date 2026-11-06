@@ -1,0 +1,42 @@
+[project]
+name = "vsti-composer"
+version = "0.1.0"
+description = "Compose multitrack music through VST instruments from code"
+authors = [
+    { name = "John Choi", email = "5154439+isnbh0@users.noreply.github.com" }
+]
+requires-python = ">=3.13"
+dependencies = [
+    "mido>=1.3.3",
+    "numpy>=2.5.4",
+    "pedalboard>=0.9.26",
+]
+
+[project.scripts]
+check-plugins = "vsti_composer.plugin_check:main"
+
+[build-system]
+requires = ["uv_build>=0.13.6,<0.14.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.2.0",
+]
+lint = [
+    "ruff>=0.17.4",
+    "ty>=0.0.98",
+]
+
+[tool.uv]
+default-groups = ["dev", "lint"]
+
+[tool.ruff]
+line-length = 100
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-m 'not real_plugins'"
+markers = [
+    "real_plugins: loads the plugins installed on this machine",
+]

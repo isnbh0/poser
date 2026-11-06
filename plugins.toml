@@ -1,0 +1,10 @@
+# Plugins that `check-plugins` tests. Add an entry to check another plugin.
+# Multi-plugin bundles also need `plugin_name`.
+
+[[plugin]]
+name = "Serum"
+path = "/Library/Audio/Plug-Ins/VST3/Serum.vst3"
+
+[[plugin]]
+name = "Primer"
+path = "/Library/Audio/Plug-Ins/VST3/Primer.vst3"
