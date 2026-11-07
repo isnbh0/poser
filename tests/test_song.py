@@ -34,11 +34,11 @@ def test_valid_song_loads_with_expected_values(tmp_path: Path) -> None:
     )
 
 
-def test_demo_song_loads_with_two_serum_tracks_and_eight_notes() -> None:
+def test_demo_song_loads_with_two_serum_preset_tracks_and_eight_notes() -> None:
     song = load_song(PROJECT_DIR / "songs" / "demo.yaml")
 
     assert len(song.tracks) == 2
-    assert {track.sound for track in song.tracks} == {"Serum"}
+    assert all(track.sound.startswith("Serum:") for track in song.tracks)
     assert sum(len(track.notes) for track in song.tracks) >= 8
 
 

@@ -36,6 +36,7 @@ from vsti_composer.plugin_check import (
     load_config,
     measure_peak_dbfs,
 )
+from vsti_composer.presets import PresetError, build_state, preset_files, read_chunk
 from vsti_composer.song import Note, Song, SongError, Track, load_song
 from vsti_composer.sounds import SOUNDS_DIR, SoundError, read_sound, sound_files
 from vsti_composer.worker import WorkerCrashedError, WorkerTimedOutError, run_isolated
@@ -169,17 +170,32 @@ def resolve_sound(
     """Return a track's plugin and base64 state, or the failed result to report.
 
     A plugin name means its default state, with no state to restore. Otherwise the name must be a
-    saved sound, matched exactly against the sound files.
+    saved sound, matched exactly against the sound files, or `<plugin>:<path>` naming one of that
+    plugin's installed presets, matched exactly against its preset files.
     """
     specs_by_name = {spec.name: spec for spec in specs}
     if sound in specs_by_name:
         return specs_by_name[sound], None
+    unknown = {
+        "status": TrackStatus.UNKNOWN_SOUND,
+        "detail": f"no plugin, saved sound, or preset named {sound!r}",
+    }
+    plugin_name, colon, _ = sound.partition(":")
+    if colon:
+        spec = specs_by_name.get(plugin_name)
+        if spec is None:
+            return unknown
+        try:
+            preset = preset_files(spec).get(sound)
+            if preset is None:
+                return unknown
+            state = build_state(read_chunk(preset))
+        except PresetError as error:
+            return {"status": TrackStatus.LOAD_FAILED, "detail": f"preset {sound!r}: {error}"}
+        return spec, base64.b64encode(state).decode("ascii")
     path = sound_files(sounds_dir).get(sound)
     if path is None:
-        return {
-            "status": TrackStatus.UNKNOWN_SOUND,
-            "detail": f"no plugin or saved sound named {sound!r}",
-        }
+        return unknown
     try:
         saved = read_sound(path, specs)
     except SoundError as error:

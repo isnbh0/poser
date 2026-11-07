@@ -2,11 +2,13 @@
 
 import base64
 import json
+import re
 import sys
 from pathlib import Path
 from typing import Any
 
 import pytest
+from helpers import fxp_bytes
 
 from vsti_composer import sounds
 from vsti_composer.plugin_check import EXIT_ALL_PASS, EXIT_BAD_CONFIG, EXIT_SOME_FAILED
@@ -15,10 +17,11 @@ from vsti_composer.worker import run_isolated
 WORKER_STATE = b"state-from-the-window"
 
 
-def write_plugins(tmp_path: Path) -> Path:
+def write_plugins(tmp_path: Path, presets: Path | None = None) -> Path:
     path = tmp_path / "plugins.toml"
+    serum_presets = f"presets = {str(presets)!r}\n" if presets else ""
     path.write_text(
-        '[[plugin]]\nname = "Serum"\npath = "/serum.vst3"\n\n'
+        f'[[plugin]]\nname = "Serum"\npath = "/serum.vst3"\n{serum_presets}\n'
         '[[plugin]]\nname = "Primer"\npath = "/primer.vst3"\n'
     )
     return path
@@ -280,10 +283,74 @@ def test_silent_preview_still_saves_with_a_warning(
     assert "warning" in capsys.readouterr().err
 
 
-def list_sounds(tmp_path: Path, *args: str) -> int:
+def list_sounds(tmp_path: Path, *args: str, presets: Path | None = None) -> int:
+    config = write_plugins(tmp_path, presets)
     return sounds.list_main(
-        [*args, "--config", str(write_plugins(tmp_path)), "--sounds-dir", str(tmp_path / "sounds")]
+        [*args, "--config", str(config), "--sounds-dir", str(tmp_path / "sounds")]
     )
+
+
+def write_presets(tmp_path: Path) -> Path:
+    root = tmp_path / "presets"
+    for relative in ["Pads/Wide", "Bass/Deep", "Bass/Acid", "Init", "Bass (Hard)/Grit"]:
+        path = root / f"{relative}.fxp"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(fxp_bytes(b"chunk"))
+    return root
+
+
+def test_list_shows_presets_after_saved_sounds_with_folder_descriptions(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    write_sound_file(
+        tmp_path, "zap", {"plugin": "Serum", "description": "laser pluck", "state": encode(b"s")}
+    )
+
+    assert list_sounds(tmp_path, presets=write_presets(tmp_path)) == EXIT_ALL_PASS
+    lines = capsys.readouterr().out.splitlines()
+    # Columns are padded with at least two spaces, and names may hold single spaces.
+    assert [re.split(r"\s{2,}", line.strip()) for line in lines[1:]] == [
+        ["Serum", "Serum", "default patch"],
+        ["Primer", "Primer", "default patch"],
+        ["zap", "Serum", "laser pluck"],
+        ["Serum:Bass (Hard)/Grit", "Serum", "Bass (Hard) preset"],
+        ["Serum:Bass/Acid", "Serum", "Bass preset"],
+        ["Serum:Bass/Deep", "Serum", "Bass preset"],
+        ["Serum:Init", "Serum", "preset"],
+        ["Serum:Pads/Wide", "Serum", "Pads preset"],
+    ]
+
+
+def test_list_json_includes_presets(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    assert list_sounds(tmp_path, "--json", presets=write_presets(tmp_path)) == EXIT_ALL_PASS
+    entries = json.loads(capsys.readouterr().out)
+    assert entries[2] == {
+        "name": "Serum:Bass (Hard)/Grit",
+        "plugin": "Serum",
+        "description": "Bass (Hard) preset",
+    }
+    assert [entry["name"] for entry in entries[2:]] == [
+        "Serum:Bass (Hard)/Grit",
+        "Serum:Bass/Acid",
+        "Serum:Bass/Deep",
+        "Serum:Init",
+        "Serum:Pads/Wide",
+    ]
+
+
+def test_list_reports_a_missing_presets_directory_and_lists_the_rest(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    write_sound_file(
+        tmp_path, "zap", {"plugin": "Serum", "description": "laser pluck", "state": encode(b"s")}
+    )
+
+    code = list_sounds(tmp_path, "--json", presets=tmp_path / "missing")
+
+    assert code == EXIT_SOME_FAILED
+    captured = capsys.readouterr()
+    assert [entry["name"] for entry in json.loads(captured.out)] == ["Serum", "Primer", "zap"]
+    assert "does not exist" in captured.err
 
 
 def test_list_shows_plugin_defaults_then_saved_sounds_by_name(

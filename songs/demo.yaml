@@ -2,7 +2,7 @@ bpm: 100
 tracks:
   - name: lead
     engine: pedalboard
-    sound: Serum
+    sound: "Serum:Leads/LD A Bit of Luck [SD]"
     notes:
       - {beat: 0, pitch: 69, length: 1, velocity: 100}
       - {beat: 1, pitch: 72, length: 0.5, velocity: 90}
@@ -13,7 +13,7 @@ tracks:
       - {beat: 6, pitch: 67, length: 2, velocity: 105}
   - name: bass
     engine: pedalboard
-    sound: Serum
+    sound: "Serum:Bass/BA Ampology [CFA]"
     notes:
       - {beat: 0, pitch: 45, length: 2, velocity: 100}
       - {beat: 2, pitch: 41, length: 2, velocity: 100}

@@ -9,10 +9,12 @@ from typing import Any
 import numpy as np
 import pytest
 import yaml
+from helpers import fxp_bytes
 from pedalboard.io import ReadableAudioFile
 
 from vsti_composer import render
 from vsti_composer.plugin_check import EXIT_ALL_PASS, EXIT_BAD_CONFIG, EXIT_SOME_FAILED, PluginSpec
+from vsti_composer.presets import build_state
 from vsti_composer.render import TrackStatus, render_song, render_stem
 from vsti_composer.song import Note, Song, Track, parse_song
 
@@ -574,3 +576,70 @@ def test_main_takes_a_sounds_directory(tmp_path: Path, monkeypatch: pytest.Monke
 
     assert code == EXIT_ALL_PASS
     assert logged_jobs(tmp_path)[0]["state"] == STATE
+
+
+def preset_specs(tmp_path: Path) -> list[PluginSpec]:
+    return [PluginSpec("Serum", "/serum.vst3", None, str(tmp_path / "presets"))]
+
+
+def write_preset(tmp_path: Path, relative: str, data: bytes) -> None:
+    path = tmp_path / "presets" / f"{relative}.fxp"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(data)
+
+
+def test_preset_passes_its_built_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    use_worker(tmp_path, monkeypatch, "pass")
+    write_preset(tmp_path, "Bass/Deep", fxp_bytes(b"chunk-data"))
+
+    results = render_song(
+        make_song(make_track("bass", "Serum:Bass/Deep")), "song", preset_specs(tmp_path), tmp_path
+    )
+
+    assert statuses(results) == [("bass", TrackStatus.RENDERED)]
+    (job,) = logged_jobs(tmp_path)
+    expected = base64.b64encode(build_state(b"chunk-data")).decode("ascii")
+    assert (job["plugin_path"], job["state"]) == ("/serum.vst3", expected)
+
+
+@pytest.mark.parametrize(
+    ("sound", "with_presets"),
+    [("Serum:bass/Deep", True), ("Nope:Bass/Deep", True), ("Serum:Bass/Deep", False)],
+    ids=["case differs", "unknown plugin", "plugin without presets"],
+)
+def test_unmatched_preset_name_is_unknown_sound(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, sound: str, with_presets: bool
+) -> None:
+    use_worker(tmp_path, monkeypatch, "pass")
+    write_preset(tmp_path, "Bass/Deep", fxp_bytes(b"chunk-data"))
+    specs = preset_specs(tmp_path) if with_presets else SPECS
+
+    results = render_song(make_song(make_track("bass", sound)), "song", specs, tmp_path)
+
+    assert results[0].status is TrackStatus.UNKNOWN_SOUND
+    assert not (tmp_path / "jobs.log").exists()
+
+
+def test_unusable_preset_is_load_failed_and_next_track_renders(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    use_worker(tmp_path, monkeypatch, "pass")
+    write_preset(tmp_path, "Bass/Deep", fxp_bytes(b"chunk", kind=b"FxCk"))
+    song = make_song(make_track("one", "Serum:Bass/Deep"), make_track("two", "Serum"))
+
+    results = render_song(song, "song", preset_specs(tmp_path), tmp_path)
+
+    assert statuses(results) == [("one", TrackStatus.LOAD_FAILED), ("two", TrackStatus.RENDERED)]
+    assert "parameter" in (results[0].detail or "")
+
+
+def test_missing_presets_directory_is_load_failed_and_next_track_renders(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    use_worker(tmp_path, monkeypatch, "pass")
+    song = make_song(make_track("one", "Serum:Bass/Deep"), make_track("two", "Serum"))
+
+    results = render_song(song, "song", preset_specs(tmp_path), tmp_path)
+
+    assert statuses(results) == [("one", TrackStatus.LOAD_FAILED), ("two", TrackStatus.RENDERED)]
+    assert "does not exist" in (results[0].detail or "")

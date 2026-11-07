@@ -41,6 +41,7 @@ from vsti_composer.plugin_check import (
     measure_peak_dbfs,
     note_pattern,
 )
+from vsti_composer.presets import PresetError, preset_description, preset_files
 from vsti_composer.worker import WorkerCrashedError, WorkerTimedOutError, run_isolated
 
 SOUNDS_DIR = PROJECT_DIR / "sounds"
@@ -162,9 +163,17 @@ def scan_sounds(
 def list_entries(
     sounds_dir: Path, specs: list[PluginSpec]
 ) -> tuple[list[SoundEntry], list[tuple[str, str]]]:
+    """Return plugin defaults, saved sounds by name, then each plugin's presets by name."""
     sounds, problems = scan_sounds(sounds_dir, specs)
     entries = [SoundEntry(spec.name, spec.name, DEFAULT_DESCRIPTION) for spec in specs]
     entries += [SoundEntry(sound.name, sound.plugin, sound.description) for sound in sounds]
+    for spec in specs:
+        try:
+            names = sorted(preset_files(spec))
+        except PresetError as error:
+            problems.append((f"{spec.name} presets", str(error)))
+            continue
+        entries += [SoundEntry(name, spec.name, preset_description(name)) for name in names]
     return entries, problems
 
 

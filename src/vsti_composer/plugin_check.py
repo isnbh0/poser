@@ -62,6 +62,7 @@ class PluginSpec:
     name: str
     path: str
     plugin_name: str | None = None
+    presets: str | None = None  # Directory of the plugin's .fxp presets.
 
 
 @dataclass(frozen=True)
@@ -167,13 +168,19 @@ def load_config(path: Path) -> list[PluginSpec]:
 
     specs = []
     for entry in entries:
-        match entry:
-            case {"name": str(name), "path": str(plugin_path), "plugin_name": str(plugin_name)}:
-                specs.append(PluginSpec(name, plugin_path, plugin_name))
-            case {"name": str(name), "path": str(plugin_path)} if "plugin_name" not in entry:
-                specs.append(PluginSpec(name, plugin_path))
-            case _:
-                raise ConfigError(f"{path} has an invalid entry: {entry!r}")
+        valid = (
+            isinstance(entry, dict)
+            and {"name", "path"} <= set(entry) <= {"name", "path", "plugin_name", "presets"}
+            and all(isinstance(value, str) and value.strip() for value in entry.values())
+        )
+        if not valid:
+            raise ConfigError(f"{path} has an invalid entry: {entry!r}")
+        # The first `:` in a sound name ends the plugin name of a preset.
+        if ":" in entry["name"]:
+            raise ConfigError(f"{path}: plugin name {entry['name']!r} contains ':'")
+        specs.append(
+            PluginSpec(entry["name"], entry["path"], entry.get("plugin_name"), entry.get("presets"))
+        )
     return specs
 
 
