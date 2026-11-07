@@ -38,9 +38,13 @@ from vsti_composer.render import (
     WAV_BIT_DEPTH,
     clear_results,
     expected_samples,
+    read_stamp,
     song_duration_s,
     song_render_dir,
+    stamp_matches_stem,
+    stamp_path,
     stem_path,
+    track_key,
 )
 from vsti_composer.song import Song, SongError, load_song
 
@@ -103,11 +107,19 @@ class StaleStemError(Exception):
     """A stem exists but does not match the song as it is now."""
 
 
-def read_stem(path: Path, song_path: Path, samples: int) -> np.ndarray:
-    """Read a stem and confirm it matches the song file. Raises StaleStemError when it does not."""
-    # A stem older than the song means the song was edited without a new render.
-    if path.stat().st_mtime_ns < song_path.stat().st_mtime_ns:
-        raise StaleStemError("stem is older than the song file")
+def read_stem(path: Path, stamp_file: Path, key: str, samples: int) -> np.ndarray:
+    """Read a stem and confirm it matches the song. Raises StaleStemError when it does not.
+
+    `key` is the track's current `track_key`. Its render stamp must record it, and must still
+    describe the stem file. The sound's key is not checked, because analysis reads no plugin list.
+    """
+    stamp = read_stamp(stamp_file)
+    if stamp is None:
+        raise StaleStemError("stem has no render stamp")
+    if not stamp_matches_stem(stamp, path):
+        raise StaleStemError("stem changed after it was rendered")
+    if stamp.track_key != key:
+        raise StaleStemError("song changed since this stem was rendered")
     # The reader takes the frame count from the header and pads missing data with zeros, so a
     # truncated file would otherwise pass as quieter audio.
     if path.stat().st_size < samples * NUM_CHANNELS * WAV_BIT_DEPTH // 8:
@@ -210,7 +222,8 @@ def analyze_song(song: Song, song_path: Path, output_dir: Path = RENDERS_DIR) ->
             )
             continue
         try:
-            stems[track.name] = read_stem(path, song_path, samples)
+            stamp = stamp_path(song_dir, track.name)
+            stems[track.name] = read_stem(path, stamp, track_key(song, track), samples)
         except StaleStemError as error:
             failures[track.name] = TrackReport(
                 track.name, TrackStatus.STALE_STEM, gain_db=track.gain, detail=str(error)

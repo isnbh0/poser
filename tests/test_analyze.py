@@ -2,7 +2,6 @@
 
 import json
 import os
-import time
 from pathlib import Path
 from typing import Any, NoReturn
 
@@ -12,7 +11,7 @@ import pytest
 import yaml
 from pedalboard.io import ReadableAudioFile, WriteableAudioFile
 
-from vsti_composer import analyze
+from vsti_composer import analyze, render
 from vsti_composer.analyze import Defect, TrackStatus, analyze_song
 from vsti_composer.plugin_check import EXIT_ALL_PASS, EXIT_BAD_CONFIG, EXIT_SOME_FAILED
 from vsti_composer.song import load_song
@@ -50,8 +49,8 @@ def make_song(
 ) -> Path:
     """Write a 60 bpm song whose tracks each hold one note, then write the given stems.
 
-    The song file is dated in the past, so freshly written stems are newer than it. A stem of
-    None is left unwritten. A track named in `gains` gets that `gain`.
+    Each written stem gets a render stamp for the song as written. A stem of None is left
+    unwritten. A track named in `gains` gets that `gain`.
     """
     gains = gains or {}
     tracks = [
@@ -67,15 +66,29 @@ def make_song(
     tmp_path.mkdir(parents=True, exist_ok=True)
     song_path = tmp_path / "song.yaml"
     song_path.write_text(yaml.safe_dump({"bpm": 60, "tracks": tracks}))
-    past = time.time() - 100
-    os.utime(song_path, (past, past))
 
     song_dir = tmp_path / "renders" / "song"
     song_dir.mkdir(parents=True, exist_ok=True)
     for name, audio in stems.items():
         if audio is not None:
             write_wav(song_dir / f"{name}.wav", audio)
+            stamp(song_path, name)
     return song_path
+
+
+def stamp(song_path: Path, name: str) -> None:
+    """Write the render stamp `render-song` would write for the track's stem as it is now."""
+    song = load_song(song_path)
+    (track,) = (track for track in song.tracks if track.name == name)
+    directory = song_dir(song_path)
+    render.write_stamp(
+        render.stamp_path(directory, name),
+        render.stem_path(directory, name),
+        render.track_key(song, track),
+        "any sound key",
+        render.TrackStatus.RENDERED,
+        -20.0,
+    )
 
 
 def run(song_path: Path) -> analyze.Report:
@@ -207,17 +220,25 @@ def test_stem_over_full_scale_is_not_a_defect(
 
 
 def make_stale(song_path: Path, case: str) -> None:
+    """Spoil the bass stem one way. A case that writes a new stem also stamps it, as a render
+    would, so that each case reaches its own check."""
     stem = song_dir(song_path) / "bass.wav"
     match case:
         case "missing":
             stem.unlink()
+        case "no_stamp":
+            render.stamp_path(song_dir(song_path), "bass").unlink()
+        case "stem_changed":
+            write_wav(stem, constant(0.2))
+            os.utime(stem, ns=(stem.stat().st_atime_ns, stem.stat().st_mtime_ns + 10**9))
+        case "song_changed":
+            data = yaml.safe_load(song_path.read_text())
+            data["tracks"][1]["notes"][0]["pitch"] = 62
+            song_path.write_text(yaml.safe_dump(data))
         case "wrong_length":
             write_wav(stem, constant(0.1, beats=2))
         case "mono":
             write_wav(stem, constant(0.1)[:1])
-        case "older_than_song":
-            past = song_path.stat().st_mtime - 10
-            os.utime(stem, (past, past))
         case "unreadable":
             stem.write_bytes(b"not a wav file")
         case "truncated":
@@ -226,22 +247,30 @@ def make_stale(song_path: Path, case: str) -> None:
             audio = constant(0.1)
             audio[:, 1000:2000] = np.nan
             write_wav(stem, audio)
+    if case not in {"missing", "no_stamp", "stem_changed", "song_changed"}:
+        stamp(song_path, "bass")
 
 
 @pytest.mark.parametrize(
-    ("case", "status"),
+    ("case", "status", "detail"),
     [
-        ("missing", TrackStatus.MISSING_STEM),
-        ("wrong_length", TrackStatus.STALE_STEM),
-        ("mono", TrackStatus.STALE_STEM),
-        ("older_than_song", TrackStatus.STALE_STEM),
-        ("unreadable", TrackStatus.STALE_STEM),
-        ("truncated", TrackStatus.STALE_STEM),
-        ("not_finite", TrackStatus.STALE_STEM),
+        ("missing", TrackStatus.MISSING_STEM, None),
+        ("no_stamp", TrackStatus.STALE_STEM, "stem has no render stamp"),
+        ("stem_changed", TrackStatus.STALE_STEM, "stem changed after it was rendered"),
+        ("song_changed", TrackStatus.STALE_STEM, "song changed since this stem was rendered"),
+        ("wrong_length", TrackStatus.STALE_STEM, f"samples, expected {samples_for(1)}"),
+        ("mono", TrackStatus.STALE_STEM, "shorter than its audio data"),
+        ("unreadable", TrackStatus.STALE_STEM, "shorter than its audio data"),
+        ("truncated", TrackStatus.STALE_STEM, "shorter than its audio data"),
+        ("not_finite", TrackStatus.STALE_STEM, "NaN or infinity"),
     ],
 )
 def test_unusable_stem_removes_earlier_results(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str], case: str, status: TrackStatus
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    case: str,
+    status: TrackStatus,
+    detail: str | None,
 ) -> None:
     song_path = make_song(
         tmp_path, {"lead": constant(0.1), "bass": constant(0.1)}, gains={"bass": -3}
@@ -256,6 +285,7 @@ def test_unusable_stem_removes_earlier_results(
     assert lead["name"] == "lead"
     assert lead["status"] == TrackStatus.ANALYZED
     assert bass["status"] == status
+    assert (bass["detail"] is None) if detail is None else (detail in bass["detail"])
     assert bass["gain_db"] == -3.0
     assert bass["peak_dbfs"] is None
     assert bass["integrated_lufs"] is None
@@ -355,6 +385,23 @@ def test_gain_turns_a_clipping_mix_clean(
     assert data["mix"]["defects"] == []
     mix = read_wav(Path(data["mix"]["path"]))
     assert np.allclose(mix, 0.6 * 10 ** (-6 / 20) * 2, rtol=1e-6)
+
+
+def test_gain_edit_analyzes_without_a_new_render(tmp_path: Path) -> None:
+    song_path = make_song(tmp_path, {"lead": constant(0.4), "bass": constant(0.4)})
+    assert run(song_path).mix is not None
+    data = yaml.safe_load(song_path.read_text())
+    for track in data["tracks"]:
+        track["gain"] = -6
+    song_path.write_text(yaml.safe_dump(data))
+    info = song_path.stat()
+    os.utime(song_path, ns=(info.st_atime_ns, info.st_mtime_ns + 10**9))
+
+    report = run(song_path)
+
+    assert analyze.exit_code(report) == EXIT_ALL_PASS
+    assert report.mix is not None
+    assert np.allclose(read_wav(Path(report.mix.path)), 0.4 * 10 ** (-6 / 20) * 2, rtol=1e-6)
 
 
 def test_mix_is_the_gain_weighted_sum_of_the_stems(tmp_path: Path) -> None:

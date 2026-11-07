@@ -10,9 +10,8 @@ import random
 import re
 from collections.abc import Iterable, Sequence
 from dataclasses import replace
-from typing import TypeIs
 
-from vsti_composer.song import Note
+from vsti_composer.song import Note, is_int, is_number
 
 NOTE_NAME = re.compile(r"([A-Ga-g])([#b]*)(-1|[0-9])")
 LETTER_SEMITONES = {"C": 0, "D": 2, "E": 4, "F": 5, "G": 7, "A": 9, "B": 11}
@@ -51,28 +50,14 @@ CHORDS: dict[str, tuple[int, ...]] = {
 SWING_TOLERANCE = 1e-6
 
 
-def _is_int(value: object) -> TypeIs[int]:
-    return isinstance(value, int) and not isinstance(value, bool)
-
-
-def _is_number(value: object) -> TypeIs[int | float]:
-    if not isinstance(value, int | float) or isinstance(value, bool):
-        return False
-    # Rendering converts numbers to floats, so an int too large for a float is not a number.
-    try:
-        return math.isfinite(value)
-    except OverflowError:
-        return False
-
-
 def _require_int(value: object, what: str) -> int:
-    if not _is_int(value):
+    if not is_int(value):
         raise ValueError(f"{what} {value!r} must be an integer")
     return value
 
 
 def _require_number(value: object, what: str) -> float:
-    if not _is_number(value):
+    if not is_number(value):
         raise ValueError(f"{what} {value!r} must be a finite number")
     return value
 
@@ -80,7 +65,7 @@ def _require_number(value: object, what: str) -> float:
 def _check_pitches(pitches: Iterable[object], what: str) -> tuple[int, ...]:
     checked = []
     for value in pitches:
-        if not _is_int(value):
+        if not is_int(value):
             raise ValueError(f"{what} has pitch {value!r}, which is not an integer")
         if not 0 <= value <= 127:
             raise ValueError(f"{what} reaches pitch {value}, outside 0 to 127")

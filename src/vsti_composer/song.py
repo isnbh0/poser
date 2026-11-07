@@ -7,7 +7,7 @@ import stat
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeGuard
 
 import yaml
 
@@ -57,7 +57,13 @@ class Song:
         return beat * 60 / self.bpm
 
 
-def _is_number(value: Any) -> bool:
+def is_int(value: object) -> TypeGuard[int]:
+    """Return whether the value is an int, excluding bool."""
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def is_number(value: object) -> TypeGuard[int | float]:
+    """Return whether the value is a finite int or float that fits in a float, excluding bool."""
     if not isinstance(value, int | float) or isinstance(value, bool):
         return False
     # Rendering converts numbers to floats, so an int too large for a float is not a number.
@@ -67,8 +73,8 @@ def _is_number(value: Any) -> bool:
         return False
 
 
-def _is_int_in_range(value: Any, low: int, high: int) -> bool:
-    return isinstance(value, int) and not isinstance(value, bool) and low <= value <= high
+def _is_int_in_range(value: object, low: int, high: int) -> bool:
+    return is_int(value) and low <= value <= high
 
 
 def _check_keys(
@@ -95,11 +101,11 @@ def _parse_note(data: Any, where: str, problems: list[str]) -> Note | None:
     before = len(problems)
     beat, pitch = data.get("beat"), data.get("pitch")
     length, velocity = data.get("length"), data.get("velocity")
-    if "beat" in data and not (_is_number(beat) and beat >= 0):
+    if "beat" in data and not (is_number(beat) and beat >= 0):
         problems.append(f"{where}.beat: must be a number that is not negative, got {beat!r}")
     if "pitch" in data and not _is_int_in_range(pitch, 0, 127):
         problems.append(f"{where}.pitch: must be an integer from 0 to 127, got {pitch!r}")
-    if "length" in data and not (_is_number(length) and length > 0):
+    if "length" in data and not (is_number(length) and length > 0):
         problems.append(f"{where}.length: must be a positive number, got {length!r}")
     if "velocity" in data and not _is_int_in_range(velocity, 1, 127):
         problems.append(f"{where}.velocity: must be an integer from 1 to 127, got {velocity!r}")
@@ -126,7 +132,7 @@ def _parse_track(data: Any, where: str, problems: list[str]) -> Track | None:
     if "sound" in data and not (isinstance(sound, str) and sound):
         problems.append(f"{where}.sound: must be a sound name, got {sound!r}")
     gain = data.get("gain", 0.0)
-    if not (_is_number(gain) and GAIN_MIN_DB <= gain <= GAIN_MAX_DB):
+    if not (is_number(gain) and GAIN_MIN_DB <= gain <= GAIN_MAX_DB):
         problems.append(
             f"{where}.gain: must be a number of decibels from {GAIN_MIN_DB} to {GAIN_MAX_DB}, "
             f"got {gain!r}"
@@ -163,7 +169,7 @@ def parse_song(data: Any) -> Song:
     _check_keys(data, SONG_KEYS, "", problems)
 
     bpm = data.get("bpm")
-    if "bpm" in data and not (_is_number(bpm) and bpm > 0):
+    if "bpm" in data and not (is_number(bpm) and bpm > 0):
         problems.append(f"bpm: must be a positive number, got {bpm!r}")
 
     raw_tracks = data.get("tracks")

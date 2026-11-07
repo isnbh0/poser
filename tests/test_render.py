@@ -2,9 +2,10 @@
 
 import base64
 import json
+import os
 import sys
+from collections.abc import Callable, Mapping
 from pathlib import Path
-from typing import Any
 
 import numpy as np
 import pytest
@@ -15,7 +16,7 @@ from pedalboard.io import ReadableAudioFile
 from vsti_composer import render
 from vsti_composer.plugin_check import EXIT_ALL_PASS, EXIT_BAD_CONFIG, EXIT_SOME_FAILED, PluginSpec
 from vsti_composer.presets import build_state
-from vsti_composer.render import TrackStatus, render_song, render_stem
+from vsti_composer.render import Outcome, RenderJob, TrackStatus, render_song, render_stem
 from vsti_composer.song import Note, Song, Track, parse_song
 
 
@@ -31,8 +32,9 @@ SPECS = [PluginSpec("Serum", "/serum.vst3")]
 
 
 def message_times(track: Track, song: Song) -> list[tuple[str, int, float]]:
-    messages: list[Any] = render.track_messages(song, track)
-    return [(m.type, m.note, m.time) for m in messages]
+    messages = render.track_messages(song, track)
+    # mido sets message fields dynamically, so they are read through `dict()`.
+    return [(f["type"], f["note"], f["time"]) for f in (m.dict() for m in messages)]
 
 
 def test_beats_convert_to_seconds_at_bpm() -> None:
@@ -45,8 +47,8 @@ def test_beats_convert_to_seconds_at_bpm() -> None:
 
 def test_note_velocity_reaches_the_message() -> None:
     track = make_track("lead", "Serum", Note(0, 60, 1, 37))
-    messages: list[Any] = render.track_messages(make_song(track), track)
-    assert messages[0].velocity == 37
+    messages = render.track_messages(make_song(track), track)
+    assert messages[0].dict()["velocity"] == 37
 
 
 def test_duration_is_latest_note_end_across_tracks_plus_tail() -> None:
@@ -65,7 +67,7 @@ def test_every_track_gets_the_same_duration(
 
     render_song(make_song(short, long), "song", SPECS, tmp_path)
 
-    jobs = [json.loads(line) for line in (tmp_path / "jobs.log").read_text().splitlines()]
+    jobs = logged_jobs(tmp_path)
     assert [job["track"]["name"] for job in jobs] == ["short", "long"]
     assert {job["duration_s"] for job in jobs} == {6.0}
 
@@ -103,17 +105,17 @@ class FakePlugin:
     def __init__(self, audio: np.ndarray) -> None:
         self.audio = audio
 
-    def __call__(self, messages: list[Any], **kwargs: Any) -> np.ndarray:
+    def __call__(self, messages: list[object], **kwargs: object) -> np.ndarray:
         assert kwargs["sample_rate"] == render.SAMPLE_RATE
         assert kwargs["num_channels"] == render.NUM_CHANNELS
         return self.audio
 
 
-def job_for(stem: Path, duration_s: float = 0.5) -> dict[str, Any]:
+def job_for(stem: Path, duration_s: float = 0.5, state: str | None = None) -> RenderJob:
     return {
         "plugin_path": "/serum.vst3",
         "plugin_name": None,
-        "state": None,
+        "state": state,
         "bpm": 120,
         "track": {
             "name": "lead",
@@ -146,8 +148,8 @@ def test_worker_writes_stereo_48k_float_wav_above_full_scale(
 
     result = render_stem(job_for(stem))
 
-    assert result["status"] is TrackStatus.RENDERED
-    assert result["peak_dbfs"] == pytest.approx(6.02, abs=0.01)
+    assert result.status is TrackStatus.RENDERED
+    assert result.peak_dbfs == pytest.approx(6.02, abs=0.01)
     with ReadableAudioFile(str(stem)) as written:  # ty: ignore[no-matching-overload]
         assert written.samplerate == render.SAMPLE_RATE
         assert written.num_channels == render.NUM_CHANNELS
@@ -176,19 +178,19 @@ def test_silent_render_writes_the_stem_and_reports_silent(
 
     result = render_stem(job_for(stem))
 
-    assert result["status"] is TrackStatus.SILENT
+    assert result.status is TrackStatus.SILENT
     assert stem.exists()
 
 
 def test_worker_reports_load_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    def fail(*args: Any, **kwargs: Any) -> None:
+    def fail(*args: object, **kwargs: object) -> None:
         raise ImportError("no such plugin")
 
     monkeypatch.setattr("pedalboard.load_plugin", fail)
 
     result = render_stem(job_for(tmp_path / "lead.wav"))
 
-    assert result == {"status": TrackStatus.LOAD_FAILED, "detail": "no such plugin"}
+    assert result == Outcome(TrackStatus.LOAD_FAILED, detail="no such plugin")
 
 
 @pytest.mark.parametrize("bad_value", [np.nan, np.inf])
@@ -234,6 +236,9 @@ actions = dict(a.split("=") for a in {action!r}.split(",") if "=" in a)
 action = actions.get(job["track"]["name"], {action!r} if "=" not in {action!r} else "pass")
 if action == "crash":
     stem.with_name("." + stem.stem + ".tmp.wav").write_text("partial")
+    sys.exit(4)
+if action == "stem-crash":
+    stem.write_text("audio")
     sys.exit(4)
 if action == "hang":
     time.sleep(30)
@@ -314,7 +319,7 @@ def test_render_removes_earlier_mix_and_analysis(
 
     render_song(make_song(make_track()), "song", SPECS, tmp_path)
 
-    assert sorted(path.name for path in song_dir.iterdir()) == ["lead.wav"]
+    assert sorted(path.name for path in song_dir.iterdir()) == ["lead.json", "lead.wav"]
 
 
 def test_unknown_sound_removes_earlier_stem(tmp_path: Path) -> None:
@@ -335,6 +340,20 @@ def test_worker_claiming_a_stem_it_did_not_write_is_crashed(
     results = render_song(make_song(make_track()), "song", SPECS, tmp_path)
 
     assert results[0].status is TrackStatus.CRASHED
+
+
+def test_earlier_stem_does_not_vouch_for_a_worker_that_wrote_none(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    song_dir = tmp_path / "song"
+    song_dir.mkdir()
+    (song_dir / "lead.wav").write_text("earlier audio")
+    use_worker(tmp_path, monkeypatch, "no-stem")
+
+    (result,) = render_song(make_song(make_track()), "song", SPECS, tmp_path)
+
+    assert result.detail == "worker reported a stem it did not write"
+    assert list(song_dir.iterdir()) == []
 
 
 def write_song(tmp_path: Path, name: str = "song.yaml") -> Path:
@@ -376,7 +395,7 @@ def test_main_exits_zero_when_all_tracks_render_and_uses_song_file_name(
     assert code == EXIT_ALL_PASS
     assert (tmp_path / "out" / "tune" / "lead.wav").exists()
     row = capsys.readouterr().out.splitlines()[1].split()
-    assert row == ["lead", "rendered", "-6.0", str(tmp_path / "out" / "tune" / "lead.wav")]
+    assert row == ["lead", "rendered", "-", "-6.0", str(tmp_path / "out" / "tune" / "lead.wav")]
 
 
 @pytest.mark.parametrize("action", ["crash", "silent"])
@@ -440,7 +459,7 @@ def test_default_output_directory_is_in_the_project() -> None:
 STATE = base64.b64encode(b"saved-state").decode("ascii")
 
 
-def write_sound_file(sounds_dir: Path, name: str, content: Any) -> None:
+def write_sound_file(sounds_dir: Path, name: str, content: str | Mapping[str, object]) -> None:
     sounds_dir.mkdir(exist_ok=True)
     text = content if isinstance(content, str) else json.dumps(content)
     (sounds_dir / f"{name}.json").write_text(text)
@@ -450,7 +469,7 @@ def good_sound(state: str = STATE) -> dict[str, str]:
     return {"plugin": "Serum", "description": "warm pad", "state": state}
 
 
-def logged_jobs(tmp_path: Path) -> list[dict[str, Any]]:
+def logged_jobs(tmp_path: Path) -> list[RenderJob]:
     return [json.loads(line) for line in (tmp_path / "jobs.log").read_text().splitlines()]
 
 
@@ -499,7 +518,11 @@ def test_sound_name_matches_files_exactly_not_ignoring_case(
     ],
 )
 def test_unusable_sound_file_is_load_failed_and_next_track_renders(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, name: str, content: Any, problem: str
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    name: str,
+    content: str | Mapping[str, object],
+    problem: str,
 ) -> None:
     use_worker(tmp_path, monkeypatch, "pass")
     sounds_dir = tmp_path / "sounds"
@@ -513,7 +536,7 @@ def test_unusable_sound_file_is_load_failed_and_next_track_renders(
 
 
 class StatefulFakePlugin(FakePlugin):
-    def __init__(self, audio: np.ndarray, events: list[Any]) -> None:
+    def __init__(self, audio: np.ndarray, events: list[tuple[str, bytes | None]]) -> None:
         super().__init__(audio)
         self.events = events
 
@@ -525,7 +548,7 @@ class StatefulFakePlugin(FakePlugin):
     def raw_state(self, value: bytes) -> None:
         self.events.append(("raw_state", value))
 
-    def __call__(self, messages: list[Any], **kwargs: Any) -> np.ndarray:
+    def __call__(self, messages: list[object], **kwargs: object) -> np.ndarray:
         self.events.append(("render", None))
         return super().__call__(messages, **kwargs)
 
@@ -533,11 +556,11 @@ class StatefulFakePlugin(FakePlugin):
 def test_worker_restores_the_job_state_before_rendering(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    events: list[Any] = []
+    events: list[tuple[str, bytes | None]] = []
     plugin = StatefulFakePlugin(blank_audio(), events)
     monkeypatch.setattr("pedalboard.load_plugin", lambda *args, **kwargs: plugin)
 
-    render_stem({**job_for(tmp_path / "lead.wav"), "state": STATE})
+    render_stem(job_for(tmp_path / "lead.wav", state=STATE))
 
     assert events == [("raw_state", b"saved-state"), ("render", None)]
 
@@ -559,9 +582,9 @@ def test_worker_reports_a_rejected_state_as_load_failed(
     )
     stem = tmp_path / "lead.wav"
 
-    result = render_stem({**job_for(stem), "state": STATE})
+    result = render_stem(job_for(stem, state=STATE))
 
-    assert result == {"status": TrackStatus.LOAD_FAILED, "detail": "bad state"}
+    assert result == Outcome(TrackStatus.LOAD_FAILED, detail="bad state")
     assert not stem.exists()
 
 
@@ -643,3 +666,343 @@ def test_missing_presets_directory_is_load_failed_and_next_track_renders(
 
     assert statuses(results) == [("one", TrackStatus.LOAD_FAILED), ("two", TrackStatus.RENDERED)]
     assert "does not exist" in (results[0].detail or "")
+
+
+# Stem cache
+
+
+def job_names(tmp_path: Path) -> list[str]:
+    log = tmp_path / "jobs.log"
+    return [job["track"]["name"] for job in logged_jobs(tmp_path)] if log.exists() else []
+
+
+LEAD = make_track("lead", "Serum", Note(0, 60, 1, 100))
+BASS = make_track("bass", "Serum", Note(0, 36, 2, 100))  # Its note ends last, so it sets duration.
+
+
+def with_notes(track: Track, *notes: Note) -> Track:
+    return Track(track.name, track.engine, track.sound, notes, track.gain)
+
+
+@pytest.mark.parametrize(
+    "changed",
+    [
+        make_song(with_notes(LEAD, Note(0.5, 60, 1, 100)), BASS),
+        make_song(with_notes(LEAD, Note(0, 61, 1, 100)), BASS),
+        make_song(with_notes(LEAD, Note(0, 60, 1.5, 100)), BASS),
+        make_song(with_notes(LEAD, Note(0, 60, 1, 99)), BASS),
+        make_song(LEAD, BASS, bpm=121),
+        make_song(LEAD, with_notes(BASS, Note(0, 36, 3, 100))),
+        make_song(Track("lead2", "pedalboard", "Serum", LEAD.notes), BASS),
+        make_song(Track("lead", "other", "Serum", LEAD.notes), BASS),
+        make_song(Track("lead", "pedalboard", "warm-pad", LEAD.notes), BASS),
+    ],
+    ids=["beat", "pitch", "length", "velocity", "bpm", "duration", "name", "engine", "sound"],
+)
+def test_track_key_changes_with_every_render_input(changed: Song) -> None:
+    assert render.track_key(changed, changed.tracks[0]) != render.track_key(
+        make_song(LEAD, BASS), LEAD
+    )
+
+
+def test_track_key_ignores_gain_and_number_spelling() -> None:
+    song = make_song(LEAD, BASS)
+    gained = Track(LEAD.name, LEAD.engine, LEAD.sound, LEAD.notes, gain=-6.0)
+    floats = with_notes(LEAD, Note(0.0, 60, 1.0, 100))
+    assert render.track_key(make_song(gained, BASS), gained) == render.track_key(song, LEAD)
+    assert render.track_key(make_song(floats, BASS, bpm=120.0), floats) == render.track_key(
+        song, LEAD
+    )
+
+
+def test_sound_key_changes_with_state_plugin_path_and_plugin_name() -> None:
+    spec = PluginSpec("Serum", "/serum.vst3")
+    base = render.sound_key(spec, STATE)
+    assert render.sound_key(spec, STATE) == base
+    assert render.sound_key(spec, None) != base
+    assert render.sound_key(PluginSpec("Serum", "/other.vst3"), STATE) != base
+    assert render.sound_key(PluginSpec("Serum", "/serum.vst3", "Serum 2"), STATE) != base
+
+
+def test_second_render_of_an_unchanged_song_runs_no_worker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    use_worker(tmp_path, monkeypatch, "pass")
+    args = [*cli_args(tmp_path, write_song(tmp_path)), "--json"]
+    assert render.main(args) == EXIT_ALL_PASS
+    (first,) = json.loads(capsys.readouterr().out)
+    # The cached peak must come from the stamp, so give the stamp a peak no worker reports.
+    stamp = tmp_path / "out" / "song" / "lead.json"
+    stamp.write_text(json.dumps({**json.loads(stamp.read_text()), "peak_dbfs": -9.5}))
+
+    code = render.main(args)
+
+    (second,) = json.loads(capsys.readouterr().out)
+    assert code == EXIT_ALL_PASS
+    assert job_names(tmp_path) == ["lead"]
+    assert first["cached"] is False
+    assert second == {**first, "peak_dbfs": -9.5, "cached": True}
+
+
+def test_cached_silent_track_stays_silent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    use_worker(tmp_path, monkeypatch, "silent")
+    render_song(make_song(LEAD), "song", SPECS, tmp_path)
+
+    (result,) = render_song(make_song(LEAD), "song", SPECS, tmp_path)
+
+    assert (result.status, result.peak_dbfs, result.cached) == (TrackStatus.SILENT, -6.0, True)
+    assert render.exit_code([result]) == EXIT_SOME_FAILED
+    assert job_names(tmp_path) == ["lead"]
+
+
+@pytest.mark.parametrize(
+    ("changed", "rendered"),
+    [
+        (make_song(with_notes(LEAD, Note(0, 62, 1, 100)), BASS), ["lead"]),
+        (
+            make_song(
+                Track(LEAD.name, LEAD.engine, LEAD.sound, LEAD.notes, gain=-3.0),
+                Track(BASS.name, BASS.engine, BASS.sound, BASS.notes, gain=-9.0),
+            ),
+            [],
+        ),
+        (make_song(LEAD, BASS, bpm=90), ["lead", "bass"]),
+        (make_song(LEAD, with_notes(BASS, Note(0, 36, 4, 100))), ["lead", "bass"]),
+    ],
+    ids=["one track's notes", "gains only", "bpm", "last note extended"],
+)
+def test_render_runs_only_tracks_whose_inputs_changed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, changed: Song, rendered: list[str]
+) -> None:
+    use_worker(tmp_path, monkeypatch, "pass")
+    render_song(make_song(LEAD, BASS), "song", SPECS, tmp_path)
+
+    results = render_song(changed, "song", SPECS, tmp_path)
+
+    assert job_names(tmp_path)[2:] == rendered
+    assert [result.track for result in results if not result.cached] == rendered
+    assert all(result.status is TrackStatus.RENDERED for result in results)
+
+
+def test_rewritten_saved_sound_renders_again(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    use_worker(tmp_path, monkeypatch, "pass")
+    sounds_dir = tmp_path / "sounds"
+    write_sound_file(sounds_dir, "warm-pad", good_sound())
+    song = make_song(make_track("pad", "warm-pad"))
+    render_song(song, "song", SPECS, tmp_path, sounds_dir=sounds_dir)
+    other = base64.b64encode(b"other-state").decode("ascii")
+    write_sound_file(sounds_dir, "warm-pad", good_sound(state=other))
+
+    (result,) = render_song(song, "song", SPECS, tmp_path, sounds_dir=sounds_dir)
+
+    assert not result.cached
+    assert [job["state"] for job in logged_jobs(tmp_path)] == [STATE, other]
+
+
+def test_force_renders_every_track(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    use_worker(tmp_path, monkeypatch, "pass")
+    render_song(make_song(LEAD, BASS), "song", SPECS, tmp_path)
+
+    results = render_song(make_song(LEAD, BASS), "song", SPECS, tmp_path, force=True)
+
+    assert job_names(tmp_path) == ["lead", "bass", "lead", "bass"]
+    assert [result.cached for result in results] == [False, False]
+
+
+def test_main_force_renders_every_track(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    use_worker(tmp_path, monkeypatch, "pass")
+    args = cli_args(tmp_path, write_song(tmp_path))
+    render.main(args)
+
+    assert render.main([*args, "--force"]) == EXIT_ALL_PASS
+
+    assert job_names(tmp_path) == ["lead", "lead"]
+
+
+def rewrite_stem(stem: Path) -> None:
+    stem.write_text("different audio")
+
+
+def touch_stem(stem: Path) -> None:
+    info = stem.stat()
+    stem.write_text(stem.read_text())
+    os.utime(stem, ns=(info.st_atime_ns, info.st_mtime_ns + 10**9))
+
+
+@pytest.mark.parametrize(
+    "spoil",
+    [
+        rewrite_stem,
+        touch_stem,
+        lambda stem: stem.unlink(),
+        lambda stem: stem.with_suffix(".json").unlink(),
+        lambda stem: stem.with_suffix(".json").write_text("{not json"),
+    ],
+    ids=["stem rewritten", "stem touched", "stem deleted", "stamp deleted", "stamp malformed"],
+)
+def test_changed_stem_or_stamp_renders_again(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, spoil: Callable[[Path], None]
+) -> None:
+    use_worker(tmp_path, monkeypatch, "pass")
+    render_song(make_song(LEAD), "song", SPECS, tmp_path)
+    spoil(tmp_path / "song" / "lead.wav")
+
+    (result,) = render_song(make_song(LEAD), "song", SPECS, tmp_path)
+
+    assert not result.cached
+    assert job_names(tmp_path) == ["lead", "lead"]
+    assert render.read_stamp(tmp_path / "song" / "lead.json") is not None
+
+
+def good_stamp() -> dict[str, object]:
+    return {
+        "track_key": "a",
+        "sound_key": "b",
+        "status": "rendered",
+        "peak_dbfs": -6.0,
+        "stem_size": 5,
+        "stem_mtime_ns": 1,
+    }
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "{not json",
+        "[]",
+        b"\xff\xfe".decode("latin-1"),
+        json.dumps({key: value for key, value in good_stamp().items() if key != "sound_key"}),
+        json.dumps({**good_stamp(), "extra": 1}),
+        json.dumps({**good_stamp(), "status": "crashed"}),
+        json.dumps({**good_stamp(), "status": ["rendered"]}),
+        json.dumps({**good_stamp(), "track_key": 1}),
+        json.dumps({**good_stamp(), "sound_key": 1}),
+        json.dumps({**good_stamp(), "peak_dbfs": "loud"}),
+        json.dumps({**good_stamp(), "peak_dbfs": float("nan")}),
+        json.dumps({**good_stamp(), "peak_dbfs": 10**400}),
+        json.dumps({**good_stamp(), "stem_size": True}),
+        json.dumps({**good_stamp(), "stem_mtime_ns": 1.5}),
+    ],
+)
+def test_malformed_stamp_reads_as_none(tmp_path: Path, text: str) -> None:
+    path = tmp_path / "lead.json"
+    path.write_text(text)
+    assert render.read_stamp(path) is None
+
+
+def test_missing_stamp_reads_as_none_and_a_good_one_reads_back(tmp_path: Path) -> None:
+    path = tmp_path / "lead.json"
+    assert render.read_stamp(path) is None
+    path.write_text(json.dumps({**good_stamp(), "peak_dbfs": None}))
+    assert render.read_stamp(path) == render.Stamp("a", "b", TrackStatus.RENDERED, None, 5, 1)
+
+
+@pytest.mark.parametrize("action", ["crash", "stem-crash", "no-stem"])
+def test_failure_after_a_success_leaves_neither_stem_nor_stamp(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, action: str
+) -> None:
+    use_worker(tmp_path, monkeypatch, "pass")
+    render_song(make_song(LEAD), "song", SPECS, tmp_path)
+    use_worker(tmp_path, monkeypatch, action)
+
+    (result,) = render_song(make_song(LEAD), "song", SPECS, tmp_path, force=True)
+
+    assert result.status is TrackStatus.CRASHED
+    assert list((tmp_path / "song").iterdir()) == []
+
+
+def test_unknown_sound_deletes_stem_and_stamp(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    use_worker(tmp_path, monkeypatch, "pass")
+    render_song(make_song(LEAD), "song", SPECS, tmp_path)
+
+    (result,) = render_song(make_song(make_track("lead", "Nope")), "song", SPECS, tmp_path)
+
+    assert result.status is TrackStatus.UNKNOWN_SOUND
+    assert list((tmp_path / "song").iterdir()) == []
+
+
+def test_stamp_records_the_keys_and_the_stem_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    use_worker(tmp_path, monkeypatch, "pass")
+    song = make_song(LEAD)
+
+    render_song(song, "song", SPECS, tmp_path)
+
+    song_dir = tmp_path / "song"
+    stamp = json.loads((song_dir / "lead.json").read_text())
+    info = (song_dir / "lead.wav").stat()
+    assert stamp == {
+        "track_key": render.track_key(song, LEAD),
+        "sound_key": render.sound_key(SPECS[0], None),
+        "status": "rendered",
+        "peak_dbfs": -6.0,
+        "stem_size": info.st_size,
+        "stem_mtime_ns": info.st_mtime_ns,
+    }
+    assert sorted(path.name for path in song_dir.iterdir()) == ["lead.json", "lead.wav"]
+
+
+def test_failed_stamp_write_leaves_no_temporary_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    stem = tmp_path / "lead.wav"
+    stem.write_text("audio")
+
+    def refuse(source: object, target: object) -> None:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(render.os, "replace", refuse)
+    with pytest.raises(OSError, match="disk full"):
+        render.write_stamp(tmp_path / "lead.json", stem, "a", "b", TrackStatus.RENDERED, -6.0)
+
+    assert [path.name for path in tmp_path.iterdir()] == ["lead.wav"]
+
+
+def test_table_shows_cached_tracks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    use_worker(tmp_path, monkeypatch, "pass")
+    args = cli_args(tmp_path, write_song(tmp_path))
+    render.main(args)
+    capsys.readouterr()
+
+    render.main(args)
+
+    header, row = capsys.readouterr().out.splitlines()
+    assert header.split()[:3] == ["TRACK", "STATUS", "CACHED"]
+    assert row.split() == ["lead", "rendered", "yes", "-6.0", str(tmp_path / "out/song/lead.wav")]
+
+
+@pytest.mark.parametrize(
+    ("payload", "detail"),
+    [
+        ([], "worker wrote a malformed result"),
+        ({"status": "rendered", "extra": 1}, "worker wrote a malformed result"),
+        ({"status": "rendered", "peak_dbfs": "loud"}, "worker wrote a malformed result"),
+        ({"status": "rendered", "peak_dbfs": True}, "worker wrote a malformed result"),
+        ({"status": "rendered", "peak_dbfs": float("inf")}, "worker wrote a malformed result"),
+        ({"status": "rendered", "peak_dbfs": 10**400}, "worker wrote a malformed result"),
+        ({"status": "load_failed", "detail": 3}, "worker wrote a malformed result"),
+        ({"status": "nope"}, "worker wrote an unknown status"),
+        ({"status": ["rendered"]}, "worker wrote an unknown status"),
+        ({}, "worker wrote an unknown status"),
+    ],
+)
+def test_malformed_worker_result_is_crashed(tmp_path: Path, payload: object, detail: str) -> None:
+    stem = tmp_path / "lead.wav"
+    stem.write_text("audio")
+    assert render.parse_worker_result(payload, stem) == Outcome(TrackStatus.CRASHED, detail=detail)
+
+
+def test_well_formed_worker_result_is_kept(tmp_path: Path) -> None:
+    stem = tmp_path / "lead.wav"
+    stem.write_text("audio")
+    payload = {"status": "silent", "peak_dbfs": -90}
+    assert render.parse_worker_result(payload, stem) == Outcome(TrackStatus.SILENT, -90.0)
+    failed = {"status": "load_failed", "detail": "no"}
+    assert render.parse_worker_result(failed, stem) == Outcome(TrackStatus.LOAD_FAILED, None, "no")
