@@ -1,13 +1,26 @@
 """Tests for the song format. No plugins or rendering."""
 
+import os
+import stat
 from pathlib import Path
-from typing import Any
+from typing import Any, Self
 
 import pytest
 import yaml
 
+from vsti_composer import song as song_module
+from vsti_composer.music import chord, notes, pitch, scale, swing
 from vsti_composer.plugin_check import PROJECT_DIR
-from vsti_composer.song import Note, SongError, Track, load_song, parse_song
+from vsti_composer.song import (
+    Note,
+    Song,
+    SongError,
+    Track,
+    load_song,
+    parse_song,
+    song_to_data,
+    write_song,
+)
 
 
 def valid_note() -> dict[str, Any]:
@@ -138,3 +151,132 @@ def test_song_module_stays_engine_neutral() -> None:
     source = (PROJECT_DIR / "src" / "vsti_composer" / "song.py").read_text()
     assert "pedalboard import" not in source
     assert "import mido" not in source
+
+
+def helper_song() -> Song:
+    progression = chord(pitch("A3"), "min") + chord(pitch("F3"), "maj", 1)
+    lead = swing(notes(scale(pitch("A4"), "minor"), 0, 0.5, 90, step=0.5), 2 / 3)
+    return Song(
+        bpm=96.5,
+        tracks=(
+            Track("lead", "pedalboard", "Serum:Leads/LD A Bit of Luck [SD]", lead),
+            Track("pad", "pedalboard", "Serum", notes(progression, 0, 4, 70)),
+        ),
+    )
+
+
+def test_written_song_loads_back_equal(tmp_path: Path) -> None:
+    path = tmp_path / "song.yaml"
+    song = helper_song()
+
+    write_song(song, path)
+
+    assert load_song(path) == song
+    assert any(note.beat == 2 / 3 for note in load_song(path).tracks[0].notes)
+    assert [p.name for p in tmp_path.iterdir()] == ["song.yaml"]
+
+
+def test_written_song_keeps_the_format_key_order(tmp_path: Path) -> None:
+    path = tmp_path / "song.yaml"
+    write_song(helper_song(), path)
+
+    data = yaml.safe_load(path.read_text())
+
+    assert list(data) == ["bpm", "tracks"]
+    assert all(list(track) == ["name", "engine", "sound", "notes"] for track in data["tracks"])
+    assert list(data["tracks"][0]["notes"][0]) == ["beat", "pitch", "length", "velocity"]
+
+
+def test_song_to_data_round_trips_through_parse_song() -> None:
+    song = helper_song()
+    assert parse_song(song_to_data(song)) == song
+
+
+def test_writing_an_invalid_song_raises_and_keeps_the_old_file(tmp_path: Path) -> None:
+    path = tmp_path / "song.yaml"
+    path.write_text("old contents\n")
+    bad = Song(bpm=120, tracks=(Track("lead", "pedalboard", "Serum", (Note(0, 60, 1, 0),)),))
+
+    with pytest.raises(SongError, match="velocity"):
+        write_song(bad, path)
+
+    assert path.read_text() == "old contents\n"
+    assert [p.name for p in tmp_path.iterdir()] == ["song.yaml"]
+
+
+def test_failed_replace_keeps_the_old_file_and_leaves_no_temp_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "song.yaml"
+    path.write_text("old contents\n")
+
+    def fail(*args: object) -> None:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(song_module.os, "replace", fail)
+    with pytest.raises(SongError, match="disk full"):
+        write_song(helper_song(), path)
+
+    assert path.read_text() == "old contents\n"
+    assert [p.name for p in tmp_path.iterdir()] == ["song.yaml"]
+
+
+def test_failed_write_leaves_no_temp_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    path = tmp_path / "song.yaml"
+    real_fdopen = song_module.os.fdopen
+
+    class FailingFile:
+        def __init__(self, fd: int, mode: str) -> None:
+            self.handle = real_fdopen(fd, mode)
+
+        def __enter__(self) -> Self:
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            self.handle.close()
+            raise OSError("flush failed")
+
+        def write(self, text: str) -> int:
+            return self.handle.write(text)
+
+    monkeypatch.setattr(song_module.os, "fdopen", FailingFile)
+    with pytest.raises(SongError, match="flush failed"):
+        write_song(helper_song(), path)
+
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_written_song_keeps_the_existing_file_mode(tmp_path: Path) -> None:
+    path = tmp_path / "song.yaml"
+    path.write_text("old\n")
+    path.chmod(0o640)
+
+    write_song(helper_song(), path)
+
+    assert stat.S_IMODE(path.stat().st_mode) == 0o640
+
+
+def test_new_song_file_gets_umask_permissions(tmp_path: Path) -> None:
+    old = os.umask(0o022)
+    try:
+        write_song(helper_song(), tmp_path / "song.yaml")
+    finally:
+        os.umask(old)
+    assert stat.S_IMODE((tmp_path / "song.yaml").stat().st_mode) == 0o644
+
+
+def test_writing_through_a_symlink_keeps_the_link(tmp_path: Path) -> None:
+    real = tmp_path / "real.yaml"
+    real.write_text("old\n")
+    link = tmp_path / "link.yaml"
+    link.symlink_to(real)
+
+    write_song(helper_song(), link)
+
+    assert link.is_symlink()
+    assert load_song(real) == helper_song()
+
+
+def test_writing_into_a_missing_directory_is_a_song_error(tmp_path: Path) -> None:
+    with pytest.raises(SongError, match="cannot write"):
+        write_song(helper_song(), tmp_path / "missing" / "song.yaml")

@@ -1,7 +1,10 @@
 """Song data: engine-neutral text, separate from rendering code."""
 
 import math
+import os
 import re
+import stat
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -166,3 +169,62 @@ def load_song(path: Path) -> Song:
     except (OSError, UnicodeDecodeError, yaml.YAMLError) as error:
         raise SongError([f"cannot read {path}: {error}"]) from error
     return parse_song(data)
+
+
+def song_to_data(song: Song) -> dict[str, Any]:
+    """Return a song as plain data in the song format's key order, the inverse of `parse_song`."""
+    return {
+        "bpm": song.bpm,
+        "tracks": [
+            {
+                "name": track.name,
+                "engine": track.engine,
+                "sound": track.sound,
+                "notes": [
+                    {
+                        "beat": note.beat,
+                        "pitch": note.pitch,
+                        "length": note.length,
+                        "velocity": note.velocity,
+                    }
+                    for note in track.notes
+                ],
+            }
+            for track in song.tracks
+        ],
+    }
+
+
+def write_song(song: Song, path: Path) -> None:
+    """Validate a song and write it as YAML, replacing `path` only once the file is complete.
+
+    A symlinked `path` keeps its link and the target is replaced. The file keeps an existing
+    target's permissions, or gets the usual umask-based ones when new.
+    """
+    data = song_to_data(song)
+    parse_song(data)
+    text = yaml.safe_dump(data, sort_keys=False)
+    target = Path(path).resolve()
+    try:
+        mode = stat.S_IMODE(target.stat().st_mode)
+    except FileNotFoundError:
+        umask = os.umask(0)
+        os.umask(umask)
+        mode = 0o666 & ~umask
+    except OSError as error:
+        raise SongError([f"cannot write {path}: {error}"]) from error
+    try:
+        fd, name = tempfile.mkstemp(dir=target.parent, prefix=f".{target.name}.", suffix=".tmp")
+    except OSError as error:
+        raise SongError([f"cannot write {path}: {error}"]) from error
+    temp = Path(name)
+    try:
+        with os.fdopen(fd, "w") as handle:
+            handle.write(text)
+        os.chmod(temp, mode)
+        os.replace(temp, target)
+    except BaseException as error:
+        temp.unlink(missing_ok=True)
+        if isinstance(error, OSError):
+            raise SongError([f"cannot write {path}: {error}"]) from error
+        raise
