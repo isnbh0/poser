@@ -5,6 +5,7 @@ because plugin code runs only in a subprocess.
 """
 
 import argparse
+import base64
 import json
 import os
 import shutil
@@ -36,6 +37,7 @@ from vsti_composer.plugin_check import (
     measure_peak_dbfs,
 )
 from vsti_composer.song import Note, Song, SongError, Track, load_song
+from vsti_composer.sounds import SOUNDS_DIR, SoundError, read_sound, sound_files
 from vsti_composer.worker import WorkerCrashedError, WorkerTimedOutError, run_isolated
 
 RENDERS_DIR = PROJECT_DIR / "renders"
@@ -123,11 +125,18 @@ def worker_command(job_path: Path) -> list[str]:
 
 
 def _run_track_worker(
-    song: Song, track: Track, spec: PluginSpec, stem: Path, duration_s: float, timeout_s: float
+    song: Song,
+    track: Track,
+    spec: PluginSpec,
+    state: str | None,
+    stem: Path,
+    duration_s: float,
+    timeout_s: float,
 ) -> dict[str, Any]:
     job = {
         "plugin_path": spec.path,
         "plugin_name": spec.plugin_name,
+        "state": state,
         "bpm": song.bpm,
         "track": asdict(track),
         "duration_s": duration_s,
@@ -154,14 +163,38 @@ def _run_track_worker(
     return payload
 
 
+def resolve_sound(
+    sound: str, specs: list[PluginSpec], sounds_dir: Path
+) -> tuple[PluginSpec, str | None] | dict[str, Any]:
+    """Return a track's plugin and base64 state, or the failed result to report.
+
+    A plugin name means its default state, with no state to restore. Otherwise the name must be a
+    saved sound, matched exactly against the sound files.
+    """
+    specs_by_name = {spec.name: spec for spec in specs}
+    if sound in specs_by_name:
+        return specs_by_name[sound], None
+    path = sound_files(sounds_dir).get(sound)
+    if path is None:
+        return {
+            "status": TrackStatus.UNKNOWN_SOUND,
+            "detail": f"no plugin or saved sound named {sound!r}",
+        }
+    try:
+        saved = read_sound(path, specs)
+    except SoundError as error:
+        return {"status": TrackStatus.LOAD_FAILED, "detail": f"saved sound {sound!r}: {error}"}
+    return specs_by_name[saved.plugin], saved.state
+
+
 def render_song(
     song: Song,
     song_name: str,
     specs: list[PluginSpec],
     output_dir: Path = RENDERS_DIR,
     timeout_s: float = WORKER_TIMEOUT_S,
+    sounds_dir: Path = SOUNDS_DIR,
 ) -> list[TrackResult]:
-    specs_by_name = {spec.name: spec for spec in specs}
     duration_s = song_duration_s(song)
     song_dir = song_render_dir(output_dir, song_name)
     song_dir.mkdir(parents=True, exist_ok=True)
@@ -170,15 +203,13 @@ def render_song(
     results = []
     for track in song.tracks:
         stem = stem_path(song_dir, track.name)
-        spec = specs_by_name.get(track.sound)
+        resolved = resolve_sound(track.sound, specs, sounds_dir)
         payload: dict[str, Any]
-        if spec is None:
-            payload = {
-                "status": TrackStatus.UNKNOWN_SOUND,
-                "detail": f"no sound named {track.sound!r} in the plugin list",
-            }
+        if isinstance(resolved, dict):
+            payload = resolved
         else:
-            payload = _run_track_worker(song, track, spec, stem, duration_s, timeout_s)
+            spec, state = resolved
+            payload = _run_track_worker(song, track, spec, state, stem, duration_s, timeout_s)
 
         temp_stem_path(stem).unlink(missing_ok=True)
         written = payload["status"] in STEM_WRITTEN
@@ -212,6 +243,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("song", type=Path, help="song file (YAML)")
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG, help="plugin list (TOML)")
     parser.add_argument("--output-dir", type=Path, default=RENDERS_DIR, help="where stems go")
+    parser.add_argument("--sounds-dir", type=Path, default=SOUNDS_DIR, help="saved sound files")
     parser.add_argument("--json", action="store_true", help="print the report as JSON")
     args = parser.parse_args(argv)
 
@@ -222,7 +254,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"render-song: {error}", file=sys.stderr)
         return EXIT_BAD_CONFIG
 
-    results = render_song(song, args.song.stem, specs, args.output_dir)
+    results = render_song(song, args.song.stem, specs, args.output_dir, sounds_dir=args.sounds_dir)
     if args.json:
         print(json.dumps([asdict(result) for result in results], indent=2))
     else:
@@ -230,10 +262,22 @@ def main(argv: list[str] | None = None) -> int:
     return exit_code(results)
 
 
+def write_stem(path: Path, audio: np.ndarray) -> None:
+    """Write audio in the stem format through a temporary file that then replaces the target."""
+    from pedalboard.io import WriteableAudioFile
+
+    temp = temp_stem_path(path)
+    # Pedalboard's stubs mark `__new__` as a classmethod, which ty cannot match to any call.
+    with WriteableAudioFile(  # ty: ignore[no-matching-overload]
+        str(temp), samplerate=SAMPLE_RATE, num_channels=NUM_CHANNELS, bit_depth=WAV_BIT_DEPTH
+    ) as output:
+        output.write(audio)
+    os.replace(temp, path)
+
+
 def render_stem(job: dict[str, Any]) -> dict[str, Any]:
     """Render one track inside the worker process and write its stem."""
     from pedalboard import load_plugin  # Imported here so the parent never loads plugin code.
-    from pedalboard.io import WriteableAudioFile
 
     duration_s = job["duration_s"]
     track_data = job["track"]
@@ -241,16 +285,21 @@ def render_stem(job: dict[str, Any]) -> dict[str, Any]:
     track = Track(track_data["name"], track_data["engine"], track_data["sound"], notes)
     song = Song(bpm=job["bpm"], tracks=(track,))
 
-    # Any exception from loading third-party plugin code is the result being reported.
+    # Any exception from loading third-party plugin code, or from it rejecting a saved state, is
+    # the result being reported.
     try:
         plugin: Any = load_plugin(
             job["plugin_path"],
             plugin_name=job["plugin_name"],
             initialization_timeout=INITIALIZATION_TIMEOUT_S,
         )
+        if job["state"] is not None:
+            plugin.raw_state = base64.b64decode(job["state"])
     except Exception as error:  # noqa: BLE001
         return {"status": TrackStatus.LOAD_FAILED, "detail": str(error)}
 
+    # Pedalboard's reset rebuilds an instrument by saving its state, recreating it, and restoring
+    # that state, so a restored sound survives. Serum renders differently without the reset.
     audio = plugin(
         track_messages(song, track),
         duration=duration_s,
@@ -264,14 +313,7 @@ def render_stem(job: dict[str, Any]) -> dict[str, Any]:
     if not np.isfinite(audio).all():
         raise RuntimeError("render contains NaN or infinity")
 
-    stem = Path(job["stem_path"])
-    temp = temp_stem_path(stem)
-    # Pedalboard's stubs mark `__new__` as a classmethod, which ty cannot match to any call.
-    with WriteableAudioFile(  # ty: ignore[no-matching-overload]
-        str(temp), samplerate=SAMPLE_RATE, num_channels=NUM_CHANNELS, bit_depth=WAV_BIT_DEPTH
-    ) as output:
-        output.write(audio)
-    os.replace(temp, stem)
+    write_stem(Path(job["stem_path"]), audio)
 
     peak_dbfs = measure_peak_dbfs(audio)
     status = TrackStatus.SILENT if peak_dbfs < SILENCE_DBFS else TrackStatus.RENDERED

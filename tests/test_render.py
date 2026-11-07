@@ -1,5 +1,6 @@
 """Tests that use a fake plugin or substitute worker scripts, with no real plugins."""
 
+import base64
 import json
 import sys
 from pathlib import Path
@@ -110,6 +111,7 @@ def job_for(stem: Path, duration_s: float = 0.5) -> dict[str, Any]:
     return {
         "plugin_path": "/serum.vst3",
         "plugin_name": None,
+        "state": None,
         "bpm": 120,
         "track": {
             "name": "lead",
@@ -431,3 +433,144 @@ def test_real_worker_reports_missing_plugin_as_load_failed(tmp_path: Path) -> No
 
 def test_default_output_directory_is_in_the_project() -> None:
     assert render.RENDERS_DIR == render.PROJECT_DIR / "renders"
+
+
+STATE = base64.b64encode(b"saved-state").decode("ascii")
+
+
+def write_sound_file(sounds_dir: Path, name: str, content: Any) -> None:
+    sounds_dir.mkdir(exist_ok=True)
+    text = content if isinstance(content, str) else json.dumps(content)
+    (sounds_dir / f"{name}.json").write_text(text)
+
+
+def good_sound(state: str = STATE) -> dict[str, str]:
+    return {"plugin": "Serum", "description": "warm pad", "state": state}
+
+
+def logged_jobs(tmp_path: Path) -> list[dict[str, Any]]:
+    return [json.loads(line) for line in (tmp_path / "jobs.log").read_text().splitlines()]
+
+
+def test_saved_sound_passes_its_state_and_a_plugin_passes_none(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    use_worker(tmp_path, monkeypatch, "pass")
+    sounds_dir = tmp_path / "sounds"
+    write_sound_file(sounds_dir, "warm-pad", good_sound())
+    song = make_song(make_track("pad", "warm-pad"), make_track("lead", "Serum"))
+
+    results = render_song(song, "song", SPECS, tmp_path, sounds_dir=sounds_dir)
+
+    assert statuses(results) == [("pad", TrackStatus.RENDERED), ("lead", TrackStatus.RENDERED)]
+    pad, lead = logged_jobs(tmp_path)
+    assert (pad["plugin_path"], pad["state"]) == ("/serum.vst3", STATE)
+    assert (lead["plugin_path"], lead["state"]) == ("/serum.vst3", None)
+
+
+def test_sound_name_matches_files_exactly_not_ignoring_case(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    use_worker(tmp_path, monkeypatch, "pass")
+    sounds_dir = tmp_path / "sounds"
+    write_sound_file(sounds_dir, "pad", good_sound())
+
+    results = render_song(
+        make_song(make_track("lead", "Pad")), "song", SPECS, tmp_path, sounds_dir=sounds_dir
+    )
+
+    assert results[0].status is TrackStatus.UNKNOWN_SOUND
+    assert not (tmp_path / "jobs.log").exists()
+
+
+@pytest.mark.parametrize(
+    ("name", "content", "problem"),
+    [
+        ("bad", "{not json", "cannot read"),
+        ("bad", {"plugin": "Serum", "state": STATE}, "exactly the keys"),
+        ("bad", {**good_sound(), "extra": 1}, "exactly the keys"),
+        ("bad", {**good_sound(), "plugin": "Massive"}, "not in the plugin list"),
+        ("bad", good_sound(state="not base64!"), "not valid base64"),
+        ("bad", good_sound(state=""), "empty"),
+        ("bad", {**good_sound(), "description": " "}, "description"),
+        ("serum", good_sound(), "taken by the plugin 'Serum'"),
+    ],
+)
+def test_unusable_sound_file_is_load_failed_and_next_track_renders(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, name: str, content: Any, problem: str
+) -> None:
+    use_worker(tmp_path, monkeypatch, "pass")
+    sounds_dir = tmp_path / "sounds"
+    write_sound_file(sounds_dir, name, content)
+    song = make_song(make_track("one", name), make_track("two", "Serum"))
+
+    results = render_song(song, "song", SPECS, tmp_path, sounds_dir=sounds_dir)
+
+    assert statuses(results) == [("one", TrackStatus.LOAD_FAILED), ("two", TrackStatus.RENDERED)]
+    assert problem in (results[0].detail or "")
+
+
+class StatefulFakePlugin(FakePlugin):
+    def __init__(self, audio: np.ndarray, events: list[Any]) -> None:
+        super().__init__(audio)
+        self.events = events
+
+    @property
+    def raw_state(self) -> bytes:
+        raise AssertionError("not read during a render")
+
+    @raw_state.setter
+    def raw_state(self, value: bytes) -> None:
+        self.events.append(("raw_state", value))
+
+    def __call__(self, messages: list[Any], **kwargs: Any) -> np.ndarray:
+        self.events.append(("render", None))
+        return super().__call__(messages, **kwargs)
+
+
+def test_worker_restores_the_job_state_before_rendering(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    events: list[Any] = []
+    plugin = StatefulFakePlugin(blank_audio(), events)
+    monkeypatch.setattr("pedalboard.load_plugin", lambda *args, **kwargs: plugin)
+
+    render_stem({**job_for(tmp_path / "lead.wav"), "state": STATE})
+
+    assert events == [("raw_state", b"saved-state"), ("render", None)]
+
+
+def test_worker_reports_a_rejected_state_as_load_failed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class RejectingPlugin(FakePlugin):
+        @property
+        def raw_state(self) -> bytes:
+            return b""
+
+        @raw_state.setter
+        def raw_state(self, value: bytes) -> None:
+            raise RuntimeError("bad state")
+
+    monkeypatch.setattr(
+        "pedalboard.load_plugin", lambda *args, **kwargs: RejectingPlugin(blank_audio())
+    )
+    stem = tmp_path / "lead.wav"
+
+    result = render_stem({**job_for(stem), "state": STATE})
+
+    assert result == {"status": TrackStatus.LOAD_FAILED, "detail": "bad state"}
+    assert not stem.exists()
+
+
+def test_main_takes_a_sounds_directory(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    use_worker(tmp_path, monkeypatch, "pass")
+    sounds_dir = tmp_path / "sounds"
+    write_sound_file(sounds_dir, "warm-pad", good_sound())
+    song = write_song(tmp_path)
+    song.write_text(song.read_text().replace("sound: Serum", "sound: warm-pad"))
+
+    code = render.main([*cli_args(tmp_path, song), "--sounds-dir", str(sounds_dir)])
+
+    assert code == EXIT_ALL_PASS
+    assert logged_jobs(tmp_path)[0]["state"] == STATE

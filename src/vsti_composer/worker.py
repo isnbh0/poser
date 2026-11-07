@@ -15,8 +15,10 @@ class WorkerCrashedError(Exception):
     """The worker exited nonzero or wrote no readable result."""
 
 
-def run_isolated(command: list[str], timeout_s: float) -> Any:
+def run_isolated(command: list[str], timeout_s: float | None) -> Any:
     """Run a worker, appending its result path as the last argument, and return its JSON result.
+
+    `timeout_s=None` waits for as long as the worker runs, as when it shows a plugin window.
 
     The result goes to a file because plugins may print to stdout. Stdout and stderr avoid pipes,
     so a helper process left running by a plugin cannot hold them open and make a finished worker
