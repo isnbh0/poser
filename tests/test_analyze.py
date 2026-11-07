@@ -42,21 +42,29 @@ def constant(value: float, beats: float = 1) -> np.ndarray:
     return np.full((2, samples_for(beats)), value, dtype=np.float32)
 
 
-def make_song(tmp_path: Path, stems: dict[str, np.ndarray | None], beats: float = 1) -> Path:
+def make_song(
+    tmp_path: Path,
+    stems: dict[str, np.ndarray | None],
+    beats: float = 1,
+    gains: dict[str, float] | None = None,
+) -> Path:
     """Write a 60 bpm song whose tracks each hold one note, then write the given stems.
 
     The song file is dated in the past, so freshly written stems are newer than it. A stem of
-    None is left unwritten.
+    None is left unwritten. A track named in `gains` gets that `gain`.
     """
+    gains = gains or {}
     tracks = [
         {
             "name": name,
             "engine": "pedalboard",
             "sound": "Serum",
+            **({"gain": gains[name]} if name in gains else {}),
             "notes": [{"beat": 0, "pitch": 60, "length": beats, "velocity": 100}],
         }
         for name in stems
     ]
+    tmp_path.mkdir(parents=True, exist_ok=True)
     song_path = tmp_path / "song.yaml"
     song_path.write_text(yaml.safe_dump({"bpm": 60, "tracks": tracks}))
     past = time.time() - 100
@@ -235,7 +243,9 @@ def make_stale(song_path: Path, case: str) -> None:
 def test_unusable_stem_removes_earlier_results(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], case: str, status: TrackStatus
 ) -> None:
-    song_path = make_song(tmp_path, {"lead": constant(0.1), "bass": constant(0.1)})
+    song_path = make_song(
+        tmp_path, {"lead": constant(0.1), "bass": constant(0.1)}, gains={"bass": -3}
+    )
     assert run(song_path).mix is not None
     make_stale(song_path, case)
 
@@ -246,6 +256,7 @@ def test_unusable_stem_removes_earlier_results(
     assert lead["name"] == "lead"
     assert lead["status"] == TrackStatus.ANALYZED
     assert bass["status"] == status
+    assert bass["gain_db"] == -3.0
     assert bass["peak_dbfs"] is None
     assert bass["integrated_lufs"] is None
     assert printed["mix"] is None
@@ -256,16 +267,16 @@ def test_unusable_stem_removes_earlier_results(
 def test_table_shows_each_track_and_a_mix_row(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    song_path = make_song(tmp_path, {"lead": constant(0.1), "bass": None})
+    song_path = make_song(tmp_path, {"lead": constant(0.1), "bass": None}, gains={"bass": -3})
 
     analyze.main([str(song_path), "--output-dir", str(song_path.parent / "renders")])
 
     lines = capsys.readouterr().out.splitlines()
     assert lines[0].split()[:2] == ["NAME", "STATUS"]
-    assert [line.split()[:2] for line in lines[1:4]] == [
-        ["lead", "analyzed"],
-        ["bass", "missing_stem"],
-        ["[mix]", "not_written"],
+    assert [line.split() for line in lines[1:4]] == [
+        ["lead", "analyzed", "0.0", "-20.0", *lines[1].split()[4:]],
+        ["bass", "missing_stem", "-3.0", "-", "-", "-", "-"],
+        ["[mix]", "not_written", "-", "-", "-", "-", "-"],
     ]
 
 
@@ -324,3 +335,78 @@ def test_unreadable_song_exits_2(tmp_path: Path, capsys: pytest.CaptureFixture[s
     assert analyze.main([str(tmp_path / "missing.yaml")]) == EXIT_BAD_CONFIG
     assert analyze.main([str(invalid)]) == EXIT_BAD_CONFIG
     assert "analyze-song:" in capsys.readouterr().err
+
+
+def test_gain_turns_a_clipping_mix_clean(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    unity = make_song(tmp_path / "unity", {"lead": constant(0.6), "bass": constant(0.6)})
+    code, data = run_main(unity, capsys)
+    assert code == EXIT_SOME_FAILED
+    assert data["mix"]["defects"] == [Defect.CLIPPING]
+
+    quiet = make_song(
+        tmp_path / "quiet",
+        {"lead": constant(0.6), "bass": constant(0.6)},
+        gains={"lead": -6, "bass": -6},
+    )
+    code, data = run_main(quiet, capsys)
+    assert code == EXIT_ALL_PASS
+    assert data["mix"]["defects"] == []
+    mix = read_wav(Path(data["mix"]["path"]))
+    assert np.allclose(mix, 0.6 * 10 ** (-6 / 20) * 2, rtol=1e-6)
+
+
+def test_mix_is_the_gain_weighted_sum_of_the_stems(tmp_path: Path) -> None:
+    rng = np.random.default_rng(1)
+    lead = rng.uniform(-0.5, 0.5, (2, samples_for(1))).astype(np.float32)
+    bass = rng.uniform(-0.5, 0.5, (2, samples_for(1))).astype(np.float32)
+    song_path = make_song(tmp_path, {"lead": lead, "bass": bass}, gains={"lead": -6})
+
+    report = run(song_path)
+
+    assert report.mix is not None
+    expected = (lead.astype(np.float64) * 10 ** (-6 / 20) + bass.astype(np.float64)).astype(
+        np.float32
+    )
+    assert np.array_equal(read_wav(Path(report.mix.path)), expected)
+
+
+def test_track_measurements_ignore_gain_and_report_it(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    stems: dict[str, np.ndarray | None] = {"lead": constant(0.5), "bass": constant(0.25)}
+    plain = tracks_by_name(run(make_song(tmp_path / "plain", stems)))
+    song_path = make_song(tmp_path / "gained", stems, gains={"lead": -12.5})
+
+    _, data = run_main(song_path, capsys)
+
+    reported = {track["name"]: track for track in data["tracks"]}
+    assert reported["lead"]["gain_db"] == -12.5
+    assert reported["bass"]["gain_db"] == 0.0
+    for name in stems:
+        assert reported[name]["peak_dbfs"] == plain[name].peak_dbfs
+        assert reported[name]["integrated_lufs"] == plain[name].integrated_lufs
+
+
+def test_missing_stem_still_reports_its_gain(tmp_path: Path) -> None:
+    song_path = make_song(tmp_path, {"lead": constant(0.1), "bass": None}, gains={"bass": 3})
+    assert tracks_by_name(run(song_path))["bass"].gain_db == 3
+
+
+def test_table_shows_gain_per_track_and_a_dash_for_the_mix(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    song_path = make_song(
+        tmp_path, {"lead": constant(0.1), "bass": constant(0.1)}, gains={"lead": -6.25}
+    )
+
+    analyze.main([str(song_path), "--output-dir", str(song_path.parent / "renders")])
+
+    lines = capsys.readouterr().out.splitlines()
+    assert lines[0].split()[:4] == ["NAME", "STATUS", "GAIN", "DB"]
+    assert [line.split()[:3] for line in lines[1:4]] == [
+        ["lead", "analyzed", "-6.2"],
+        ["bass", "analyzed", "0.0"],
+        ["[mix]", "written", "-"],
+    ]

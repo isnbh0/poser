@@ -5,6 +5,7 @@ import stat
 from pathlib import Path
 from typing import Any, Self
 
+import numpy as np
 import pytest
 import yaml
 
@@ -100,7 +101,7 @@ def set_note(song: dict[str, Any], key: str, value: Any) -> None:
         (lambda s: set_note(s, "length", 0), "notes[0].length"),
         (lambda s: set_note(s, "length", -0.5), "notes[0].length"),
         (lambda s: s.update(tempo=120), "unknown key 'tempo'"),
-        (lambda s: set_track(s, "gain", 1), "tracks[0]: unknown key 'gain'"),
+        (lambda s: set_track(s, "pan", 1), "tracks[0]: unknown key 'pan'"),
         (lambda s: set_note(s, "vel", 1), "notes[0]: unknown key 'vel'"),
         (lambda s: s.pop("bpm"), "missing key 'bpm'"),
         (lambda s: s["tracks"][0].pop("sound"), "tracks[0]: missing key 'sound'"),
@@ -280,3 +281,108 @@ def test_writing_through_a_symlink_keeps_the_link(tmp_path: Path) -> None:
 def test_writing_into_a_missing_directory_is_a_song_error(tmp_path: Path) -> None:
     with pytest.raises(SongError, match="cannot write"):
         write_song(helper_song(), tmp_path / "missing" / "song.yaml")
+
+
+def test_track_without_gain_has_gain_zero() -> None:
+    assert parse_song(valid_song()).tracks[0].gain == 0.0
+
+
+@pytest.mark.parametrize("gain", [-60, 12, -6.5, 3])
+def test_gain_in_range_parses(gain: float) -> None:
+    song = valid_song()
+    set_track(song, "gain", gain)
+    assert parse_song(song).tracks[0].gain == gain
+
+
+@pytest.mark.parametrize("gain", [-60.5, 12.5, True, "loud", float("nan"), float("inf")])
+def test_bad_gain_is_reported_with_other_problems(gain: Any) -> None:
+    song = valid_song()
+    set_track(song, "gain", gain)
+    set_bpm(song, 0)
+
+    with pytest.raises(SongError) as caught:
+        parse_song(song)
+
+    assert any(problem.startswith("tracks[0].gain: ") for problem in caught.value.problems)
+    assert any(problem.startswith("bpm: ") for problem in caught.value.problems)
+
+
+def test_bad_gain_message_names_the_range_and_value() -> None:
+    song = valid_song()
+    set_track(song, "gain", "loud")
+    with pytest.raises(SongError) as caught:
+        parse_song(song)
+    assert caught.value.problems == [
+        "tracks[0].gain: must be a number of decibels from -60 to 12, got 'loud'"
+    ]
+
+
+def test_integer_too_large_for_a_float_is_a_song_error() -> None:
+    song = valid_song()
+    set_track(song, "gain", 10**400)
+    set_bpm(song, 10**400)
+    with pytest.raises(SongError) as caught:
+        parse_song(song)
+    assert [problem.split(":")[0] for problem in caught.value.problems] == ["bpm", "tracks[0].gain"]
+
+
+def test_integer_gain_is_stored_as_a_float() -> None:
+    song = valid_song()
+    set_track(song, "gain", -6)
+    gain = parse_song(song).tracks[0].gain
+    assert gain == -6.0
+    assert type(gain) is float
+
+
+def test_numpy_gain_writes_as_a_plain_float(tmp_path: Path) -> None:
+    note = (Note(beat=0, pitch=60, length=1, velocity=100),)
+    song = Song(bpm=120, tracks=(Track("lead", "pedalboard", "Serum", note, gain=np.float64(-6)),))
+    path = tmp_path / "song.yaml"
+
+    write_song(song, path)
+
+    assert load_song(path).tracks[0].gain == -6.0
+
+
+def test_unrepresentable_value_is_a_song_error(tmp_path: Path) -> None:
+    note = (Note(beat=np.float64(0.5), pitch=60, length=1, velocity=100),)
+    song = Song(bpm=120, tracks=(Track("lead", "pedalboard", "Serum", note),))
+    with pytest.raises(SongError, match="cannot write"):
+        write_song(song, tmp_path / "song.yaml")
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_gain_from_yaml_nan_and_inf_is_rejected(tmp_path: Path) -> None:
+    for text in (".nan", ".inf"):
+        path = tmp_path / "song.yaml"
+        path.write_text(
+            yaml.safe_dump(valid_song()).replace("  name: lead", f"  gain: {text}\n  name: lead")
+        )
+        with pytest.raises(SongError, match="gain"):
+            load_song(path)
+
+
+def gain_song() -> Song:
+    note = (Note(beat=0, pitch=60, length=1, velocity=100),)
+    return Song(
+        bpm=120,
+        tracks=(
+            Track("lead", "pedalboard", "Serum", note, gain=-6),
+            Track("bass", "pedalboard", "Serum", note),
+        ),
+    )
+
+
+def test_song_to_data_writes_gain_between_sound_and_notes_only_when_set() -> None:
+    lead, bass = song_to_data(gain_song())["tracks"]
+    assert list(lead) == ["name", "engine", "sound", "gain", "notes"]
+    assert lead["gain"] == -6
+    assert list(bass) == ["name", "engine", "sound", "notes"]
+
+
+def test_song_with_gains_round_trips(tmp_path: Path) -> None:
+    path = tmp_path / "song.yaml"
+    write_song(gain_song(), path)
+
+    assert load_song(path) == gain_song()
+    assert "gain" not in yaml.safe_load(path.read_text())["tracks"][1]

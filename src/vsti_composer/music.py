@@ -56,7 +56,13 @@ def _is_int(value: object) -> TypeIs[int]:
 
 
 def _is_number(value: object) -> TypeIs[int | float]:
-    return isinstance(value, int | float) and not isinstance(value, bool) and math.isfinite(value)
+    if not isinstance(value, int | float) or isinstance(value, bool):
+        return False
+    # Rendering converts numbers to floats, so an int too large for a float is not a number.
+    try:
+        return math.isfinite(value)
+    except OverflowError:
+        return False
 
 
 def _require_int(value: object, what: str) -> int:

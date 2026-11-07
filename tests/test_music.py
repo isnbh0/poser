@@ -260,6 +260,7 @@ loose: Any = music
         lambda: loose.humanize(SIXTEEN, 1, velocity=2.5),
         lambda: loose.humanize(SIXTEEN, 1, timing=float("nan")),
         lambda: loose.pitch(60),
+        lambda: loose.notes([60], 10**400, 1, 80),
     ],
 )
 def test_helpers_reject_wrong_types_with_value_error(call: Callable[[], object]) -> None:

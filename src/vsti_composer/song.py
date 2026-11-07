@@ -16,7 +16,11 @@ TRACK_NAME = re.compile(r"[A-Za-z0-9_-]+")
 
 SONG_KEYS = {"bpm", "tracks"}
 TRACK_KEYS = {"name", "engine", "sound", "notes"}
+OPTIONAL_TRACK_KEYS = {"gain"}
 NOTE_KEYS = {"beat", "pitch", "length", "velocity"}
+
+# A track's level in decibels, applied at mixdown.
+GAIN_MIN_DB, GAIN_MAX_DB = -60, 12
 
 
 class SongError(Exception):
@@ -41,6 +45,7 @@ class Track:
     engine: str
     sound: str
     notes: tuple[Note, ...]
+    gain: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -53,19 +58,31 @@ class Song:
 
 
 def _is_number(value: Any) -> bool:
-    return isinstance(value, int | float) and not isinstance(value, bool) and math.isfinite(value)
+    if not isinstance(value, int | float) or isinstance(value, bool):
+        return False
+    # Rendering converts numbers to floats, so an int too large for a float is not a number.
+    try:
+        return math.isfinite(value)
+    except OverflowError:
+        return False
 
 
 def _is_int_in_range(value: Any, low: int, high: int) -> bool:
     return isinstance(value, int) and not isinstance(value, bool) and low <= value <= high
 
 
-def _check_keys(data: dict[Any, Any], allowed: set[str], where: str, problems: list[str]) -> None:
+def _check_keys(
+    data: dict[Any, Any],
+    required: set[str],
+    where: str,
+    problems: list[str],
+    optional: frozenset[str] | set[str] = frozenset(),
+) -> None:
     prefix = f"{where}: " if where else ""
     for key in data:
-        if key not in allowed:
+        if key not in required and key not in optional:
             problems.append(f"{prefix}unknown key {key!r}")
-    for key in sorted(allowed - set(data)):
+    for key in sorted(required - set(data)):
         problems.append(f"{prefix}missing key {key!r}")
 
 
@@ -96,7 +113,7 @@ def _parse_track(data: Any, where: str, problems: list[str]) -> Track | None:
     if not isinstance(data, dict):
         problems.append(f"{where}: must be a mapping, got {data!r}")
         return None
-    _check_keys(data, TRACK_KEYS, where, problems)
+    _check_keys(data, TRACK_KEYS, where, problems, OPTIONAL_TRACK_KEYS)
 
     before = len(problems)
     name, engine, sound = data.get("name"), data.get("engine"), data.get("sound")
@@ -108,6 +125,12 @@ def _parse_track(data: Any, where: str, problems: list[str]) -> Track | None:
         problems.append(f"{where}.engine: unknown engine {engine!r}")
     if "sound" in data and not (isinstance(sound, str) and sound):
         problems.append(f"{where}.sound: must be a sound name, got {sound!r}")
+    gain = data.get("gain", 0.0)
+    if not (_is_number(gain) and GAIN_MIN_DB <= gain <= GAIN_MAX_DB):
+        problems.append(
+            f"{where}.gain: must be a number of decibels from {GAIN_MIN_DB} to {GAIN_MAX_DB}, "
+            f"got {gain!r}"
+        )
 
     raw_notes = data.get("notes")
     notes: list[Note | None] = []
@@ -123,7 +146,11 @@ def _parse_track(data: Any, where: str, problems: list[str]) -> Track | None:
     if len(problems) > before or not TRACK_KEYS <= set(data):
         return None
     return Track(
-        name=name, engine=engine, sound=sound, notes=tuple(n for n in notes if n is not None)
+        name=name,
+        engine=engine,
+        sound=sound,
+        notes=tuple(n for n in notes if n is not None),
+        gain=float(gain),
     )
 
 
@@ -171,28 +198,21 @@ def load_song(path: Path) -> Song:
     return parse_song(data)
 
 
+def _track_to_data(track: Track) -> dict[str, Any]:
+    data: dict[str, Any] = {"name": track.name, "engine": track.engine, "sound": track.sound}
+    # A gain of 0 is the default, so songs without gains are written as they were before gain.
+    if track.gain != 0:
+        data["gain"] = float(track.gain)
+    data["notes"] = [
+        {"beat": note.beat, "pitch": note.pitch, "length": note.length, "velocity": note.velocity}
+        for note in track.notes
+    ]
+    return data
+
+
 def song_to_data(song: Song) -> dict[str, Any]:
     """Return a song as plain data in the song format's key order, the inverse of `parse_song`."""
-    return {
-        "bpm": song.bpm,
-        "tracks": [
-            {
-                "name": track.name,
-                "engine": track.engine,
-                "sound": track.sound,
-                "notes": [
-                    {
-                        "beat": note.beat,
-                        "pitch": note.pitch,
-                        "length": note.length,
-                        "velocity": note.velocity,
-                    }
-                    for note in track.notes
-                ],
-            }
-            for track in song.tracks
-        ],
-    }
+    return {"bpm": song.bpm, "tracks": [_track_to_data(track) for track in song.tracks]}
 
 
 def write_song(song: Song, path: Path) -> None:
@@ -203,7 +223,10 @@ def write_song(song: Song, path: Path) -> None:
     """
     data = song_to_data(song)
     parse_song(data)
-    text = yaml.safe_dump(data, sort_keys=False)
+    try:
+        text = yaml.safe_dump(data, sort_keys=False)
+    except yaml.YAMLError as error:
+        raise SongError([f"cannot write {path}: {error}"]) from error
     target = Path(path).resolve()
     try:
         mode = stat.S_IMODE(target.stat().st_mode)

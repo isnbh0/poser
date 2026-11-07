@@ -73,6 +73,7 @@ class Measurements:
 class TrackReport:
     name: str
     status: TrackStatus
+    gain_db: float = 0.0
     peak_dbfs: float | None = None
     integrated_lufs: float | None = None
     clipped_samples: int | None = None
@@ -204,13 +205,15 @@ def analyze_song(song: Song, song_path: Path, output_dir: Path = RENDERS_DIR) ->
     for track in song.tracks:
         path = stem_path(song_dir, track.name)
         if not path.is_file():
-            failures[track.name] = TrackReport(track.name, TrackStatus.MISSING_STEM)
+            failures[track.name] = TrackReport(
+                track.name, TrackStatus.MISSING_STEM, gain_db=track.gain
+            )
             continue
         try:
             stems[track.name] = read_stem(path, song_path, samples)
         except StaleStemError as error:
             failures[track.name] = TrackReport(
-                track.name, TrackStatus.STALE_STEM, detail=str(error)
+                track.name, TrackStatus.STALE_STEM, gain_db=track.gain, detail=str(error)
             )
 
     # Results from older audio must not survive a run that cannot replace them.
@@ -235,6 +238,7 @@ def analyze_song(song: Song, song_path: Path, output_dir: Path = RENDERS_DIR) ->
             TrackReport(
                 name=track.name,
                 status=TrackStatus.ANALYZED,
+                gain_db=track.gain,
                 **asdict(measurements),
                 spectrogram=None if spectrogram is None else str(spectrogram),
                 defects=silent_defects(measurements),
@@ -243,8 +247,12 @@ def analyze_song(song: Song, song_path: Path, output_dir: Path = RENDERS_DIR) ->
 
     mix = None
     if complete:
-        # Unity-gain sum with no limiter or normalization: gain and effects are later work.
-        mixed = np.sum(list(stems.values()), axis=0, dtype=np.float64).astype(np.float32)
+        # Each stem is scaled by its track's gain, then summed, with no limiter or normalization.
+        # Accumulating in place keeps one float64 buffer, not a float64 copy of every stem.
+        total = np.zeros((NUM_CHANNELS, samples), dtype=np.float64)
+        for track in song.tracks:
+            total += stems[track.name].astype(np.float64) * 10 ** (track.gain / 20)
+        mixed = total.astype(np.float32)
         mix_path = mix_dir / f"{MIX_NAME}.wav"
         write_wav(mixed, mix_path)
         mix_png = mix_dir / f"{MIX_NAME}.png"
@@ -282,16 +290,18 @@ def format_table(report: Report) -> str:
 
     def row(name: str, status: str, values: TrackReport | MixReport) -> tuple[str, ...]:
         clipped = "-" if values.clipped_samples is None else str(values.clipped_samples)
+        gain = number(values.gain_db) if isinstance(values, TrackReport) else "-"
         return (
             name,
             status,
+            gain,
             number(values.peak_dbfs),
             number(values.integrated_lufs),
             clipped,
             ", ".join(values.defects) or "-",
         )
 
-    rows = [("NAME", "STATUS", "PEAK DBFS", "LUFS", "CLIPPED", "DEFECTS")]
+    rows = [("NAME", "STATUS", "GAIN DB", "PEAK DBFS", "LUFS", "CLIPPED", "DEFECTS")]
     details = []
     for track in report.tracks:
         rows.append(row(track.name, str(track.status), track))
@@ -299,7 +309,7 @@ def format_table(report: Report) -> str:
             details.append(f"{track.name}: {track.detail}")
     # Brackets cannot appear in a track name, so this row cannot be mistaken for a track.
     if report.mix is None:
-        rows.append(("[mix]", "not_written", "-", "-", "-", "-"))
+        rows.append(("[mix]", "not_written", "-", "-", "-", "-", "-"))
     else:
         rows.append(row("[mix]", "written", report.mix))
     return "\n".join([*align_rows(rows), *details])
