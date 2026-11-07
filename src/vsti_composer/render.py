@@ -7,6 +7,7 @@ because plugin code runs only in a subprocess.
 import argparse
 import json
 import os
+import shutil
 import sys
 import tempfile
 from dataclasses import asdict, dataclass
@@ -38,6 +39,9 @@ from vsti_composer.song import Note, Song, SongError, Track, load_song
 from vsti_composer.worker import WorkerCrashedError, WorkerTimedOutError, run_isolated
 
 RENDERS_DIR = PROJECT_DIR / "renders"
+# Directories, so a track named `mix` or `analysis` still writes its stem beside them.
+MIX_DIR = "mix"
+ANALYSIS_DIR = "analysis"
 TAIL_S = 2.0
 WAV_BIT_DEPTH = 32  # Float WAV, so levels above full scale survive until mixing.
 
@@ -93,6 +97,22 @@ def track_messages(song: Song, track: Track) -> list[mido.Message]:
     return [message.copy(time=sample / SAMPLE_RATE) for sample, _, message in events]
 
 
+def song_render_dir(output_dir: Path, song_name: str) -> Path:
+    """Return the directory that holds one song's stems."""
+    return output_dir / song_name
+
+
+def stem_path(song_dir: Path, track_name: str) -> Path:
+    """Return where a track's stem lives. Later steps find stems only through this rule."""
+    return song_dir / f"{track_name}.wav"
+
+
+def clear_results(song_dir: Path) -> None:
+    """Delete a song's mix and analysis, so nothing downstream reads results from older audio."""
+    shutil.rmtree(song_dir / MIX_DIR, ignore_errors=True)
+    shutil.rmtree(song_dir / ANALYSIS_DIR, ignore_errors=True)
+
+
 def temp_stem_path(stem: Path) -> Path:
     # Pedalboard picks the file format from the extension, so the name must end in .wav.
     return stem.with_name(f".{stem.stem}.tmp.wav")
@@ -143,12 +163,13 @@ def render_song(
 ) -> list[TrackResult]:
     specs_by_name = {spec.name: spec for spec in specs}
     duration_s = song_duration_s(song)
-    song_dir = output_dir / song_name
+    song_dir = song_render_dir(output_dir, song_name)
     song_dir.mkdir(parents=True, exist_ok=True)
+    clear_results(song_dir)
 
     results = []
     for track in song.tracks:
-        stem = song_dir / f"{track.name}.wav"
+        stem = stem_path(song_dir, track.name)
         spec = specs_by_name.get(track.sound)
         payload: dict[str, Any]
         if spec is None:

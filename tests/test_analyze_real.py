@@ -1,0 +1,31 @@
+"""Renders and analyzes the demo song with the plugins on this machine. Deselected by default."""
+
+import math
+from pathlib import Path
+
+import pytest
+from pedalboard.io import ReadableAudioFile
+
+from vsti_composer import render
+from vsti_composer.analyze import Defect, TrackStatus, analyze_song
+from vsti_composer.plugin_check import DEFAULT_CONFIG, PROJECT_DIR, load_config
+from vsti_composer.song import load_song
+
+
+@pytest.mark.real_plugins
+def test_demo_song_mixes_and_analyzes(tmp_path: Path) -> None:
+    song_path = PROJECT_DIR / "songs" / "demo.yaml"
+    song = load_song(song_path)
+    render.render_song(song, "demo", load_config(DEFAULT_CONFIG), tmp_path)
+
+    report = analyze_song(song, song_path, tmp_path)
+
+    for track in report.tracks:
+        assert track.status is TrackStatus.ANALYZED, track.detail
+        assert Defect.SILENT not in track.defects
+    assert report.mix is not None
+    assert Defect.SILENT not in report.mix.defects
+    assert report.mix.integrated_lufs is not None
+    assert math.isfinite(report.mix.integrated_lufs)
+    with ReadableAudioFile(report.mix.path) as mix:  # ty: ignore[no-matching-overload]
+        assert mix.frames == render.expected_samples(render.song_duration_s(song))

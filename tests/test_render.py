@@ -299,6 +299,20 @@ def test_failed_track_removes_earlier_stem_and_temp_file(
     assert list(song_dir.iterdir()) == []
 
 
+def test_render_removes_earlier_mix_and_analysis(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    use_worker(tmp_path, monkeypatch, "pass")
+    song_dir = tmp_path / "song"
+    for name in ("mix", "analysis"):
+        (song_dir / name).mkdir(parents=True)
+        (song_dir / name / "old.json").write_text("{}")
+
+    render_song(make_song(make_track()), "song", SPECS, tmp_path)
+
+    assert sorted(path.name for path in song_dir.iterdir()) == ["lead.wav"]
+
+
 def test_unknown_sound_removes_earlier_stem(tmp_path: Path) -> None:
     song_dir = tmp_path / "song"
     song_dir.mkdir()
