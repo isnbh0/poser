@@ -3,7 +3,7 @@
 import json
 import os
 from pathlib import Path
-from typing import Any, NoReturn
+from typing import NoReturn
 
 import numpy as np
 import pedalboard
@@ -95,7 +95,7 @@ def run(song_path: Path) -> analyze.Report:
     return analyze_song(load_song(song_path), song_path, song_path.parent / "renders")
 
 
-def run_main(song_path: Path, capsys: pytest.CaptureFixture[str]) -> tuple[int, dict[str, Any]]:
+def run_main(song_path: Path, capsys: pytest.CaptureFixture[str]) -> tuple[int, object]:
     code = analyze.main([str(song_path), "--output-dir", str(song_path.parent / "renders")])
     capsys.readouterr()
     code_json = analyze.main(
@@ -103,6 +103,25 @@ def run_main(song_path: Path, capsys: pytest.CaptureFixture[str]) -> tuple[int, 
     )
     assert code_json == code
     return code, json.loads(capsys.readouterr().out)
+
+
+def at(data: object, *path: str | int) -> object:
+    """Return the JSON value at a path of keys and indexes, asserting that each step exists."""
+    for step in path:
+        if isinstance(step, int):
+            assert isinstance(data, list)
+            data = data[step]
+        else:
+            assert isinstance(data, dict)
+            data = data[step]
+    return data
+
+
+def items(data: object, *path: str | int) -> list[object]:
+    """Return the JSON list at a path, asserting that it is a list."""
+    value = at(data, *path)
+    assert isinstance(value, list)
+    return value
 
 
 def song_dir(song_path: Path) -> Path:
@@ -166,11 +185,13 @@ def test_silent_stem_reports_null_loudness_and_a_silent_defect(
     code, printed = run_main(song_path, capsys)
 
     assert code == EXIT_SOME_FAILED
-    (track,) = printed["tracks"]
-    assert track["integrated_lufs"] is None
-    assert track["defects"] == [Defect.SILENT]
-    assert printed["mix"]["defects"] == [Defect.SILENT]
-    assert Path(track["spectrogram"]).read_bytes().startswith(PNG_SIGNATURE)
+    (track,) = items(printed, "tracks")
+    assert at(track, "integrated_lufs") is None
+    assert at(track, "defects") == [Defect.SILENT]
+    assert at(printed, "mix", "defects") == [Defect.SILENT]
+    spectrogram = at(track, "spectrogram")
+    assert isinstance(spectrogram, str)
+    assert Path(spectrogram).read_bytes().startswith(PNG_SIGNATURE)
 
     def reject(constant_name: str) -> NoReturn:
         raise AssertionError(f"report.json holds {constant_name}")
@@ -187,8 +208,8 @@ def test_silent_track_in_an_audible_mix_fails(
     code, printed = run_main(song_path, capsys)
 
     assert code == EXIT_SOME_FAILED
-    assert [track["defects"] for track in printed["tracks"]] == [[], [Defect.SILENT]]
-    assert printed["mix"]["defects"] == []
+    assert [at(track, "defects") for track in items(printed, "tracks")] == [[], [Defect.SILENT]]
+    assert at(printed, "mix", "defects") == []
 
 
 def test_mix_over_full_scale_is_a_clipping_defect(
@@ -199,9 +220,9 @@ def test_mix_over_full_scale_is_a_clipping_defect(
     code, printed = run_main(song_path, capsys)
 
     assert code == EXIT_SOME_FAILED
-    assert [track["defects"] for track in printed["tracks"]] == [[], []]
-    assert printed["mix"]["defects"] == [Defect.CLIPPING]
-    assert printed["mix"]["clipped_samples"] == 2 * samples_for(1)
+    assert [at(track, "defects") for track in items(printed, "tracks")] == [[], []]
+    assert at(printed, "mix", "defects") == [Defect.CLIPPING]
+    assert at(printed, "mix", "clipped_samples") == 2 * samples_for(1)
 
 
 def test_stem_over_full_scale_is_not_a_defect(
@@ -212,11 +233,11 @@ def test_stem_over_full_scale_is_not_a_defect(
     code, printed = run_main(song_path, capsys)
 
     assert code == EXIT_ALL_PASS
-    lead, bass = printed["tracks"]
-    assert lead["clipped_samples"] == 2 * samples_for(1)
-    assert lead["defects"] == bass["defects"] == []
-    assert printed["mix"]["clipped_samples"] == 0
-    assert printed["mix"]["defects"] == []
+    lead, bass = items(printed, "tracks")
+    assert at(lead, "clipped_samples") == 2 * samples_for(1)
+    assert at(lead, "defects") == at(bass, "defects") == []
+    assert at(printed, "mix", "clipped_samples") == 0
+    assert at(printed, "mix", "defects") == []
 
 
 def make_stale(song_path: Path, case: str) -> None:
@@ -281,15 +302,20 @@ def test_unusable_stem_removes_earlier_results(
     code, printed = run_main(song_path, capsys)
 
     assert code == EXIT_SOME_FAILED
-    lead, bass = printed["tracks"]
-    assert lead["name"] == "lead"
-    assert lead["status"] == TrackStatus.ANALYZED
-    assert bass["status"] == status
-    assert (bass["detail"] is None) if detail is None else (detail in bass["detail"])
-    assert bass["gain_db"] == -3.0
-    assert bass["peak_dbfs"] is None
-    assert bass["integrated_lufs"] is None
-    assert printed["mix"] is None
+    lead, bass = items(printed, "tracks")
+    assert at(lead, "name") == "lead"
+    assert at(lead, "status") == TrackStatus.ANALYZED
+    assert at(bass, "status") == status
+    bass_detail = at(bass, "detail")
+    if detail is None:
+        assert bass_detail is None
+    else:
+        assert isinstance(bass_detail, str)
+        assert detail in bass_detail
+    assert at(bass, "gain_db") == -3.0
+    assert at(bass, "peak_dbfs") is None
+    assert at(bass, "integrated_lufs") is None
+    assert at(printed, "mix") is None
     assert not (song_dir(song_path) / "mix").exists()
     assert not (song_dir(song_path) / "analysis").exists()
 
@@ -373,7 +399,7 @@ def test_gain_turns_a_clipping_mix_clean(
     unity = make_song(tmp_path / "unity", {"lead": constant(0.6), "bass": constant(0.6)})
     code, data = run_main(unity, capsys)
     assert code == EXIT_SOME_FAILED
-    assert data["mix"]["defects"] == [Defect.CLIPPING]
+    assert at(data, "mix", "defects") == [Defect.CLIPPING]
 
     quiet = make_song(
         tmp_path / "quiet",
@@ -382,8 +408,10 @@ def test_gain_turns_a_clipping_mix_clean(
     )
     code, data = run_main(quiet, capsys)
     assert code == EXIT_ALL_PASS
-    assert data["mix"]["defects"] == []
-    mix = read_wav(Path(data["mix"]["path"]))
+    assert at(data, "mix", "defects") == []
+    mix_path = at(data, "mix", "path")
+    assert isinstance(mix_path, str)
+    mix = read_wav(Path(mix_path))
     assert np.allclose(mix, 0.6 * 10 ** (-6 / 20) * 2, rtol=1e-6)
 
 
@@ -428,12 +456,12 @@ def test_track_measurements_ignore_gain_and_report_it(
 
     _, data = run_main(song_path, capsys)
 
-    reported = {track["name"]: track for track in data["tracks"]}
-    assert reported["lead"]["gain_db"] == -12.5
-    assert reported["bass"]["gain_db"] == 0.0
+    reported = {at(track, "name"): track for track in items(data, "tracks")}
+    assert at(reported["lead"], "gain_db") == -12.5
+    assert at(reported["bass"], "gain_db") == 0.0
     for name in stems:
-        assert reported[name]["peak_dbfs"] == plain[name].peak_dbfs
-        assert reported[name]["integrated_lufs"] == plain[name].integrated_lufs
+        assert at(reported[name], "peak_dbfs") == plain[name].peak_dbfs
+        assert at(reported[name], "integrated_lufs") == plain[name].integrated_lufs
 
 
 def test_missing_stem_still_reports_its_gain(tmp_path: Path) -> None:

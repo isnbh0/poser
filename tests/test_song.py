@@ -2,8 +2,9 @@
 
 import os
 import stat
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Self
+from typing import Self
 
 import numpy as np
 import pytest
@@ -14,7 +15,9 @@ from vsti_composer.music import chord, notes, pitch, scale, swing
 from vsti_composer.plugin_check import PROJECT_DIR
 from vsti_composer.song import (
     Note,
+    NoteData,
     Song,
+    SongData,
     SongError,
     Track,
     load_song,
@@ -24,15 +27,15 @@ from vsti_composer.song import (
 )
 
 
-def valid_note() -> dict[str, Any]:
+def valid_note() -> dict[str, object]:
     return {"beat": 0, "pitch": 60, "length": 1, "velocity": 100}
 
 
-def valid_track(name: str = "lead") -> dict[str, Any]:
+def valid_track(name: str = "lead") -> dict[str, object]:
     return {"name": name, "engine": "pedalboard", "sound": "Serum", "notes": [valid_note()]}
 
 
-def valid_song() -> dict[str, Any]:
+def valid_song() -> dict[str, object]:
     return {"bpm": 120, "tracks": [valid_track()]}
 
 
@@ -60,16 +63,33 @@ def test_seconds_uses_bpm() -> None:
     assert parse_song({**valid_song(), "bpm": 90}).seconds(3) == pytest.approx(2.0)
 
 
-def set_bpm(song: dict[str, Any], value: Any) -> None:
+def first_item(container: dict[str, object], key: str) -> dict[str, object]:
+    """Return the first mapping in a list held by song data under construction."""
+    items = container[key]
+    assert isinstance(items, list)
+    first = items[0]
+    assert isinstance(first, dict)
+    return first
+
+
+def first_track(song: dict[str, object]) -> dict[str, object]:
+    return first_item(song, "tracks")
+
+
+def first_note(song: dict[str, object]) -> dict[str, object]:
+    return first_item(first_track(song), "notes")
+
+
+def set_bpm(song: dict[str, object], value: object) -> None:
     song["bpm"] = value
 
 
-def set_track(song: dict[str, Any], key: str, value: Any) -> None:
-    song["tracks"][0][key] = value
+def set_track(song: dict[str, object], key: str, value: object) -> None:
+    first_track(song)[key] = value
 
 
-def set_note(song: dict[str, Any], key: str, value: Any) -> None:
-    song["tracks"][0]["notes"][0][key] = value
+def set_note(song: dict[str, object], key: str, value: object) -> None:
+    first_note(song)[key] = value
 
 
 @pytest.mark.parametrize(
@@ -104,11 +124,13 @@ def set_note(song: dict[str, Any], key: str, value: Any) -> None:
         (lambda s: set_track(s, "pan", 1), "tracks[0]: unknown key 'pan'"),
         (lambda s: set_note(s, "vel", 1), "notes[0]: unknown key 'vel'"),
         (lambda s: s.pop("bpm"), "missing key 'bpm'"),
-        (lambda s: s["tracks"][0].pop("sound"), "tracks[0]: missing key 'sound'"),
-        (lambda s: s["tracks"][0]["notes"][0].pop("pitch"), "notes[0]: missing key 'pitch'"),
+        (lambda s: first_track(s).pop("sound"), "tracks[0]: missing key 'sound'"),
+        (lambda s: first_note(s).pop("pitch"), "notes[0]: missing key 'pitch'"),
     ],
 )
-def test_invalid_song_names_the_problem(change: Any, expected: str) -> None:
+def test_invalid_song_names_the_problem(
+    change: Callable[[dict[str, object]], object], expected: str
+) -> None:
     song = valid_song()
     change(song)
 
@@ -119,7 +141,7 @@ def test_invalid_song_names_the_problem(change: Any, expected: str) -> None:
 
 
 @pytest.mark.parametrize("data", [None, [], "song", 3])
-def test_song_that_is_not_a_mapping_is_rejected(data: Any) -> None:
+def test_song_that_is_not_a_mapping_is_rejected(data: object) -> None:
     with pytest.raises(SongError, match="must be a mapping"):
         parse_song(data)
 
@@ -295,7 +317,7 @@ def test_gain_in_range_parses(gain: float) -> None:
 
 
 @pytest.mark.parametrize("gain", [-60.5, 12.5, True, "loud", float("nan"), float("inf")])
-def test_bad_gain_is_reported_with_other_problems(gain: Any) -> None:
+def test_bad_gain_is_reported_with_other_problems(gain: object) -> None:
     song = valid_song()
     set_track(song, "gain", gain)
     set_bpm(song, 0)
@@ -378,6 +400,35 @@ def test_song_to_data_writes_gain_between_sound_and_notes_only_when_set() -> Non
     assert list(lead) == ["name", "engine", "sound", "gain", "notes"]
     assert lead["gain"] == -6
     assert list(bass) == ["name", "engine", "sound", "notes"]
+
+
+def test_song_to_data_is_the_song_format() -> None:
+    note: NoteData = {"beat": 0, "pitch": 60, "length": 1, "velocity": 100}
+    expected: SongData = {
+        "bpm": 120,
+        "tracks": [
+            {
+                "name": "lead",
+                "engine": "pedalboard",
+                "sound": "Serum",
+                "gain": -6.0,
+                "notes": [note],
+            },
+            {"name": "bass", "engine": "pedalboard", "sound": "Serum", "notes": [note]},
+        ],
+    }
+
+    data = song_to_data(gain_song())
+
+    assert data == expected
+    assert list(data) == ["bpm", "tracks"]
+    assert [list(track) for track in data["tracks"]] == [
+        ["name", "engine", "sound", "gain", "notes"],
+        ["name", "engine", "sound", "notes"],
+    ]
+    assert [list(note) for track in data["tracks"] for note in track["notes"]] == [
+        ["beat", "pitch", "length", "velocity"]
+    ] * 2
 
 
 def test_song_with_gains_round_trips(tmp_path: Path) -> None:

@@ -2,17 +2,24 @@
 
 import json
 import sys
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Any
 
 import numpy as np
 import pytest
 
 from vsti_composer import plugin_check
-from vsti_composer.plugin_check import PluginResult, PluginSpec, Status, analyze, run_worker
+from vsti_composer.plugin_check import (
+    PluginResult,
+    PluginSpec,
+    Status,
+    analyze,
+    parse_worker_result,
+    run_worker,
+)
 
 NUM_SAMPLES = round(plugin_check.DURATION_S * plugin_check.SAMPLE_RATE)
-PASS_RESULT: dict[str, Any] = {
+PASS_RESULT: dict[str, object] = {
     "status": "pass",
     "is_instrument": True,
     "peak_dbfs": -6.0,
@@ -44,7 +51,7 @@ def write_script(tmp_path: Path, body: str) -> list[str]:
     return [sys.executable, str(script)]
 
 
-def write_result_script(tmp_path: Path, result: dict[str, Any] = PASS_RESULT) -> list[str]:
+def write_result_script(tmp_path: Path, result: Mapping[str, object] = PASS_RESULT) -> list[str]:
     return write_script(
         tmp_path,
         f"import json, sys\nopen(sys.argv[-1], 'w').write(json.dumps({result!r}))\n",
@@ -131,8 +138,10 @@ def test_worker_exiting_nonzero_is_crashed(tmp_path: Path) -> None:
     command = write_script(tmp_path, "import sys\nprint('boom', file=sys.stderr)\nsys.exit(3)\n")
     result = run_worker(command, timeout_s=30)
     assert result["status"] is Status.CRASHED
-    assert "exit code 3" in result["detail"]
-    assert "boom" in result["detail"]
+    detail = result.get("detail")
+    assert detail is not None
+    assert "exit code 3" in detail
+    assert "boom" in detail
 
 
 def test_worker_exiting_zero_without_result_is_crashed(tmp_path: Path) -> None:
@@ -152,6 +161,38 @@ def test_worker_exiting_zero_without_result_is_crashed(tmp_path: Path) -> None:
 def test_worker_writing_bad_result_is_crashed(tmp_path: Path, written: str) -> None:
     command = write_script(tmp_path, f"import sys\nopen(sys.argv[-1], 'w').write({written!r})\n")
     assert run_worker(command, timeout_s=30)["status"] is Status.CRASHED
+
+
+MALFORMED = {"status": Status.CRASHED, "detail": "worker wrote a malformed result"}
+UNKNOWN_STATUS = {"status": Status.CRASHED, "detail": "worker wrote an unknown status"}
+
+
+@pytest.mark.parametrize(
+    ("payload", "expected"),
+    [
+        (["pass"], MALFORMED),
+        ({**PASS_RESULT, "surprise": 1}, MALFORMED),
+        ({**PASS_RESULT, "peak_dbfs": "loud"}, MALFORMED),
+        ({**PASS_RESULT, "clipped": 1}, MALFORMED),
+        ({**PASS_RESULT, "note_peaks_dbfs": [-6.0, None]}, MALFORMED),
+        ({**PASS_RESULT, "detail": 3}, MALFORMED),
+        ({**PASS_RESULT, "status": "unknown"}, UNKNOWN_STATUS),
+        ({**PASS_RESULT, "status": 1}, UNKNOWN_STATUS),
+        ({"is_instrument": True}, UNKNOWN_STATUS),
+    ],
+)
+def test_worker_result_parser_reports_bad_results_as_crashed(
+    payload: object, expected: dict[str, object]
+) -> None:
+    assert parse_worker_result(payload) == expected
+
+
+def test_worker_result_parser_keeps_a_valid_result() -> None:
+    assert parse_worker_result(PASS_RESULT) == {**PASS_RESULT, "status": Status.PASS}
+    assert parse_worker_result({"status": "load_failed", "detail": None}) == {
+        "status": Status.LOAD_FAILED,
+        "detail": None,
+    }
 
 
 def test_worker_result_is_returned(tmp_path: Path) -> None:
@@ -205,7 +246,7 @@ class FakeInstrument:
         self.is_instrument = is_instrument
         self.audio = tone_render() if audio is None else audio
 
-    def __call__(self, messages: list[Any], **kwargs: Any) -> np.ndarray:
+    def __call__(self, messages: list[object], **kwargs: object) -> np.ndarray:
         assert kwargs["sample_rate"] == plugin_check.SAMPLE_RATE
         assert kwargs["duration"] == plugin_check.DURATION_S
         return self.audio
@@ -214,7 +255,7 @@ class FakeInstrument:
 def test_worker_result_loads_a_fresh_instance_per_render(monkeypatch: pytest.MonkeyPatch) -> None:
     loads = []
 
-    def fake_load(path: str, **kwargs: Any) -> FakeInstrument:
+    def fake_load(path: str, **kwargs: object) -> FakeInstrument:
         loads.append(kwargs["initialization_timeout"])
         return FakeInstrument()
 
@@ -224,11 +265,11 @@ def test_worker_result_loads_a_fresh_instance_per_render(monkeypatch: pytest.Mon
 
     assert len(loads) == 2
     assert result["status"] is Status.PASS
-    assert result["is_instrument"] is True
+    assert result.get("is_instrument") is True
 
 
 def test_worker_result_does_not_render_an_effect(monkeypatch: pytest.MonkeyPatch) -> None:
-    def fake_load(path: str, **kwargs: Any) -> FakeInstrument:
+    def fake_load(path: str, **kwargs: object) -> FakeInstrument:
         return FakeInstrument(is_instrument=False, audio=np.zeros((1, 1)))
 
     monkeypatch.setattr("pedalboard.load_plugin", fake_load)
@@ -239,7 +280,7 @@ def test_worker_result_does_not_render_an_effect(monkeypatch: pytest.MonkeyPatch
 
 
 def test_worker_result_rejects_an_unexpected_render_shape(monkeypatch: pytest.MonkeyPatch) -> None:
-    def fake_load(path: str, **kwargs: Any) -> FakeInstrument:
+    def fake_load(path: str, **kwargs: object) -> FakeInstrument:
         return FakeInstrument(audio=np.zeros((NUM_SAMPLES, plugin_check.NUM_CHANNELS)))
 
     monkeypatch.setattr("pedalboard.load_plugin", fake_load)
@@ -340,13 +381,14 @@ def test_table_shows_each_plugin_and_detail() -> None:
 
 
 def test_pattern_has_four_notes_within_duration() -> None:
-    messages: list[Any] = plugin_check.note_pattern()  # mido sets these attributes dynamically.
-    assert [m.type for m in messages].count("note_on") == 4
-    assert [m.type for m in messages].count("note_off") == 4
-    assert all(0 <= m.time <= plugin_check.DURATION_S for m in messages)
-    assert [m.note for m in messages if m.type == "note_on"] == [48, 60, 72, 84]
-    assert [m.time for m in messages if m.type == "note_on"] == [0.5, 1.5, 2.5, 3.5]
-    assert [m.time for m in messages if m.type == "note_off"] == [1.0, 2.0, 3.0, 4.0]
+    # mido sets message fields dynamically, so they are read through `dict()`.
+    messages = [m.dict() for m in plugin_check.note_pattern()]
+    assert [m["type"] for m in messages].count("note_on") == 4
+    assert [m["type"] for m in messages].count("note_off") == 4
+    assert all(0 <= m["time"] <= plugin_check.DURATION_S for m in messages)
+    assert [m["note"] for m in messages if m["type"] == "note_on"] == [48, 60, 72, 84]
+    assert [m["time"] for m in messages if m["type"] == "note_on"] == [0.5, 1.5, 2.5, 3.5]
+    assert [m["time"] for m in messages if m["type"] == "note_off"] == [1.0, 2.0, 3.0, 4.0]
 
 
 def test_parent_module_does_not_import_pedalboard_at_module_level() -> None:

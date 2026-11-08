@@ -12,12 +12,21 @@ import tomllib
 from dataclasses import asdict, dataclass, field, fields
 from enum import StrEnum
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, NotRequired, TypedDict, cast
 
 import mido
 import numpy as np
 
-from vsti_composer.worker import WorkerCrashedError, WorkerTimedOutError, run_isolated
+from vsti_composer.song import is_number
+from vsti_composer.worker import (
+    WorkerCrashedError,
+    WorkerTimedOutError,
+    json_object,
+    run_isolated,
+)
+
+if TYPE_CHECKING:
+    from pedalboard_native import MIDIMessageLike
 
 PROJECT_DIR = Path(__file__).resolve().parents[2]
 DEFAULT_CONFIG = PROJECT_DIR / "plugins.toml"
@@ -90,6 +99,19 @@ class PluginResult:
 
 
 WORKER_FIELDS = {f.name for f in fields(PluginResult)} - {"name", "path"}
+
+
+class WorkerResult(TypedDict):
+    """What a check worker reports: the fields of `PluginResult` other than name and path."""
+
+    status: Status
+    is_instrument: NotRequired[bool | None]
+    peak_dbfs: NotRequired[float | None]
+    note_peaks_dbfs: NotRequired[list[float]]
+    clipped: NotRequired[bool | None]
+    repeatable: NotRequired[bool | None]
+    max_difference_dbfs: NotRequired[float | None]
+    detail: NotRequired[str | None]
 
 
 def note_pattern() -> list[mido.Message]:
@@ -191,7 +213,55 @@ def worker_command(spec: PluginSpec) -> list[str]:
     return command
 
 
-def run_worker(command: list[str], timeout_s: float) -> dict[str, Any]:
+def _optional_float(value: object) -> tuple[bool, float | None]:
+    """Return whether the value is a number or None, and the value as a float or None."""
+    if value is None:
+        return True, None
+    if is_number(value):
+        return True, float(value)
+    return False, None
+
+
+def parse_worker_result(payload: object) -> WorkerResult:
+    """Turn a check worker's JSON result into a result, reporting anything malformed as a crash."""
+    malformed: WorkerResult = {
+        "status": Status.CRASHED,
+        "detail": "worker wrote a malformed result",
+    }
+    fields = json_object(payload)
+    if fields is None or not set(fields) <= WORKER_FIELDS:
+        return malformed
+    status = fields.get("status")
+    if not isinstance(status, str) or status not in Status:
+        return {"status": Status.CRASHED, "detail": "worker wrote an unknown status"}
+
+    result: WorkerResult = {"status": Status(status)}
+    for key in ("is_instrument", "clipped", "repeatable"):
+        if key in fields:
+            flag = fields[key]
+            if not (flag is None or isinstance(flag, bool)):
+                return malformed
+            result[key] = flag
+    for key in ("peak_dbfs", "max_difference_dbfs"):
+        if key in fields:
+            valid, number = _optional_float(fields[key])
+            if not valid:
+                return malformed
+            result[key] = number
+    if "note_peaks_dbfs" in fields:
+        peaks = fields["note_peaks_dbfs"]
+        if not (isinstance(peaks, list) and all(is_number(peak) for peak in peaks)):
+            return malformed
+        result["note_peaks_dbfs"] = [float(peak) for peak in peaks]
+    if "detail" in fields:
+        detail = fields["detail"]
+        if not (detail is None or isinstance(detail, str)):
+            return malformed
+        result["detail"] = detail
+    return result
+
+
+def run_worker(command: list[str], timeout_s: float) -> WorkerResult:
     """Run a check worker and return its validated result, or a timed-out or crashed result."""
     try:
         payload = run_isolated(command, timeout_s)
@@ -199,14 +269,7 @@ def run_worker(command: list[str], timeout_s: float) -> dict[str, Any]:
         return {"status": Status.TIMED_OUT, "detail": str(error)}
     except WorkerCrashedError as error:
         return {"status": Status.CRASHED, "detail": str(error)}
-
-    if not isinstance(payload, dict) or not set(payload) <= WORKER_FIELDS:
-        return {"status": Status.CRASHED, "detail": "worker wrote a malformed result"}
-    try:
-        payload["status"] = Status(payload.get("status"))
-    except ValueError:
-        return {"status": Status.CRASHED, "detail": "worker wrote an unknown status"}
-    return payload
+    return parse_worker_result(payload)
 
 
 def run_check(specs: list[PluginSpec], timeout_s: float = WORKER_TIMEOUT_S) -> list[PluginResult]:
@@ -273,17 +336,24 @@ def main(argv: list[str] | None = None) -> int:
     return exit_code(results)
 
 
-def _worker_result(path: str, plugin_name: str | None) -> dict[str, Any]:
-    from pedalboard import load_plugin  # Imported here so the parent never loads plugin code.
+def _worker_result(path: str, plugin_name: str | None) -> WorkerResult:
+    # Imported here so the parent never loads plugin code.
+    from pedalboard import AudioUnitPlugin, VST3Plugin, load_plugin
 
-    def load() -> Any:
-        return load_plugin(
-            path, plugin_name=plugin_name, initialization_timeout=INITIALIZATION_TIMEOUT_S
+    def load() -> VST3Plugin | AudioUnitPlugin:
+        # `load_plugin` is annotated as returning `ExternalPlugin`, but it returns one of these.
+        return cast(
+            VST3Plugin | AudioUnitPlugin,
+            load_plugin(
+                path, plugin_name=plugin_name, initialization_timeout=INITIALIZATION_TIMEOUT_S
+            ),
         )
 
-    def render(plugin: Any) -> np.ndarray:
+    def render(plugin: VST3Plugin | AudioUnitPlugin) -> np.ndarray:
+        # Pedalboard's stubs take a `list` of its message union, and `list` is invariant.
+        messages: list[MIDIMessageLike] = [*note_pattern()]
         audio = plugin(
-            note_pattern(),
+            messages,
             duration=DURATION_S,
             sample_rate=SAMPLE_RATE,
             num_channels=NUM_CHANNELS,
@@ -309,7 +379,16 @@ def _worker_result(path: str, plugin_name: str | None) -> dict[str, Any]:
     except Exception as error:  # noqa: BLE001
         return {"status": Status.LOAD_FAILED, "is_instrument": True, "detail": str(error)}
 
-    return {"is_instrument": True, **asdict(analyze(first, render(plugin)))}
+    analysis = analyze(first, render(plugin))
+    return {
+        "status": analysis.status,
+        "is_instrument": True,
+        "peak_dbfs": analysis.peak_dbfs,
+        "note_peaks_dbfs": analysis.note_peaks_dbfs,
+        "clipped": analysis.clipped,
+        "repeatable": analysis.repeatable,
+        "max_difference_dbfs": analysis.max_difference_dbfs,
+    }
 
 
 def worker_main(argv: list[str]) -> int:

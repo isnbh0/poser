@@ -3,8 +3,18 @@
 import json
 import subprocess
 import tempfile
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Any
+
+
+def json_object(value: object) -> Mapping[str, object] | None:
+    """Return parsed JSON as a mapping of untyped values, or None when it is not an object.
+
+    The declared return type makes the type checker require each value to be checked before use.
+    """
+    if isinstance(value, dict) and all(isinstance(key, str) for key in value):
+        return value
+    return None
 
 
 class WorkerTimedOutError(Exception):
@@ -15,7 +25,7 @@ class WorkerCrashedError(Exception):
     """The worker exited nonzero or wrote no readable result."""
 
 
-def run_isolated(command: list[str], timeout_s: float | None) -> Any:
+def run_isolated(command: list[str], timeout_s: float | None) -> object:
     """Run a worker, appending its result path as the last argument, and return its JSON result.
 
     `timeout_s=None` waits for as long as the worker runs, as when it shows a plugin window.

@@ -5,7 +5,6 @@ import math
 import random
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
 
 import pytest
 
@@ -236,31 +235,32 @@ def test_music_module_imports_no_plugin_code() -> None:
     assert not modules & {"pedalboard", "mido"}
 
 
-# Typed as `Any` so the type checker allows the deliberately wrong argument types below.
-loose: Any = music
+def untyped(function: Callable[..., object]) -> Callable[..., object]:
+    """Return the function unchanged, typed so the deliberately wrong arguments below check."""
+    return function
 
 
 @pytest.mark.parametrize(
     "call",
     [
-        lambda: loose.notes([60.5], 0, 1, 80),
-        lambda: loose.notes([60], 0, 1, 80.5),
-        lambda: loose.notes([60], 0, 1, True),
-        lambda: loose.notes([60], True, 1, 80),
-        lambda: loose.notes([60], 0, float("nan"), 80),
-        lambda: loose.scale(60.5, "major"),
-        lambda: loose.scale(True, "major"),
-        lambda: loose.chord(60.0, "maj"),
-        lambda: loose.chord(60, "maj", 1.0),
-        lambda: loose.chord(60, "maj", True),
-        lambda: loose.degree(scale(60, "major"), 1.0),
-        lambda: loose.swing(at(0.5), 0.6, grid=True),
-        lambda: loose.humanize(SIXTEEN, None),
-        lambda: loose.humanize(SIXTEEN, 1.5),
-        lambda: loose.humanize(SIXTEEN, 1, velocity=2.5),
-        lambda: loose.humanize(SIXTEEN, 1, timing=float("nan")),
-        lambda: loose.pitch(60),
-        lambda: loose.notes([60], 10**400, 1, 80),
+        lambda: untyped(music.notes)([60.5], 0, 1, 80),
+        lambda: untyped(music.notes)([60], 0, 1, 80.5),
+        lambda: untyped(music.notes)([60], 0, 1, True),
+        lambda: untyped(music.notes)([60], True, 1, 80),
+        lambda: untyped(music.notes)([60], 0, float("nan"), 80),
+        lambda: untyped(music.scale)(60.5, "major"),
+        lambda: untyped(music.scale)(True, "major"),
+        lambda: untyped(music.chord)(60.0, "maj"),
+        lambda: untyped(music.chord)(60, "maj", 1.0),
+        lambda: untyped(music.chord)(60, "maj", True),
+        lambda: untyped(music.degree)(scale(60, "major"), 1.0),
+        lambda: untyped(music.swing)(at(0.5), 0.6, grid=True),
+        lambda: untyped(music.humanize)(SIXTEEN, None),
+        lambda: untyped(music.humanize)(SIXTEEN, 1.5),
+        lambda: untyped(music.humanize)(SIXTEEN, 1, velocity=2.5),
+        lambda: untyped(music.humanize)(SIXTEEN, 1, timing=float("nan")),
+        lambda: untyped(music.pitch)(60),
+        lambda: untyped(music.notes)([60], 10**400, 1, 80),
     ],
 )
 def test_helpers_reject_wrong_types_with_value_error(call: Callable[[], object]) -> None:

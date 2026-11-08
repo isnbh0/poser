@@ -19,7 +19,7 @@ import sys
 import tempfile
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, TypedDict, cast
 
 import numpy as np
 
@@ -42,7 +42,16 @@ from vsti_composer.plugin_check import (
     note_pattern,
 )
 from vsti_composer.presets import PresetError, preset_description, preset_files
-from vsti_composer.worker import WorkerCrashedError, WorkerTimedOutError, run_isolated
+from vsti_composer.worker import (
+    WorkerCrashedError,
+    WorkerTimedOutError,
+    json_object,
+    run_isolated,
+)
+
+if TYPE_CHECKING:
+    from pedalboard import AudioUnitPlugin, VST3Plugin
+    from pedalboard_native import MIDIMessageLike
 
 SOUNDS_DIR = PROJECT_DIR / "sounds"
 # Under the renders directory. The leading dot keeps it apart from any song's stem directory.
@@ -63,6 +72,22 @@ class SavedSound:
     plugin: str
     description: str
     state: str  # Standard base64 of the plugin's raw_state.
+
+
+class SaveJob(TypedDict):
+    plugin_path: str
+    plugin_name: str | None
+    state: str | None  # Base64 state to start from, or None for the plugin's default patch.
+    preview_path: str
+
+
+class SaveFailure(TypedDict):
+    error: str
+
+
+class SaveSuccess(TypedDict):
+    state: str
+    peak_dbfs: float
 
 
 @dataclass(frozen=True)
@@ -91,7 +116,7 @@ def sound_files(sounds_dir: Path) -> dict[str, Path]:
     }
 
 
-def decode_state(state: Any) -> bytes:
+def decode_state(state: object) -> bytes:
     if not isinstance(state, str):
         raise SoundError("state is not a string")
     try:
@@ -122,15 +147,18 @@ def read_sound(path: Path, specs: list[PluginSpec]) -> SavedSound:
         data = json.loads(path.read_text())
     except (OSError, UnicodeDecodeError, ValueError) as error:
         raise SoundError(f"cannot read {path.name}: {error}") from error
-    if not isinstance(data, dict) or set(data) != SOUND_KEYS:
+    fields = json_object(data)
+    if fields is None or set(fields) != SOUND_KEYS:
         raise SoundError(f"must hold exactly the keys {sorted(SOUND_KEYS)}")
-    plugin, description = data["plugin"], data["description"]
+    plugin, description, state = fields["plugin"], fields["description"], fields["state"]
     if not isinstance(plugin, str) or plugin not in {spec.name for spec in specs}:
         raise SoundError(f"plugin {plugin!r} is not in the plugin list")
     if not isinstance(description, str) or not description.strip():
         raise SoundError("description must be a non-empty string")
-    decode_state(data["state"])
-    return SavedSound(name, plugin, description, data["state"])
+    if not isinstance(state, str):
+        raise SoundError("state is not a string")
+    decode_state(state)
+    return SavedSound(name, plugin, description, state)
 
 
 def write_sound(sounds_dir: Path, sound: SavedSound) -> Path:
@@ -244,7 +272,7 @@ def save_worker_command(job_path: Path) -> list[str]:
     return [sys.executable, "-m", "vsti_composer.sounds", str(job_path)]
 
 
-def run_save_worker(job: dict[str, Any]) -> tuple[str, float]:
+def run_save_worker(job: SaveJob) -> tuple[str, float]:
     """Run the save worker with no timeout and return the base64 state and preview peak.
 
     Raises WorkerCrashedError for any failure, including a malformed result.
@@ -254,10 +282,13 @@ def run_save_worker(job: dict[str, Any]) -> tuple[str, float]:
         job_path.write_text(json.dumps(job))
         # No timeout, because the owner decides when to close the window.
         payload = run_isolated(save_worker_command(job_path), None)
-    match payload:
+    fields = json_object(payload)
+    if fields is None:
+        raise WorkerCrashedError("worker wrote a malformed result")
+    match fields:
         case {"error": str(message)}:
             raise WorkerCrashedError(message)
-        case {"state": str(state), "peak_dbfs": int(peak) | float(peak)} if len(payload) == 2:
+        case {"state": str(state), "peak_dbfs": int(peak) | float(peak)} if len(fields) == 2:
             try:
                 decode_state(state)
             except SoundError as error:
@@ -296,7 +327,7 @@ def save_main(argv: list[str] | None = None) -> int:
     preview_dir.mkdir(parents=True, exist_ok=True)
     preview = preview_dir / f"{args.name}.wav"
     pending_preview = preview_dir / f".{args.name}.preview.wav"
-    job = {
+    job: SaveJob = {
         "plugin_path": spec.path,
         "plugin_name": spec.plugin_name,
         "state": start_state,
@@ -339,7 +370,7 @@ def save_main(argv: list[str] | None = None) -> int:
 SETTLE_S = 0.1
 
 
-def capture_state(plugin: Any) -> bytes:
+def capture_state(plugin: "VST3Plugin | AudioUnitPlugin") -> bytes:
     """Return a plugin's `raw_state` after a short render with no notes.
 
     Serum's `raw_state`, read straight after a parameter change, restores the earlier sound. After
@@ -350,17 +381,22 @@ def capture_state(plugin: Any) -> bytes:
     return bytes(plugin.raw_state)
 
 
-def save_in_worker(job: dict[str, Any]) -> dict[str, Any]:
+def save_in_worker(job: SaveJob) -> SaveFailure | SaveSuccess:
     """Show the plugin's window, then render a preview from the state it leaves."""
-    from pedalboard import load_plugin  # Imported here so the parent never loads plugin code.
+    # Imported here so the parent never loads plugin code.
+    from pedalboard import AudioUnitPlugin, VST3Plugin, load_plugin
 
     from vsti_composer.render import write_stem
 
-    def load(state: bytes | None) -> Any:
-        plugin: Any = load_plugin(
-            job["plugin_path"],
-            plugin_name=job["plugin_name"],
-            initialization_timeout=INITIALIZATION_TIMEOUT_S,
+    def load(state: bytes | None) -> VST3Plugin | AudioUnitPlugin:
+        # `load_plugin` is annotated as returning `ExternalPlugin`, but it returns one of these.
+        plugin = cast(
+            VST3Plugin | AudioUnitPlugin,
+            load_plugin(
+                job["plugin_path"],
+                plugin_name=job["plugin_name"],
+                initialization_timeout=INITIALIZATION_TIMEOUT_S,
+            ),
         )
         if state is not None:
             plugin.raw_state = state
@@ -382,8 +418,10 @@ def save_in_worker(job: dict[str, Any]) -> dict[str, Any]:
     except Exception as error:  # noqa: BLE001
         return {"error": f"cannot restore the saved state: {error}"}
     # The same reset as `render_stem`, so the preview sounds as a song will.
+    # Pedalboard's stubs take a `list` of its message union, and `list` is invariant.
+    messages: list[MIDIMessageLike] = [*note_pattern()]
     audio = plugin(
-        note_pattern(),
+        messages,
         duration=DURATION_S,
         sample_rate=SAMPLE_RATE,
         num_channels=NUM_CHANNELS,
@@ -402,7 +440,8 @@ def worker_main(argv: list[str]) -> int:
     args = parser.parse_args(argv)
 
     # The result goes to a file because plugins may print to stdout.
-    result = save_in_worker(json.loads(args.job_path.read_text()))
+    job: SaveJob = json.loads(args.job_path.read_text())  # Written by `run_save_worker`.
+    result = save_in_worker(job)
     args.result_path.write_text(json.dumps(result))
     return 0
 

@@ -4,15 +4,16 @@ import base64
 import json
 import re
 import sys
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Any
 
+import numpy as np
 import pytest
 from helpers import fxp_bytes
 
 from vsti_composer import sounds
 from vsti_composer.plugin_check import EXIT_ALL_PASS, EXIT_BAD_CONFIG, EXIT_SOME_FAILED
-from vsti_composer.worker import run_isolated
+from vsti_composer.worker import json_object, run_isolated
 
 WORKER_STATE = b"state-from-the-window"
 
@@ -31,7 +32,7 @@ def encode(data: bytes) -> str:
     return base64.b64encode(data).decode("ascii")
 
 
-def write_sound_file(tmp_path: Path, name: str, content: Any) -> Path:
+def write_sound_file(tmp_path: Path, name: str, content: object) -> Path:
     sounds_dir = tmp_path / "sounds"
     sounds_dir.mkdir(exist_ok=True)
     path = sounds_dir / f"{name}.json"
@@ -84,9 +85,12 @@ def save(tmp_path: Path, *args: str) -> int:
         return int(error.code or 0)
 
 
-def jobs(tmp_path: Path) -> list[dict[str, Any]]:
+def jobs(tmp_path: Path) -> list[Mapping[str, object]]:
     log = tmp_path / "jobs.log"
-    return [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []
+    lines = log.read_text().splitlines() if log.exists() else []
+    parsed = [json_object(json.loads(line)) for line in lines]
+    assert all(job is not None for job in parsed)
+    return [job for job in parsed if job is not None]
 
 
 def test_saved_file_has_three_keys_and_the_worker_state(
@@ -204,7 +208,7 @@ def test_from_passes_the_source_plugin_and_state(
     assert code == EXIT_ALL_PASS
     job = jobs(tmp_path)[0]
     assert job["plugin_path"] == "/primer.vst3"
-    assert base64.b64decode(job["state"]) == b"source"
+    assert sounds.decode_state(job["state"]) == b"source"
     saved = json.loads((tmp_path / "sounds" / "pad-2.json").read_text())
     assert saved["plugin"] == "Primer"
 
@@ -218,7 +222,7 @@ def test_from_the_same_name_with_replace_revises_in_place(
     )
 
     assert save(tmp_path, "pad", "--from", "pad", "--description", "pad", "--replace") == 0
-    assert base64.b64decode(jobs(tmp_path)[0]["state"]) == b"source"
+    assert sounds.decode_state(jobs(tmp_path)[0]["state"]) == b"source"
 
 
 @pytest.mark.parametrize("action", ["crash", "error", "malformed", "no-preview"])
@@ -242,7 +246,7 @@ def test_failed_worker_exits_one_and_leaves_the_sound_unchanged(
 def test_interrupt_exits_one_and_writes_nothing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    def interrupted(job: dict[str, Any]) -> tuple[str, float]:
+    def interrupted(job: sounds.SaveJob) -> tuple[str, float]:
         Path(job["preview_path"]).write_text("partial")
         raise KeyboardInterrupt
 
@@ -433,7 +437,7 @@ def test_default_sounds_directory_is_in_the_project() -> None:
 class EditorFakePlugin:
     """Records the order of window, state, and render calls across loads."""
 
-    def __init__(self, events: list[Any], audio: Any) -> None:
+    def __init__(self, events: list[tuple[str, bytes | None]], audio: np.ndarray) -> None:
         self.events = events
         self.audio = audio
         self.state = b"default"
@@ -451,7 +455,7 @@ class EditorFakePlugin:
         self.events.append(("show_editor", self.state))
         self.state = WORKER_STATE  # The owner chose a sound in the window.
 
-    def __call__(self, messages: list[Any], **kwargs: Any) -> Any:
+    def __call__(self, messages: list[object], **kwargs: object) -> np.ndarray:
         self.events.append(("render", self.state))
         return self.audio
 
@@ -459,20 +463,19 @@ class EditorFakePlugin:
 def test_save_worker_renders_the_preview_from_a_newly_loaded_plugin(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    import numpy as np
     from pedalboard.io import ReadableAudioFile
 
-    events: list[Any] = []
+    events: list[tuple[str, bytes | None]] = []
     audio = np.zeros((2, 48000), dtype=np.float32)
     audio[:, 100] = 0.5
 
-    def load(*args: Any, **kwargs: Any) -> EditorFakePlugin:
+    def load(*args: object, **kwargs: object) -> EditorFakePlugin:
         events.append(("load", None))
         return EditorFakePlugin(events, audio)
 
     monkeypatch.setattr("pedalboard.load_plugin", load)
     preview = tmp_path / ".pad.preview.wav"
-    job = {
+    job: sounds.SaveJob = {
         "plugin_path": "/serum.vst3",
         "plugin_name": None,
         "state": encode(b"start"),
@@ -499,11 +502,16 @@ def test_save_worker_renders_the_preview_from_a_newly_loaded_plugin(
 def test_save_worker_reports_a_load_failure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    def fail(*args: Any, **kwargs: Any) -> None:
+    def fail(*args: object, **kwargs: object) -> None:
         raise ImportError("no such plugin")
 
     monkeypatch.setattr("pedalboard.load_plugin", fail)
-    job = {"plugin_path": "/x.vst3", "plugin_name": None, "state": None, "preview_path": "/none"}
+    job: sounds.SaveJob = {
+        "plugin_path": "/x.vst3",
+        "plugin_name": None,
+        "state": None,
+        "preview_path": "/none",
+    }
 
     assert sounds.save_in_worker(job) == {"error": "cannot load the plugin: no such plugin"}
 
@@ -541,7 +549,7 @@ def test_a_leftover_preview_does_not_pass_for_a_new_one(
 def test_failed_sound_write_leaves_no_temporary_file(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    def fail(*args: Any) -> None:
+    def fail(*args: object) -> None:
         raise OSError("disk full")
 
     monkeypatch.setattr(sounds.os, "replace", fail)

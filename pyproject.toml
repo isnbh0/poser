@@ -42,6 +42,13 @@ default-groups = ["dev", "lint"]
 [tool.ruff]
 line-length = 100
 
+[tool.ruff.lint]
+extend-select = ["TID251"]
+
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+"typing.Any".msg = "Use object, a TypedDict, a Protocol, or a concrete type."
+"typing_extensions.Any".msg = "Use object, a TypedDict, a Protocol, or a concrete type."
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-m 'not real_plugins'"

@@ -13,7 +13,6 @@ import os
 import shutil
 import sys
 import tempfile
-from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -42,7 +41,12 @@ from vsti_composer.plugin_check import (
 from vsti_composer.presets import PresetError, build_state, preset_files, read_chunk
 from vsti_composer.song import Note, Song, SongError, Track, is_int, is_number, load_song
 from vsti_composer.sounds import SOUNDS_DIR, SoundError, read_sound, sound_files
-from vsti_composer.worker import WorkerCrashedError, WorkerTimedOutError, run_isolated
+from vsti_composer.worker import (
+    WorkerCrashedError,
+    WorkerTimedOutError,
+    json_object,
+    run_isolated,
+)
 
 if TYPE_CHECKING:
     from pedalboard_native import MIDIMessageLike
@@ -247,16 +251,6 @@ def write_stamp(
         raise
 
 
-def json_object(value: object) -> Mapping[str, object] | None:
-    """Return parsed JSON as a mapping of untyped values, or None when it is not an object.
-
-    The declared return type makes the type checker require each value to be checked before use.
-    """
-    if isinstance(value, dict) and all(isinstance(key, str) for key in value):
-        return value
-    return None
-
-
 def read_stamp(path: Path) -> Stamp | None:
     """Return a stamp, or None when it is missing, unreadable, or malformed."""
     try:
@@ -344,7 +338,7 @@ def _run_track_worker(job: RenderJob, timeout_s: float) -> Outcome:
         job_path = Path(directory) / "job.json"
         job_path.write_text(json.dumps(job))
         try:
-            payload: object = run_isolated(worker_command(job_path), timeout_s)
+            payload = run_isolated(worker_command(job_path), timeout_s)
         except WorkerTimedOutError as error:
             return Outcome(TrackStatus.TIMED_OUT, detail=str(error))
         except WorkerCrashedError as error:

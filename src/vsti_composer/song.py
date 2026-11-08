@@ -5,9 +5,10 @@ import os
 import re
 import stat
 import tempfile
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, TypeGuard
+from typing import NotRequired, TypedDict, TypeGuard
 
 import yaml
 
@@ -57,6 +58,26 @@ class Song:
         return beat * 60 / self.bpm
 
 
+class NoteData(TypedDict):
+    beat: float
+    pitch: int
+    length: float
+    velocity: int
+
+
+class TrackData(TypedDict):
+    name: str
+    engine: str
+    sound: str
+    gain: NotRequired[float]
+    notes: list[NoteData]
+
+
+class SongData(TypedDict):
+    bpm: float
+    tracks: list[TrackData]
+
+
 def is_int(value: object) -> TypeGuard[int]:
     """Return whether the value is an int, excluding bool."""
     return isinstance(value, int) and not isinstance(value, bool)
@@ -77,8 +98,13 @@ def _is_int_in_range(value: object, low: int, high: int) -> bool:
     return is_int(value) and low <= value <= high
 
 
+def _mapping(value: object) -> Mapping[object, object] | None:
+    """Return loaded YAML as a mapping of untyped keys and values, or None when it is not one."""
+    return value if isinstance(value, dict) else None
+
+
 def _check_keys(
-    data: dict[Any, Any],
+    data: Mapping[object, object],
     required: set[str],
     where: str,
     problems: list[str],
@@ -92,9 +118,10 @@ def _check_keys(
         problems.append(f"{prefix}missing key {key!r}")
 
 
-def _parse_note(data: Any, where: str, problems: list[str]) -> Note | None:
-    if not isinstance(data, dict):
-        problems.append(f"{where}: must be a mapping, got {data!r}")
+def _parse_note(value: object, where: str, problems: list[str]) -> Note | None:
+    data = _mapping(value)
+    if data is None:
+        problems.append(f"{where}: must be a mapping, got {value!r}")
         return None
     _check_keys(data, NOTE_KEYS, where, problems)
 
@@ -110,14 +137,18 @@ def _parse_note(data: Any, where: str, problems: list[str]) -> Note | None:
     if "velocity" in data and not _is_int_in_range(velocity, 1, 127):
         problems.append(f"{where}.velocity: must be an integer from 1 to 127, got {velocity!r}")
 
-    if len(problems) > before or not NOTE_KEYS <= set(data):
+    if len(problems) > before:
+        return None
+    # These fail only when a problem was reported. A missing key reads as None.
+    if not (is_number(beat) and is_int(pitch) and is_number(length) and is_int(velocity)):
         return None
     return Note(beat=beat, pitch=pitch, length=length, velocity=velocity)
 
 
-def _parse_track(data: Any, where: str, problems: list[str]) -> Track | None:
-    if not isinstance(data, dict):
-        problems.append(f"{where}: must be a mapping, got {data!r}")
+def _parse_track(value: object, where: str, problems: list[str]) -> Track | None:
+    data = _mapping(value)
+    if data is None:
+        problems.append(f"{where}: must be a mapping, got {value!r}")
         return None
     _check_keys(data, TRACK_KEYS, where, problems, OPTIONAL_TRACK_KEYS)
 
@@ -149,7 +180,10 @@ def _parse_track(data: Any, where: str, problems: list[str]) -> Track | None:
                 for index, note in enumerate(raw_notes)
             ]
 
-    if len(problems) > before or not TRACK_KEYS <= set(data):
+    # Each of these fails only when a problem was reported. A missing key reads as None.
+    if len(problems) > before or not is_number(gain) or "notes" not in data:
+        return None
+    if not (isinstance(name, str) and isinstance(engine, str) and isinstance(sound, str)):
         return None
     return Track(
         name=name,
@@ -160,10 +194,11 @@ def _parse_track(data: Any, where: str, problems: list[str]) -> Track | None:
     )
 
 
-def parse_song(data: Any) -> Song:
+def parse_song(value: object) -> Song:
     """Validate loaded song data, reporting every problem found rather than only the first."""
-    if not isinstance(data, dict):
-        raise SongError([f"song must be a mapping, got {data!r}"])
+    data = _mapping(value)
+    if data is None:
+        raise SongError([f"song must be a mapping, got {value!r}"])
 
     problems: list[str] = []
     _check_keys(data, SONG_KEYS, "", problems)
@@ -191,7 +226,8 @@ def parse_song(data: Any) -> Song:
                 problems.append(f"tracks: duplicate track name {track.name!r}")
             seen.add(track.name.casefold())
 
-    if problems:
+    # `bpm` fails `is_number` only when a problem was reported.
+    if problems or not is_number(bpm):
         raise SongError(problems)
     return Song(bpm=bpm, tracks=tuple(t for t in tracks if t is not None))
 
@@ -204,19 +240,24 @@ def load_song(path: Path) -> Song:
     return parse_song(data)
 
 
-def _track_to_data(track: Track) -> dict[str, Any]:
-    data: dict[str, Any] = {"name": track.name, "engine": track.engine, "sound": track.sound}
-    # A gain of 0 is the default, so songs without gains are written as they were before gain.
-    if track.gain != 0:
-        data["gain"] = float(track.gain)
-    data["notes"] = [
+def _track_to_data(track: Track) -> TrackData:
+    notes: list[NoteData] = [
         {"beat": note.beat, "pitch": note.pitch, "length": note.length, "velocity": note.velocity}
         for note in track.notes
     ]
-    return data
+    # A gain of 0 is the default, so songs without gains are written as they were before gain.
+    if track.gain == 0:
+        return {"name": track.name, "engine": track.engine, "sound": track.sound, "notes": notes}
+    return {
+        "name": track.name,
+        "engine": track.engine,
+        "sound": track.sound,
+        "gain": float(track.gain),
+        "notes": notes,
+    }
 
 
-def song_to_data(song: Song) -> dict[str, Any]:
+def song_to_data(song: Song) -> SongData:
     """Return a song as plain data in the song format's key order, the inverse of `parse_song`."""
     return {"bpm": song.bpm, "tracks": [_track_to_data(track) for track in song.tracks]}
 
