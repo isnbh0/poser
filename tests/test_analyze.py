@@ -573,7 +573,13 @@ def test_render_leaves_history_intact(tmp_path: Path, monkeypatch: pytest.Monkey
     run(song_path)
     monkeypatch.setattr(render, "worker_command", lambda job_path: ["false"])
 
-    render.render_song(load_song(song_path), "song", SPECS, song_path.parent / "renders")
+    render.render_song(
+        load_song(song_path),
+        "song",
+        SPECS,
+        song_path.parent / "renders",
+        sounds_dir=song_path.parent / "sounds",
+    )
 
     assert (history(song_path) / "1" / "report.json").is_file()
     assert run(song_path).run == 2

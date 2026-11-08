@@ -4,21 +4,23 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-from helpers import band_spectrum_db, change_time_s, read_stem
+from helpers import REPO_DIR, band_spectrum_db, change_time_s, read_stem, real_specs
 from pedalboard.io import ReadableAudioFile
 
 from poser import render
-from poser.plugin_check import DEFAULT_CONFIG, PROJECT_DIR, load_config, measure_peak_dbfs
+from poser.plugin_check import measure_peak_dbfs
 from poser.render import TrackStatus
 from poser.song import ControlChange, Note, Song, Track, load_song
 
 
 @pytest.mark.real_plugins
 def test_demo_song_renders_aligned_audible_stems(tmp_path: Path) -> None:
-    song = load_song(PROJECT_DIR / "songs" / "demo.yaml")
+    song = load_song(REPO_DIR / "songs" / "demo.yaml")
     expected_samples = render.expected_samples(render.song_duration_s(song))
 
-    results = render.render_song(song, "demo", load_config(DEFAULT_CONFIG), tmp_path)
+    results = render.render_song(
+        song, "demo", real_specs(), tmp_path, sounds_dir=tmp_path / "sounds"
+    )
 
     assert [result.track for result in results] == [track.name for track in song.tracks]
     for result in results:
@@ -36,7 +38,9 @@ SOUND = "Serum:Leads/LD A Bit of Luck [SD]"
 
 def render_cc_song(tmp_path: Path, name: str, beats: float, *changes: ControlChange) -> np.ndarray:
     track = Track("lead", "pedalboard", SOUND, (Note(0, 60, beats, 100),), cc=changes)
-    (result,) = render.render_song(Song(120, (track,)), name, load_config(DEFAULT_CONFIG), tmp_path)
+    (result,) = render.render_song(
+        Song(120, (track,)), name, real_specs(), tmp_path, sounds_dir=tmp_path / "sounds"
+    )
     assert result.status is TrackStatus.RENDERED, result.detail
     assert result.stem is not None
     return read_stem(str(result.stem))

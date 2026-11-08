@@ -3,13 +3,13 @@
 from pathlib import Path
 
 import pytest
+from helpers import REPO_DIR
 
-from poser.plugin_check import PROJECT_DIR
 from poser.song import SCRIPT_SUFFIX, YAML_SUFFIXES, load_song
 
 SONGS = sorted(
     path
-    for path in (PROJECT_DIR / "songs").iterdir()
+    for path in (REPO_DIR / "songs").iterdir()
     if path.suffix in (*YAML_SUFFIXES, SCRIPT_SUFFIX)
 )
 

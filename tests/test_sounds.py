@@ -430,10 +430,6 @@ def test_run_isolated_without_timeout_runs_to_completion(tmp_path: Path) -> None
     assert run_isolated([sys.executable, str(script)], None) == {"done": True}
 
 
-def test_default_sounds_directory_is_in_the_project() -> None:
-    assert sounds.SOUNDS_DIR == sounds.PROJECT_DIR / "sounds"
-
-
 class EditorFakePlugin:
     """Records the order of window, state, and render calls across loads."""
 

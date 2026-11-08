@@ -26,7 +26,6 @@ from pedalboard.io import ReadableAudioFile, WriteableAudioFile
 from scipy import signal
 
 from poser.plugin_check import (
-    DEFAULT_CONFIG,
     EXIT_ALL_PASS,
     EXIT_BAD_CONFIG,
     EXIT_SOME_FAILED,
@@ -43,7 +42,6 @@ from poser.render import (
     ANALYSIS_DIR,
     EXIT_SONG_BUSY,
     MIX_DIR,
-    RENDERS_DIR,
     WAV_BIT_DEPTH,
     Outcome,
     SongBusyError,
@@ -62,7 +60,7 @@ from poser.render import (
     track_key,
 )
 from poser.song import Song, SongError, load_song, write_song
-from poser.sounds import SOUNDS_DIR
+from poser.workspace import WorkspaceError, fill_path_options
 
 MIX_NAME = "mix"
 HISTORY_DIR = "history"
@@ -353,8 +351,8 @@ def analyze_song(
     song: Song,
     song_path: Path,
     specs: list[PluginSpec],
-    output_dir: Path = RENDERS_DIR,
-    sounds_dir: Path = SOUNDS_DIR,
+    output_dir: Path,
+    sounds_dir: Path,
 ) -> Report:
     """Mix and measure a song's stems, and keep the analysis as the next history record.
 
@@ -515,11 +513,17 @@ def format_table(report: Report) -> str:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="analyze-song", description=__doc__)
     parser.add_argument("song", type=Path, help="song file (YAML, or a script defining build())")
-    parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG, help="plugin list (TOML)")
-    parser.add_argument("--output-dir", type=Path, default=RENDERS_DIR, help="where stems are")
-    parser.add_argument("--sounds-dir", type=Path, default=SOUNDS_DIR, help="saved sound files")
+    parser.add_argument("--config", type=Path, help="plugin list (TOML)")
+    parser.add_argument("--output-dir", type=Path, help="where stems are")
+    parser.add_argument("--sounds-dir", type=Path, help="saved sound files")
     parser.add_argument("--json", action="store_true", help="print the report as JSON")
     args = parser.parse_args(argv)
+
+    try:
+        fill_path_options(args)
+    except WorkspaceError as error:
+        print(f"analyze-song: {error}", file=sys.stderr)
+        return EXIT_BAD_CONFIG
 
     try:
         song = load_song(args.song)

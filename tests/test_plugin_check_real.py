@@ -3,6 +3,7 @@
 import math
 
 import pytest
+from helpers import real_specs
 
 from poser import plugin_check
 from poser.plugin_check import Status
@@ -10,7 +11,7 @@ from poser.plugin_check import Status
 
 @pytest.mark.real_plugins
 def test_each_listed_plugin_returns_a_known_status_with_finite_numbers() -> None:
-    specs = plugin_check.load_config(plugin_check.DEFAULT_CONFIG)
+    specs = real_specs()
 
     results = plugin_check.run_check(specs)
 

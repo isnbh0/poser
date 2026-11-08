@@ -89,7 +89,7 @@ def test_every_track_gets_the_same_duration(
     short = make_track("short", "Serum", Note(0, 60, 1, 100))
     long = make_track("long", "Serum", Note(6, 40, 2, 100))
 
-    render_song(make_song(short, long), "song", SPECS, tmp_path)
+    render_song(make_song(short, long), "song", SPECS, tmp_path, sounds_dir=tmp_path / "sounds")
 
     jobs = logged_jobs(tmp_path)
     assert [job["track"]["name"] for job in jobs] == ["short", "long"]
@@ -296,7 +296,7 @@ def test_unknown_sound_reports_and_other_tracks_still_render(
     use_worker(tmp_path, monkeypatch, "pass")
     song = make_song(make_track("one", "Nope"), make_track("two", "Serum"))
 
-    results = render_song(song, "song", SPECS, tmp_path)
+    results = render_song(song, "song", SPECS, tmp_path, sounds_dir=tmp_path / "sounds")
 
     assert statuses(results) == [
         ("one", TrackStatus.UNKNOWN_SOUND),
@@ -315,7 +315,9 @@ def test_failed_first_track_still_reports_second(
     use_worker(tmp_path, monkeypatch, action)
     song = make_song(make_track("one"), make_track("two"))
 
-    results = render_song(song, "song", SPECS, tmp_path, timeout_s=3)
+    results = render_song(
+        song, "song", SPECS, tmp_path, timeout_s=3, sounds_dir=tmp_path / "sounds"
+    )
 
     assert statuses(results) == [("one", expected), ("two", TrackStatus.RENDERED)]
     assert results[0].stem is None
@@ -331,7 +333,14 @@ def test_failed_track_removes_earlier_stem_and_temp_file(
     song_dir.mkdir()
     (song_dir / "lead.wav").write_text("earlier audio")
 
-    render_song(make_song(make_track()), "song", SPECS, tmp_path, timeout_s=3)
+    render_song(
+        make_song(make_track()),
+        "song",
+        SPECS,
+        tmp_path,
+        timeout_s=3,
+        sounds_dir=tmp_path / "sounds",
+    )
 
     assert entries(song_dir) == []
 
@@ -345,7 +354,7 @@ def test_render_removes_earlier_mix_and_analysis(
         (song_dir / name).mkdir(parents=True)
         (song_dir / name / "old.json").write_text("{}")
 
-    render_song(make_song(make_track()), "song", SPECS, tmp_path)
+    render_song(make_song(make_track()), "song", SPECS, tmp_path, sounds_dir=tmp_path / "sounds")
 
     assert entries(song_dir) == ["lead.json", "lead.wav"]
 
@@ -355,7 +364,13 @@ def test_unknown_sound_removes_earlier_stem(tmp_path: Path) -> None:
     song_dir.mkdir()
     (song_dir / "lead.wav").write_text("earlier audio")
 
-    render_song(make_song(make_track("lead", "Nope")), "song", SPECS, tmp_path)
+    render_song(
+        make_song(make_track("lead", "Nope")),
+        "song",
+        SPECS,
+        tmp_path,
+        sounds_dir=tmp_path / "sounds",
+    )
 
     assert entries(song_dir) == []
 
@@ -365,7 +380,9 @@ def test_worker_claiming_a_stem_it_did_not_write_is_crashed(
 ) -> None:
     use_worker(tmp_path, monkeypatch, "no-stem")
 
-    results = render_song(make_song(make_track()), "song", SPECS, tmp_path)
+    results = render_song(
+        make_song(make_track()), "song", SPECS, tmp_path, sounds_dir=tmp_path / "sounds"
+    )
 
     assert results[0].status is TrackStatus.CRASHED
 
@@ -378,7 +395,9 @@ def test_earlier_stem_does_not_vouch_for_a_worker_that_wrote_none(
     (song_dir / "lead.wav").write_text("earlier audio")
     use_worker(tmp_path, monkeypatch, "no-stem")
 
-    (result,) = render_song(make_song(make_track()), "song", SPECS, tmp_path)
+    (result,) = render_song(
+        make_song(make_track()), "song", SPECS, tmp_path, sounds_dir=tmp_path / "sounds"
+    )
 
     assert result.detail == "worker reported a stem it did not write"
     assert entries(song_dir) == []
@@ -480,14 +499,17 @@ def test_main_exits_two_for_bad_plugin_list(tmp_path: Path) -> None:
 def test_real_worker_reports_missing_plugin_as_load_failed(tmp_path: Path) -> None:
     specs = [PluginSpec("Serum", str(tmp_path / "missing.vst3"))]
 
-    results = render_song(make_song(make_track()), "song", specs, tmp_path, timeout_s=60)
+    results = render_song(
+        make_song(make_track()),
+        "song",
+        specs,
+        tmp_path,
+        timeout_s=60,
+        sounds_dir=tmp_path / "sounds",
+    )
 
     assert results[0].status is TrackStatus.LOAD_FAILED
     assert results[0].detail
-
-
-def test_default_output_directory_is_in_the_project() -> None:
-    assert render.RENDERS_DIR == render.PROJECT_DIR / "renders"
 
 
 STATE = base64.b64encode(b"saved-state").decode("ascii")
@@ -650,7 +672,11 @@ def test_preset_passes_its_built_state(tmp_path: Path, monkeypatch: pytest.Monke
     write_preset(tmp_path, "Bass/Deep", fxp_bytes(b"chunk-data"))
 
     results = render_song(
-        make_song(make_track("bass", "Serum:Bass/Deep")), "song", preset_specs(tmp_path), tmp_path
+        make_song(make_track("bass", "Serum:Bass/Deep")),
+        "song",
+        preset_specs(tmp_path),
+        tmp_path,
+        sounds_dir=tmp_path / "sounds",
     )
 
     assert statuses(results) == [("bass", TrackStatus.RENDERED)]
@@ -671,7 +697,13 @@ def test_unmatched_preset_name_is_unknown_sound(
     write_preset(tmp_path, "Bass/Deep", fxp_bytes(b"chunk-data"))
     specs = preset_specs(tmp_path) if with_presets else SPECS
 
-    results = render_song(make_song(make_track("bass", sound)), "song", specs, tmp_path)
+    results = render_song(
+        make_song(make_track("bass", sound)),
+        "song",
+        specs,
+        tmp_path,
+        sounds_dir=tmp_path / "sounds",
+    )
 
     assert results[0].status is TrackStatus.UNKNOWN_SOUND
     assert not (tmp_path / "jobs.log").exists()
@@ -684,7 +716,9 @@ def test_unusable_preset_is_load_failed_and_next_track_renders(
     write_preset(tmp_path, "Bass/Deep", fxp_bytes(b"chunk", kind=b"FxCk"))
     song = make_song(make_track("one", "Serum:Bass/Deep"), make_track("two", "Serum"))
 
-    results = render_song(song, "song", preset_specs(tmp_path), tmp_path)
+    results = render_song(
+        song, "song", preset_specs(tmp_path), tmp_path, sounds_dir=tmp_path / "sounds"
+    )
 
     assert statuses(results) == [("one", TrackStatus.LOAD_FAILED), ("two", TrackStatus.RENDERED)]
     assert "parameter" in (results[0].detail or "")
@@ -696,7 +730,9 @@ def test_missing_presets_directory_is_load_failed_and_next_track_renders(
     use_worker(tmp_path, monkeypatch, "pass")
     song = make_song(make_track("one", "Serum:Bass/Deep"), make_track("two", "Serum"))
 
-    results = render_song(song, "song", preset_specs(tmp_path), tmp_path)
+    results = render_song(
+        song, "song", preset_specs(tmp_path), tmp_path, sounds_dir=tmp_path / "sounds"
+    )
 
     assert statuses(results) == [("one", TrackStatus.LOAD_FAILED), ("two", TrackStatus.RENDERED)]
     assert "does not exist" in (results[0].detail or "")
@@ -779,9 +815,11 @@ def test_second_render_of_an_unchanged_song_runs_no_worker(
 
 def test_cached_silent_track_stays_silent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     use_worker(tmp_path, monkeypatch, "silent")
-    render_song(make_song(LEAD), "song", SPECS, tmp_path)
+    render_song(make_song(LEAD), "song", SPECS, tmp_path, sounds_dir=tmp_path / "sounds")
 
-    (result,) = render_song(make_song(LEAD), "song", SPECS, tmp_path)
+    (result,) = render_song(
+        make_song(LEAD), "song", SPECS, tmp_path, sounds_dir=tmp_path / "sounds"
+    )
 
     assert (result.status, result.peak_dbfs, result.cached) == (TrackStatus.SILENT, -6.0, True)
     assert render.exit_code([result]) == EXIT_SOME_FAILED
@@ -808,9 +846,9 @@ def test_render_runs_only_tracks_whose_inputs_changed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, changed: Song, rendered: list[str]
 ) -> None:
     use_worker(tmp_path, monkeypatch, "pass")
-    render_song(make_song(LEAD, BASS), "song", SPECS, tmp_path)
+    render_song(make_song(LEAD, BASS), "song", SPECS, tmp_path, sounds_dir=tmp_path / "sounds")
 
-    results = render_song(changed, "song", SPECS, tmp_path)
+    results = render_song(changed, "song", SPECS, tmp_path, sounds_dir=tmp_path / "sounds")
 
     assert job_names(tmp_path)[2:] == rendered
     assert [result.track for result in results if not result.cached] == rendered
@@ -836,9 +874,11 @@ def test_rewritten_saved_sound_renders_again(
 
 def test_force_renders_every_track(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     use_worker(tmp_path, monkeypatch, "pass")
-    render_song(make_song(LEAD, BASS), "song", SPECS, tmp_path)
+    render_song(make_song(LEAD, BASS), "song", SPECS, tmp_path, sounds_dir=tmp_path / "sounds")
 
-    results = render_song(make_song(LEAD, BASS), "song", SPECS, tmp_path, force=True)
+    results = render_song(
+        make_song(LEAD, BASS), "song", SPECS, tmp_path, force=True, sounds_dir=tmp_path / "sounds"
+    )
 
     assert job_names(tmp_path) == ["lead", "bass", "lead", "bass"]
     assert [result.cached for result in results] == [False, False]
@@ -879,10 +919,12 @@ def test_changed_stem_or_stamp_renders_again(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, spoil: Callable[[Path], None]
 ) -> None:
     use_worker(tmp_path, monkeypatch, "pass")
-    render_song(make_song(LEAD), "song", SPECS, tmp_path)
+    render_song(make_song(LEAD), "song", SPECS, tmp_path, sounds_dir=tmp_path / "sounds")
     spoil(tmp_path / "song" / "lead.wav")
 
-    (result,) = render_song(make_song(LEAD), "song", SPECS, tmp_path)
+    (result,) = render_song(
+        make_song(LEAD), "song", SPECS, tmp_path, sounds_dir=tmp_path / "sounds"
+    )
 
     assert not result.cached
     assert job_names(tmp_path) == ["lead", "lead"]
@@ -937,10 +979,12 @@ def test_failure_after_a_success_leaves_neither_stem_nor_stamp(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, action: str
 ) -> None:
     use_worker(tmp_path, monkeypatch, "pass")
-    render_song(make_song(LEAD), "song", SPECS, tmp_path)
+    render_song(make_song(LEAD), "song", SPECS, tmp_path, sounds_dir=tmp_path / "sounds")
     use_worker(tmp_path, monkeypatch, action)
 
-    (result,) = render_song(make_song(LEAD), "song", SPECS, tmp_path, force=True)
+    (result,) = render_song(
+        make_song(LEAD), "song", SPECS, tmp_path, force=True, sounds_dir=tmp_path / "sounds"
+    )
 
     assert result.status is TrackStatus.CRASHED
     assert entries(tmp_path / "song") == []
@@ -950,9 +994,15 @@ def test_unknown_sound_deletes_stem_and_stamp(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     use_worker(tmp_path, monkeypatch, "pass")
-    render_song(make_song(LEAD), "song", SPECS, tmp_path)
+    render_song(make_song(LEAD), "song", SPECS, tmp_path, sounds_dir=tmp_path / "sounds")
 
-    (result,) = render_song(make_song(make_track("lead", "Nope")), "song", SPECS, tmp_path)
+    (result,) = render_song(
+        make_song(make_track("lead", "Nope")),
+        "song",
+        SPECS,
+        tmp_path,
+        sounds_dir=tmp_path / "sounds",
+    )
 
     assert result.status is TrackStatus.UNKNOWN_SOUND
     assert entries(tmp_path / "song") == []
@@ -964,7 +1014,7 @@ def test_stamp_records_the_keys_and_the_stem_file(
     use_worker(tmp_path, monkeypatch, "pass")
     song = make_song(LEAD)
 
-    render_song(song, "song", SPECS, tmp_path)
+    render_song(song, "song", SPECS, tmp_path, sounds_dir=tmp_path / "sounds")
 
     song_dir = tmp_path / "song"
     stamp = json.loads((song_dir / "lead.json").read_text())
@@ -1197,7 +1247,7 @@ def test_worker_job_carries_controller_changes(
     use_worker(tmp_path, monkeypatch, "pass")
     track = cc_track(ControlChange(0, 1, 0, "linear"), ControlChange(1, 1, 127))
 
-    render_song(make_song(track), "song", SPECS, tmp_path)
+    render_song(make_song(track), "song", SPECS, tmp_path, sounds_dir=tmp_path / "sounds")
 
     (job,) = logged_jobs(tmp_path)
     assert job["track"]["cc"] == [
@@ -1238,16 +1288,16 @@ def test_render_refuses_to_start_while_the_song_is_locked(
 
     with render.song_lock(song_dir):
         with pytest.raises(render.SongBusyError):
-            render_song(song, "tune", SPECS, tmp_path / "out")
+            render_song(song, "tune", SPECS, tmp_path / "out", sounds_dir=tmp_path / "sounds")
         assert render.main(cli_args(tmp_path, song_path)) == render.EXIT_SONG_BUSY
         assert capsys.readouterr().err == (
             "render-song: another render-song or analyze-song is running on tune\n"
         )
         assert not (song_dir / "lead.wav").exists()
 
-    assert statuses(render_song(song, "tune", SPECS, tmp_path / "out")) == [
-        ("lead", TrackStatus.RENDERED)
-    ]
+    assert statuses(
+        render_song(song, "tune", SPECS, tmp_path / "out", sounds_dir=tmp_path / "sounds")
+    ) == [("lead", TrackStatus.RENDERED)]
 
 
 LOCK_HOLDER = """
@@ -1279,6 +1329,6 @@ def test_lock_of_a_killed_run_does_not_block(
         holder.kill()
         holder.wait()
 
-    assert statuses(render_song(song, "tune", SPECS, tmp_path / "out")) == [
-        ("lead", TrackStatus.RENDERED)
-    ]
+    assert statuses(
+        render_song(song, "tune", SPECS, tmp_path / "out", sounds_dir=tmp_path / "sounds")
+    ) == [("lead", TrackStatus.RENDERED)]

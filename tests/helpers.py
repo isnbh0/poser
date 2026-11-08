@@ -1,9 +1,26 @@
 """Helpers shared by several test files."""
 
+from pathlib import Path
+
 import numpy as np
+import pytest
 from pedalboard.io import ReadableAudioFile
 
-from poser.plugin_check import SAMPLE_RATE
+from poser.plugin_check import SAMPLE_RATE, PluginSpec, load_config
+
+REPO_DIR = Path(__file__).resolve().parents[1]
+
+
+def real_specs() -> list[PluginSpec]:
+    """Return the plugins listed in the repository's local plugin list."""
+    config = REPO_DIR / "plugins.toml"
+    if not config.is_file():
+        pytest.fail(
+            "real-plugin tests read plugins.toml at the repository root; "
+            "copy src/poser/scaffold/plugins.toml there and edit its paths"
+        )
+    return load_config(config)
+
 
 # Runs in a subprocess, so plugin code stays out of the test process. Serum's oscillator A octave
 # at raw value 0.1 is -3 octaves, which moves middle C from about 262 Hz to about 33 Hz. The state

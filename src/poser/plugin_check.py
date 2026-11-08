@@ -24,12 +24,10 @@ from poser.worker import (
     json_object,
     run_isolated,
 )
+from poser.workspace import WorkspaceError, fill_path_options
 
 if TYPE_CHECKING:
     from pedalboard_native import MIDIMessageLike
-
-PROJECT_DIR = Path(__file__).resolve().parents[2]
-DEFAULT_CONFIG = PROJECT_DIR / "plugins.toml"
 
 SAMPLE_RATE = 48000
 NUM_CHANNELS = 2
@@ -318,9 +316,15 @@ def format_table(results: list[PluginResult]) -> str:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="check-plugins", description=__doc__)
-    parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG, help="plugin list (TOML)")
+    parser.add_argument("--config", type=Path, help="plugin list (TOML)")
     parser.add_argument("--json", action="store_true", help="print the report as JSON")
     args = parser.parse_args(argv)
+
+    try:
+        fill_path_options(args)
+    except WorkspaceError as error:
+        print(f"check-plugins: {error}", file=sys.stderr)
+        return EXIT_BAD_CONFIG
 
     try:
         specs = load_config(args.config)

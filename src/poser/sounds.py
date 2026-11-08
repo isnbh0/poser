@@ -24,14 +24,12 @@ from typing import TYPE_CHECKING, TypedDict, cast
 import numpy as np
 
 from poser.plugin_check import (
-    DEFAULT_CONFIG,
     DURATION_S,
     EXIT_ALL_PASS,
     EXIT_BAD_CONFIG,
     EXIT_SOME_FAILED,
     INITIALIZATION_TIMEOUT_S,
     NUM_CHANNELS,
-    PROJECT_DIR,
     SAMPLE_RATE,
     SILENCE_DBFS,
     ConfigError,
@@ -48,12 +46,12 @@ from poser.worker import (
     json_object,
     run_isolated,
 )
+from poser.workspace import WorkspaceError, fill_path_options
 
 if TYPE_CHECKING:
     from pedalboard import AudioUnitPlugin, VST3Plugin
     from pedalboard_native import MIDIMessageLike
 
-SOUNDS_DIR = PROJECT_DIR / "sounds"
 # Under the renders directory. The leading dot keeps it apart from any song's stem directory.
 PREVIEWS_DIR = ".sound-previews"
 # Like a track name, but starting with a letter or digit, so it cannot read as a command option.
@@ -209,10 +207,16 @@ def list_main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="list-sounds", description="List the sounds a song can use."
     )
-    parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG, help="plugin list (TOML)")
-    parser.add_argument("--sounds-dir", type=Path, default=SOUNDS_DIR, help="saved sound files")
+    parser.add_argument("--config", type=Path, help="plugin list (TOML)")
+    parser.add_argument("--sounds-dir", type=Path, help="saved sound files")
     parser.add_argument("--json", action="store_true", help="print the list as JSON")
     args = parser.parse_args(argv)
+
+    try:
+        fill_path_options(args)
+    except WorkspaceError as error:
+        print(f"list-sounds: {error}", file=sys.stderr)
+        return EXIT_BAD_CONFIG
 
     try:
         specs = load_config(args.config)
@@ -299,8 +303,6 @@ def run_save_worker(job: SaveJob) -> tuple[str, float]:
 
 
 def save_main(argv: list[str] | None = None) -> int:
-    from poser.render import RENDERS_DIR  # Here, because render imports this module.
-
     parser = argparse.ArgumentParser(
         prog="save-sound",
         description="Open a plugin's window and save its state, when the window closes, as a sound.",
@@ -311,10 +313,16 @@ def save_main(argv: list[str] | None = None) -> int:
     start.add_argument("--from", dest="source", help="start from this saved sound")
     parser.add_argument("--description", required=True, help="what the sound is and is for")
     parser.add_argument("--replace", action="store_true", help="overwrite an existing sound")
-    parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG, help="plugin list (TOML)")
-    parser.add_argument("--sounds-dir", type=Path, default=SOUNDS_DIR, help="saved sound files")
-    parser.add_argument("--output-dir", type=Path, default=RENDERS_DIR, help="where previews go")
+    parser.add_argument("--config", type=Path, help="plugin list (TOML)")
+    parser.add_argument("--sounds-dir", type=Path, help="saved sound files")
+    parser.add_argument("--output-dir", type=Path, help="where previews go")
     args = parser.parse_args(argv)
+
+    try:
+        fill_path_options(args)
+    except WorkspaceError as error:
+        print(f"save-sound: {error}", file=sys.stderr)
+        return EXIT_BAD_CONFIG
 
     try:
         specs = load_config(args.config)

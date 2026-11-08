@@ -9,10 +9,10 @@ from typing import Self, cast
 import numpy as np
 import pytest
 import yaml
+from helpers import REPO_DIR
 
 from poser import song as song_module
 from poser.music import chord, notes, pitch, scale, swing
-from poser.plugin_check import PROJECT_DIR
 from poser.song import (
     ControlChange,
     Note,
@@ -53,7 +53,7 @@ def test_valid_song_loads_with_expected_values(tmp_path: Path) -> None:
 
 
 def test_demo_song_loads_with_two_serum_preset_tracks_and_eight_notes() -> None:
-    song = load_song(PROJECT_DIR / "songs" / "demo.yaml")
+    song = load_song(REPO_DIR / "songs" / "demo.yaml")
 
     assert len(song.tracks) == 2
     assert all(track.sound.startswith("Serum:") for track in song.tracks)
@@ -172,7 +172,7 @@ def test_malformed_yaml_is_a_song_error(tmp_path: Path) -> None:
 
 
 def test_song_module_stays_engine_neutral() -> None:
-    source = (PROJECT_DIR / "src" / "poser" / "song.py").read_text()
+    source = Path(song_module.__file__).read_text()
     assert "pedalboard import" not in source
     assert "import mido" not in source
 

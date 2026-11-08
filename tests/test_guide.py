@@ -8,12 +8,12 @@ from pathlib import Path
 
 import pytest
 import yaml
+from helpers import REPO_DIR, real_specs
 
 from poser import analyze, music, render, song
-from poser.plugin_check import DEFAULT_CONFIG, PROJECT_DIR, load_config
 from poser.song import Song, SongError, load_song, parse_song
 
-GUIDE_PATH = PROJECT_DIR / "AGENTS.md"
+GUIDE_PATH = REPO_DIR / "AGENTS.md"
 GUIDE = GUIDE_PATH.read_text()
 LINES = GUIDE.splitlines()
 FENCE = re.compile(r"^```([a-z]+)\n(.*?)^```$", re.MULTILINE | re.DOTALL)
@@ -66,7 +66,7 @@ def python_songs(tmp_path: Path) -> list[Song]:
 
 def test_guide_is_short_and_claude_imports_it() -> None:
     assert len(LINES) < 200
-    assert (PROJECT_DIR / "CLAUDE.md").read_text() == "@AGENTS.md\n"
+    assert (REPO_DIR / "CLAUDE.md").read_text() == "@AGENTS.md\n"
 
 
 def test_python_examples_load(tmp_path: Path) -> None:
@@ -79,7 +79,7 @@ def test_yaml_examples_parse() -> None:
 
 
 def test_commands_are_project_scripts() -> None:
-    scripts = tomllib.loads((PROJECT_DIR / "pyproject.toml").read_text())["project"]["scripts"]
+    scripts = tomllib.loads((REPO_DIR / "pyproject.toml").read_text())["project"]["scripts"]
     commands = re.findall(r"uv run ([\w-]+)", GUIDE)
     assert set(commands) <= set(scripts)
     assert {"render-song", "analyze-song", "list-sounds"} <= set(commands)
@@ -176,7 +176,7 @@ def test_music_helpers_are_listed() -> None:
 
 @pytest.mark.real_plugins
 def test_sound_names_resolve(tmp_path: Path) -> None:
-    specs = load_config(DEFAULT_CONFIG)
+    specs = real_specs()
     prefixes = tuple(f"{spec.name}:" for spec in specs)
     spans = {span for span in backticked() if span.startswith(prefixes)}
     songs = python_songs(tmp_path) + [parse_song(yaml.safe_load(b)) for b in blocks("yaml")]
@@ -190,13 +190,13 @@ def test_sound_names_resolve(tmp_path: Path) -> None:
 
 @pytest.mark.real_plugins
 def test_python_example_renders_without_defects(tmp_path: Path) -> None:
-    specs = load_config(DEFAULT_CONFIG)
+    specs = real_specs()
     (example,) = python_songs(tmp_path)
     song_path = tmp_path / "example0" / "example.py"
     output_dir = tmp_path / "renders"
-    render.render_song(example, song_path.stem, specs, output_dir)
+    render.render_song(example, song_path.stem, specs, output_dir, sounds_dir=tmp_path / "sounds")
 
-    report = analyze.analyze_song(example, song_path, specs, output_dir)
+    report = analyze.analyze_song(example, song_path, specs, output_dir, tmp_path / "sounds")
 
     for track in report.tracks:
         assert track.status is analyze.TrackStatus.ANALYZED, track.detail

@@ -357,14 +357,17 @@ def test_main_exits_two_for_bad_config(tmp_path: Path, contents: str | None) -> 
     assert plugin_check.main(["--config", str(config)]) == plugin_check.EXIT_BAD_CONFIG
 
 
-def test_default_config_does_not_depend_on_working_directory(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+def test_main_without_config_uses_the_workspace_plugin_list(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    monkeypatch.chdir(tmp_path)
-    assert [spec.name for spec in plugin_check.load_config(plugin_check.DEFAULT_CONFIG)] == [
-        "Serum",
-        "Primer",
-    ]
+    missing = tmp_path / "Missing.vst3"
+    (tmp_path / "plugins.toml").write_text(f'[[plugin]]\nname = "Missing"\npath = "{missing}"\n')
+
+    plugin_check.main(["--json"])
+
+    [result] = json.loads(capsys.readouterr().out)
+    assert result["name"] == "Missing"
+    assert result["status"] == "load_failed"
 
 
 def test_table_shows_each_plugin_and_detail() -> None:

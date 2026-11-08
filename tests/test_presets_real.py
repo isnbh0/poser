@@ -6,17 +6,17 @@ import sys
 from pathlib import Path
 
 import pytest
-from helpers import CAPTURE_STATE, fxp_bytes, strongest_hz
+from helpers import CAPTURE_STATE, fxp_bytes, real_specs, strongest_hz
 
 from poser import render
-from poser.plugin_check import DEFAULT_CONFIG, load_config
+from poser.plugin_check import load_config
 from poser.presets import component_state
 from poser.song import Note, Song, Track
 
 
 @pytest.mark.real_plugins
 def test_preset_chunk_reaches_the_render(tmp_path: Path) -> None:
-    serum = next(spec for spec in load_config(DEFAULT_CONFIG) if spec.name == "Serum")
+    serum = next(spec for spec in real_specs() if spec.name == "Serum")
     state_file = tmp_path / "state.b64"
     subprocess.run(
         [sys.executable, "-c", CAPTURE_STATE, serum.path, str(state_file)], check=True, timeout=120
@@ -33,7 +33,9 @@ def test_preset_chunk_reaches_the_render(tmp_path: Path) -> None:
         bpm=60, tracks=(Track("lead", "pedalboard", "Serum:Test/low", (Note(0, 60, 1.5, 100),)),)
     )
 
-    [result] = render.render_song(song, "preset", load_config(config), tmp_path / "renders")
+    [result] = render.render_song(
+        song, "preset", load_config(config), tmp_path / "renders", sounds_dir=tmp_path / "sounds"
+    )
 
     assert result.status is render.TrackStatus.RENDERED, result.detail
     assert result.stem is not None

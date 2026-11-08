@@ -5,17 +5,16 @@ import sys
 from pathlib import Path
 
 import pytest
-from helpers import CAPTURE_STATE, strongest_hz
+from helpers import CAPTURE_STATE, real_specs, strongest_hz
 
 from poser import render
-from poser.plugin_check import DEFAULT_CONFIG, load_config
 from poser.song import Note, Song, Track
 from poser.sounds import SavedSound, write_sound
 
 
 @pytest.mark.real_plugins
 def test_saved_sound_state_reaches_the_render(tmp_path: Path) -> None:
-    specs = load_config(DEFAULT_CONFIG)
+    specs = real_specs()
     serum = next(spec for spec in specs if spec.name == "Serum")
     state_file = tmp_path / "state.b64"
     subprocess.run(

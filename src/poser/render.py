@@ -25,13 +25,11 @@ import mido
 import numpy as np
 
 from poser.plugin_check import (
-    DEFAULT_CONFIG,
     EXIT_ALL_PASS,
     EXIT_BAD_CONFIG,
     EXIT_SOME_FAILED,
     INITIALIZATION_TIMEOUT_S,
     NUM_CHANNELS,
-    PROJECT_DIR,
     SAMPLE_RATE,
     SILENCE_DBFS,
     WORKER_TIMEOUT_S,
@@ -53,18 +51,18 @@ from poser.song import (
     is_number,
     load_song,
 )
-from poser.sounds import SOUNDS_DIR, SoundError, read_sound, sound_files
+from poser.sounds import SoundError, read_sound, sound_files
 from poser.worker import (
     WorkerCrashedError,
     WorkerTimedOutError,
     json_object,
     run_isolated,
 )
+from poser.workspace import WorkspaceError, fill_path_options
 
 if TYPE_CHECKING:
     from pedalboard_native import MIDIMessageLike
 
-RENDERS_DIR = PROJECT_DIR / "renders"
 # Directories, so a track named `mix` or `analysis` still writes its stem beside them.
 MIX_DIR = "mix"
 ANALYSIS_DIR = "analysis"
@@ -513,9 +511,10 @@ def render_song(
     song: Song,
     song_name: str,
     specs: list[PluginSpec],
-    output_dir: Path = RENDERS_DIR,
+    output_dir: Path,
+    *,
+    sounds_dir: Path,
     timeout_s: float = WORKER_TIMEOUT_S,
-    sounds_dir: Path = SOUNDS_DIR,
     force: bool = False,
 ) -> list[TrackResult]:
     """Render each track whose inputs changed since its stem was written, or every track if forced.
@@ -607,14 +606,20 @@ def format_table(results: list[TrackResult]) -> str:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="render-song", description=__doc__)
     parser.add_argument("song", type=Path, help="song file (YAML, or a script defining build())")
-    parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG, help="plugin list (TOML)")
-    parser.add_argument("--output-dir", type=Path, default=RENDERS_DIR, help="where stems go")
-    parser.add_argument("--sounds-dir", type=Path, default=SOUNDS_DIR, help="saved sound files")
+    parser.add_argument("--config", type=Path, help="plugin list (TOML)")
+    parser.add_argument("--output-dir", type=Path, help="where stems go")
+    parser.add_argument("--sounds-dir", type=Path, help="saved sound files")
     parser.add_argument("--json", action="store_true", help="print the report as JSON")
     parser.add_argument(
         "--force", action="store_true", help="render every track, even one with a matching stamp"
     )
     args = parser.parse_args(argv)
+
+    try:
+        fill_path_options(args)
+    except WorkspaceError as error:
+        print(f"render-song: {error}", file=sys.stderr)
+        return EXIT_BAD_CONFIG
 
     try:
         song = load_song(args.song)
