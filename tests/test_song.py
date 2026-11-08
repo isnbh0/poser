@@ -4,7 +4,7 @@ import os
 import stat
 from collections.abc import Callable
 from pathlib import Path
-from typing import Self
+from typing import Self, cast
 
 import numpy as np
 import pytest
@@ -214,18 +214,6 @@ def test_written_song_keeps_the_format_key_order(tmp_path: Path) -> None:
 def test_song_to_data_round_trips_through_parse_song() -> None:
     song = helper_song()
     assert parse_song(song_to_data(song)) == song
-
-
-def test_writing_an_invalid_song_raises_and_keeps_the_old_file(tmp_path: Path) -> None:
-    path = tmp_path / "song.yaml"
-    path.write_text("old contents\n")
-    bad = Song(bpm=120, tracks=(Track("lead", "pedalboard", "Serum", (Note(0, 60, 1, 0),)),))
-
-    with pytest.raises(SongError, match="velocity"):
-        write_song(bad, path)
-
-    assert path.read_text() == "old contents\n"
-    assert [p.name for p in tmp_path.iterdir()] == ["song.yaml"]
 
 
 def test_failed_replace_keeps_the_old_file_and_leaves_no_temp_file(
@@ -686,8 +674,12 @@ def build():
     with pytest.raises(SongError) as ramp_error:
         load_song(ramp_path)
 
-    assert any(p.startswith("tracks[0].notes[0].pitch:") for p in pitch_error.value.problems)
-    assert any(p.startswith("tracks[0].cc[0].shape:") for p in ramp_error.value.problems)
+    assert pitch_error.value.problems == [
+        f"{pitch_path}: Note.pitch: must be an integer from 0 to 127, got 200"
+    ]
+    assert ramp_error.value.problems == [
+        f"{ramp_path}: Track.cc[0].shape: linear needs a later change to control 1"
+    ]
 
 
 @pytest.mark.parametrize(("loaded", "sibling"), [("x.py", "x.yaml"), ("x.yaml", "x.py")])
@@ -720,11 +712,11 @@ def test_script_song_that_exits_is_a_song_error(tmp_path: Path, where: str) -> N
 @pytest.mark.parametrize(
     ("build", "problem"),
     [
-        ("Song(120, None)", "tracks:"),
-        ('Song(120, (Track("lead", "pedalboard", "Serum", None),))', "tracks[0].notes:"),
+        ("Song(120, None)", "Song.tracks:"),
+        ('Song(120, (Track("lead", "pedalboard", "Serum", None),))', "Track.notes:"),
         (
             'Song(120, (Track("lead", "pedalboard", "Serum", ((0, 60, 1, 100),)),))',
-            "tracks[0].notes[0]:",
+            "Track.notes[0]:",
         ),
     ],
 )
@@ -734,4 +726,147 @@ def test_misshapen_script_song_reports_the_path(tmp_path: Path, build: str, prob
     with pytest.raises(SongError) as error:
         load_song(path)
 
-    assert any(p.startswith(problem) for p in error.value.problems), error.value.problems
+    assert any(p.startswith(f"{path}: {problem}") for p in error.value.problems), (
+        error.value.problems
+    )
+
+
+def construct[T](cls: type[T], **values: object) -> T:
+    """Call a song class with values of any type, as a script without a type checker may."""
+    return cast("Callable[..., T]", cls)(**values)
+
+
+def make_track(**changes: object) -> Track:
+    values: dict[str, object] = {
+        "name": "lead",
+        "engine": "pedalboard",
+        "sound": "Serum",
+        "notes": (Note(0, 60, 1, 100),),
+    }
+    return construct(Track, **(values | changes))
+
+
+NOTE: dict[str, object] = {"beat": 0, "pitch": 60, "length": 1, "velocity": 100}
+CHANGE: dict[str, object] = {"beat": 0, "control": 1, "value": 0}
+
+
+def make_note(**changes: object) -> Note:
+    return construct(Note, **(NOTE | changes))
+
+
+def make_change(**changes: object) -> ControlChange:
+    return construct(ControlChange, **(CHANGE | changes))
+
+
+def make_song(bpm: object, tracks: object) -> Song:
+    return construct(Song, bpm=bpm, tracks=tracks)
+
+
+@pytest.mark.parametrize(
+    ("build", "location"),
+    [
+        (lambda: make_note(beat=-1), "Note.beat:"),
+        (lambda: make_note(beat="0"), "Note.beat:"),
+        (lambda: make_note(pitch=128), "Note.pitch:"),
+        (lambda: make_note(pitch=60.0), "Note.pitch:"),
+        (lambda: make_note(length=0), "Note.length:"),
+        (lambda: make_note(velocity=0), "Note.velocity:"),
+        (lambda: make_note(velocity=True), "Note.velocity:"),
+        (lambda: make_change(beat=-0.5), "ControlChange.beat:"),
+        (lambda: make_change(control=120), "ControlChange.control:"),
+        (lambda: make_change(value=128), "ControlChange.value:"),
+        (lambda: make_change(shape="curve"), "ControlChange.shape:"),
+        (lambda: make_track(name="../victim"), "Track.name:"),
+        (lambda: make_track(name=""), "Track.name:"),
+        (lambda: make_track(engine="other"), "Track.engine:"),
+        (lambda: make_track(sound=""), "Track.sound:"),
+        (lambda: make_track(gain=13), "Track.gain:"),
+        (lambda: make_track(gain="0"), "Track.gain:"),
+        (lambda: make_track(notes=()), "Track.notes:"),
+        (lambda: make_track(notes=None), "Track.notes:"),
+        (lambda: make_track(notes=((0, 60, 1, 100),)), "Track.notes[0]:"),
+        (lambda: make_track(cc=None), "Track.cc:"),
+        (lambda: make_track(cc=({"beat": 0},)), "Track.cc[0]:"),
+        (
+            lambda: make_track(cc=(ControlChange(2, 1, 0), ControlChange(1, 1, 0))),
+            "Track.cc[1].beat:",
+        ),
+        (lambda: make_track(cc=(ControlChange(0, 1, 0, "linear"),)), "Track.cc[0].shape:"),
+        (lambda: make_song(0, (make_track(),)), "Song.bpm:"),
+        (lambda: make_song(120, ()), "Song.tracks:"),
+        (lambda: make_song(120, None), "Song.tracks:"),
+        (lambda: make_song(120, ("lead",)), "Song.tracks[0]:"),
+        (lambda: make_song(120, (make_track(), make_track())), "Song.tracks:"),
+    ],
+)
+def test_invalid_object_raises_with_its_class_location(
+    build: Callable[[], object], location: str
+) -> None:
+    with pytest.raises(SongError) as error:
+        build()
+
+    assert len(error.value.problems) == 1, error.value.problems
+    assert error.value.problems[0].startswith(location), error.value.problems
+
+
+def test_note_reports_every_problem_at_once() -> None:
+    with pytest.raises(SongError) as error:
+        Note(beat=-1, pitch=200, length=0, velocity=0)
+
+    assert [p.split(":")[0] for p in error.value.problems] == [
+        "Note.beat",
+        "Note.pitch",
+        "Note.length",
+        "Note.velocity",
+    ]
+
+
+def test_track_name_cannot_leave_the_render_directory() -> None:
+    with pytest.raises(SongError) as error:
+        Track(name="../victim", engine="pedalboard", sound="x", notes=(Note(0, 60, 1, 100),))
+
+    assert error.value.problems == [
+        "Track.name: must contain only letters, digits, '_', and '-', got '../victim'"
+    ]
+
+
+def test_song_without_tracks_is_a_song_error() -> None:
+    with pytest.raises(SongError) as error:
+        Song(bpm=120, tracks=())
+
+    assert error.value.problems == ["Song.tracks: must list at least one track"]
+
+
+def test_track_names_differing_in_case_are_duplicates() -> None:
+    with pytest.raises(SongError) as error:
+        Song(120, (make_track(name="lead"), make_track(name="Lead")))
+
+    assert error.value.problems == ["Song.tracks: duplicate track name 'Lead'"]
+
+
+def test_linear_change_without_a_later_target_is_a_song_error() -> None:
+    with pytest.raises(SongError) as error:
+        make_track(cc=(ControlChange(0, 1, 0, "linear"),))
+
+    assert error.value.problems == ["Track.cc[0].shape: linear needs a later change to control 1"]
+
+
+def test_lists_are_stored_as_tuples_and_gain_as_a_float() -> None:
+    note = Note(0, 60, 1, 100)
+    from_lists = make_track(notes=[note], cc=[])
+    from_tuples = make_track(notes=(note,), cc=())
+
+    assert from_lists == from_tuples
+    assert isinstance(from_lists.notes, tuple)
+    assert isinstance(from_lists.cc, tuple)
+    gain = make_track(gain=-3).gain
+    assert gain == -3.0
+    assert isinstance(gain, float)
+    assert isinstance(make_song(120, [from_lists]).tracks, tuple)
+
+
+def test_generator_of_notes_is_a_song_error() -> None:
+    with pytest.raises(SongError) as error:
+        make_track(notes=(n for n in (Note(0, 60, 1, 100),)))
+
+    assert [p.split(":")[0] for p in error.value.problems] == ["Track.notes"]

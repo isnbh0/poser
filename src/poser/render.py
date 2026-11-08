@@ -222,11 +222,8 @@ def control_events(song: Song, track: Track) -> list[tuple[int, int, int]]:
             seen.add(change.control)
             events.append((0, change.control, change.value))
         if change.shape == "linear":
-            # Parsing guarantees a later change to the same controller; a track built in code may
-            # not have one.
-            target = next((c for c in track.cc[index + 1 :] if c.control == change.control), None)
-            if target is None or target.beat <= change.beat:
-                raise ValueError(f"linear change at beat {change.beat} has no later target")
+            # `Track` guarantees a later change to the same controller.
+            target = next(c for c in track.cc[index + 1 :] if c.control == change.control)
             events.extend(_ramp_events(song, change, target))
     events.sort(key=lambda event: event[0])
 

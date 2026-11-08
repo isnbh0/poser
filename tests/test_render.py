@@ -728,10 +728,9 @@ def with_notes(track: Track, *notes: Note) -> Track:
         make_song(LEAD, BASS, bpm=121),
         make_song(LEAD, with_notes(BASS, Note(0, 36, 3, 100))),
         make_song(Track("lead2", "pedalboard", "Serum", LEAD.notes), BASS),
-        make_song(Track("lead", "other", "Serum", LEAD.notes), BASS),
         make_song(Track("lead", "pedalboard", "warm-pad", LEAD.notes), BASS),
     ],
-    ids=["beat", "pitch", "length", "velocity", "bpm", "duration", "name", "engine", "sound"],
+    ids=["beat", "pitch", "length", "velocity", "bpm", "duration", "name", "sound"],
 )
 def test_track_key_changes_with_every_render_input(changed: Song) -> None:
     assert render.track_key(changed, changed.tracks[0]) != render.track_key(
@@ -1090,11 +1089,6 @@ def test_linear_first_change_holds_its_start_value_until_its_beat() -> None:
     events = events_for(ControlChange(2, 1, 0, "linear"), ControlChange(3, 1, 2))
 
     assert events == [(0, 1, 0), (54000, 1, 1), (66000, 1, 2)]
-
-
-def test_linear_change_without_a_target_is_rejected() -> None:
-    with pytest.raises(ValueError, match="no later target"):
-        events_for(ControlChange(0, 1, 0, "linear"))
 
 
 def test_first_change_holds_from_the_start_of_the_song() -> None:
