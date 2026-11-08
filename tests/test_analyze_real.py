@@ -6,10 +6,10 @@ from pathlib import Path
 import pytest
 from pedalboard.io import ReadableAudioFile
 
-from vsti_composer import render
-from vsti_composer.analyze import Defect, TrackStatus, analyze_song
-from vsti_composer.plugin_check import DEFAULT_CONFIG, PROJECT_DIR, load_config
-from vsti_composer.song import load_song
+from poser import render
+from poser.analyze import Defect, TrackStatus, analyze_song
+from poser.plugin_check import DEFAULT_CONFIG, PROJECT_DIR, load_config
+from poser.song import load_song
 
 
 @pytest.mark.real_plugins

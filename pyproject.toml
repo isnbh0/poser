@@ -1,5 +1,5 @@
 [project]
-name = "vsti-composer"
+name = "poser"
 version = "0.1.0"
 description = "Compose multitrack music through VST instruments from code"
 authors = [
@@ -17,11 +17,11 @@ dependencies = [
 ]
 
 [project.scripts]
-check-plugins = "vsti_composer.plugin_check:main"
-render-song = "vsti_composer.render:main"
-analyze-song = "vsti_composer.analyze:main"
-save-sound = "vsti_composer.sounds:save_main"
-list-sounds = "vsti_composer.sounds:list_main"
+check-plugins = "poser.plugin_check:main"
+render-song = "poser.render:main"
+analyze-song = "poser.analyze:main"
+save-sound = "poser.sounds:save_main"
+list-sounds = "poser.sounds:list_main"
 
 [build-system]
 requires = ["uv_build>=0.13.6,<0.14.0"]

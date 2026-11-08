@@ -7,10 +7,10 @@ from pathlib import Path
 import pytest
 from helpers import CAPTURE_STATE, strongest_hz
 
-from vsti_composer import render
-from vsti_composer.plugin_check import DEFAULT_CONFIG, load_config
-from vsti_composer.song import Note, Song, Track
-from vsti_composer.sounds import SavedSound, write_sound
+from poser import render
+from poser.plugin_check import DEFAULT_CONFIG, load_config
+from poser.song import Note, Song, Track
+from poser.sounds import SavedSound, write_sound
 
 
 @pytest.mark.real_plugins

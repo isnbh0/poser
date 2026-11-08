@@ -9,9 +9,9 @@ from pathlib import Path
 import pytest
 import yaml
 
-from vsti_composer import analyze, music, render, song
-from vsti_composer.plugin_check import DEFAULT_CONFIG, PROJECT_DIR, load_config
-from vsti_composer.song import Song, SongError, load_song, parse_song
+from poser import analyze, music, render, song
+from poser.plugin_check import DEFAULT_CONFIG, PROJECT_DIR, load_config
+from poser.song import Song, SongError, load_song, parse_song
 
 GUIDE_PATH = PROJECT_DIR / "AGENTS.md"
 GUIDE = GUIDE_PATH.read_text()

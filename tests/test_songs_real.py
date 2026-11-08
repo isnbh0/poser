@@ -4,9 +4,9 @@ from pathlib import Path
 
 import pytest
 
-from vsti_composer import analyze, render
-from vsti_composer.plugin_check import DEFAULT_CONFIG, PROJECT_DIR, load_config
-from vsti_composer.song import SCRIPT_SUFFIX, YAML_SUFFIXES, load_song
+from poser import analyze, render
+from poser.plugin_check import DEFAULT_CONFIG, PROJECT_DIR, load_config
+from poser.song import SCRIPT_SUFFIX, YAML_SUFFIXES, load_song
 
 SONGS = sorted(
     path

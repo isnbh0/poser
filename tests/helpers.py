@@ -3,7 +3,7 @@
 import numpy as np
 from pedalboard.io import ReadableAudioFile
 
-from vsti_composer.plugin_check import SAMPLE_RATE
+from poser.plugin_check import SAMPLE_RATE
 
 # Runs in a subprocess, so plugin code stays out of the test process. Serum's oscillator A octave
 # at raw value 0.1 is -3 octaves, which moves middle C from about 262 Hz to about 33 Hz. The state
@@ -11,7 +11,7 @@ from vsti_composer.plugin_check import SAMPLE_RATE
 CAPTURE_STATE = """
 import sys
 from pedalboard import load_plugin
-from vsti_composer.sounds import capture_state, encode_state
+from poser.sounds import capture_state, encode_state
 plugin = load_plugin(sys.argv[1])
 plugin.parameters["a_octave_oct"].raw_value = 0.1
 open(sys.argv[2], "w").write(encode_state(capture_state(plugin)))

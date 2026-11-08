@@ -23,7 +23,7 @@ from typing import TYPE_CHECKING, TypedDict, cast
 
 import numpy as np
 
-from vsti_composer.plugin_check import (
+from poser.plugin_check import (
     DEFAULT_CONFIG,
     DURATION_S,
     EXIT_ALL_PASS,
@@ -41,8 +41,8 @@ from vsti_composer.plugin_check import (
     measure_peak_dbfs,
     note_pattern,
 )
-from vsti_composer.presets import PresetError, preset_description, preset_files
-from vsti_composer.worker import (
+from poser.presets import PresetError, preset_description, preset_files
+from poser.worker import (
     WorkerCrashedError,
     WorkerTimedOutError,
     json_object,
@@ -269,7 +269,7 @@ def plan_save(args: argparse.Namespace, specs: list[PluginSpec]) -> tuple[Plugin
 
 
 def save_worker_command(job_path: Path) -> list[str]:
-    return [sys.executable, "-m", "vsti_composer.sounds", str(job_path)]
+    return [sys.executable, "-m", "poser.sounds", str(job_path)]
 
 
 def run_save_worker(job: SaveJob) -> tuple[str, float]:
@@ -299,7 +299,7 @@ def run_save_worker(job: SaveJob) -> tuple[str, float]:
 
 
 def save_main(argv: list[str] | None = None) -> int:
-    from vsti_composer.render import RENDERS_DIR  # Here, because render imports this module.
+    from poser.render import RENDERS_DIR  # Here, because render imports this module.
 
     parser = argparse.ArgumentParser(
         prog="save-sound",
@@ -386,7 +386,7 @@ def save_in_worker(job: SaveJob) -> SaveFailure | SaveSuccess:
     # Imported here so the parent never loads plugin code.
     from pedalboard import AudioUnitPlugin, VST3Plugin, load_plugin
 
-    from vsti_composer.render import write_stem
+    from poser.render import write_stem
 
     def load(state: bytes | None) -> VST3Plugin | AudioUnitPlugin:
         # `load_plugin` is annotated as returning `ExternalPlugin`, but it returns one of these.
@@ -434,7 +434,7 @@ def save_in_worker(job: SaveJob) -> SaveFailure | SaveSuccess:
 
 
 def worker_main(argv: list[str]) -> int:
-    parser = argparse.ArgumentParser(prog="vsti_composer.sounds")
+    parser = argparse.ArgumentParser(prog="poser.sounds")
     parser.add_argument("job_path", type=Path)
     parser.add_argument("result_path", type=Path)
     args = parser.parse_args(argv)

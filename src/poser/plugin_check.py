@@ -17,8 +17,8 @@ from typing import TYPE_CHECKING, NotRequired, TypedDict, cast
 import mido
 import numpy as np
 
-from vsti_composer.song import is_number
-from vsti_composer.worker import (
+from poser.song import is_number
+from poser.worker import (
     WorkerCrashedError,
     WorkerTimedOutError,
     json_object,
@@ -207,7 +207,7 @@ def load_config(path: Path) -> list[PluginSpec]:
 
 
 def worker_command(spec: PluginSpec) -> list[str]:
-    command = [sys.executable, "-m", "vsti_composer.plugin_check", spec.path]
+    command = [sys.executable, "-m", "poser.plugin_check", spec.path]
     if spec.plugin_name is not None:
         command += ["--plugin-name", spec.plugin_name]
     return command
@@ -392,7 +392,7 @@ def _worker_result(path: str, plugin_name: str | None) -> WorkerResult:
 
 
 def worker_main(argv: list[str]) -> int:
-    parser = argparse.ArgumentParser(prog="vsti_composer.plugin_check")
+    parser = argparse.ArgumentParser(prog="poser.plugin_check")
     parser.add_argument("path")
     parser.add_argument("--plugin-name")
     parser.add_argument("result_path", type=Path)

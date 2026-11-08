@@ -1,4 +1,4 @@
-# Composing with the VSTi agent composer
+# Composing with poser
 
 ## Composing here
 
@@ -10,7 +10,7 @@ the result. Run commands from this directory. You compose by looping:
 3. Analyze it: `uv run analyze-song songs/<name>.py --json`.
 4. Read the report, the spectrograms, and earlier history records, then revise.
 
-Song scripts import `vsti_composer` directly and need no PEP 723 header, because `render-song`
+Song scripts import `poser` directly and need no PEP 723 header, because `render-song`
 loads them in this project's environment.
 
 ## Songs
@@ -43,8 +43,8 @@ to the next change to the same controller, so it needs a later one.
 A short song script, showing the form rather than a finished piece:
 
 ```python
-from vsti_composer.music import chord, degree, humanize, notes, pitch, scale
-from vsti_composer.song import ControlChange, Song, Track
+from poser.music import chord, degree, humanize, notes, pitch, scale
+from poser.song import ControlChange, Song, Track
 
 
 def build() -> Song:
@@ -78,7 +78,7 @@ def build() -> Song:
     return Song(bpm=100, tracks=(lead, bass, pad))
 ```
 
-Music helpers, in `vsti_composer.music`; their docstrings give the parameters:
+Music helpers, in `poser.music`; their docstrings give the parameters:
 
 - `pitch` — the MIDI pitch of a note name such as `C4`, `F#3`, or `Bb2`.
 - `scale` — one octave of a mode (`MODES`, such as major, minor, dorian) from a root.

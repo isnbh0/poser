@@ -10,10 +10,10 @@ import numpy as np
 import pytest
 import yaml
 
-from vsti_composer import song as song_module
-from vsti_composer.music import chord, notes, pitch, scale, swing
-from vsti_composer.plugin_check import PROJECT_DIR
-from vsti_composer.song import (
+from poser import song as song_module
+from poser.music import chord, notes, pitch, scale, swing
+from poser.plugin_check import PROJECT_DIR
+from poser.song import (
     ControlChange,
     Note,
     NoteData,
@@ -172,7 +172,7 @@ def test_malformed_yaml_is_a_song_error(tmp_path: Path) -> None:
 
 
 def test_song_module_stays_engine_neutral() -> None:
-    source = (PROJECT_DIR / "src" / "vsti_composer" / "song.py").read_text()
+    source = (PROJECT_DIR / "src" / "poser" / "song.py").read_text()
     assert "pedalboard import" not in source
     assert "import mido" not in source
 
@@ -599,7 +599,7 @@ def test_song_with_controller_changes_round_trips(tmp_path: Path) -> None:
     assert load_song(path) == cc_track_song()
 
 
-SCRIPT_HEADER = """from vsti_composer.song import ControlChange, Note, Song, Track
+SCRIPT_HEADER = """from poser.song import ControlChange, Note, Song, Track
 """
 
 

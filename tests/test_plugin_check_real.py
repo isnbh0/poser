@@ -4,8 +4,8 @@ import math
 
 import pytest
 
-from vsti_composer import plugin_check
-from vsti_composer.plugin_check import Status
+from poser import plugin_check
+from poser.plugin_check import Status
 
 
 @pytest.mark.real_plugins

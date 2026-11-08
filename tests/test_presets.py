@@ -10,9 +10,9 @@ from pathlib import Path
 import pytest
 from helpers import fxp_bytes
 
-from vsti_composer import presets
-from vsti_composer.plugin_check import ConfigError, PluginSpec, load_config
-from vsti_composer.presets import (
+from poser import presets
+from poser.plugin_check import ConfigError, PluginSpec, load_config
+from poser.presets import (
     PresetError,
     build_state,
     component_state,
@@ -214,7 +214,7 @@ def test_presets_module_imports_no_plugin_code() -> None:
 
 def test_importing_presets_loads_no_plugin_code() -> None:
     check = (
-        "import sys, vsti_composer.presets; "
+        "import sys, poser.presets; "
         "print(sorted({'pedalboard', 'mido'} & {m.split('.')[0] for m in sys.modules}))"
     )
     output = subprocess.run(

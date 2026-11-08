@@ -24,7 +24,7 @@ from typing import TYPE_CHECKING, Literal, TypedDict, cast
 import mido
 import numpy as np
 
-from vsti_composer.plugin_check import (
+from poser.plugin_check import (
     DEFAULT_CONFIG,
     EXIT_ALL_PASS,
     EXIT_BAD_CONFIG,
@@ -41,8 +41,8 @@ from vsti_composer.plugin_check import (
     load_config,
     measure_peak_dbfs,
 )
-from vsti_composer.presets import PresetError, build_state, preset_files, read_chunk
-from vsti_composer.song import (
+from poser.presets import PresetError, build_state, preset_files, read_chunk
+from poser.song import (
     ControlChange,
     ControlData,
     Note,
@@ -53,8 +53,8 @@ from vsti_composer.song import (
     is_number,
     load_song,
 )
-from vsti_composer.sounds import SOUNDS_DIR, SoundError, read_sound, sound_files
-from vsti_composer.worker import (
+from poser.sounds import SOUNDS_DIR, SoundError, read_sound, sound_files
+from poser.worker import (
     WorkerCrashedError,
     WorkerTimedOutError,
     json_object,
@@ -415,7 +415,7 @@ def temp_stem_path(stem: Path) -> Path:
 
 
 def worker_command(job_path: Path) -> list[str]:
-    return [sys.executable, "-m", "vsti_composer.render", str(job_path)]
+    return [sys.executable, "-m", "poser.render", str(job_path)]
 
 
 def render_job(
@@ -714,7 +714,7 @@ def render_stem(job: RenderJob) -> Outcome:
 
 
 def worker_main(argv: list[str]) -> int:
-    parser = argparse.ArgumentParser(prog="vsti_composer.render")
+    parser = argparse.ArgumentParser(prog="poser.render")
     parser.add_argument("job_path", type=Path)
     parser.add_argument("result_path", type=Path)
     args = parser.parse_args(argv)

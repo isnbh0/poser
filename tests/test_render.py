@@ -15,11 +15,11 @@ import yaml
 from helpers import fxp_bytes
 from pedalboard.io import ReadableAudioFile
 
-from vsti_composer import render
-from vsti_composer.plugin_check import EXIT_ALL_PASS, EXIT_BAD_CONFIG, EXIT_SOME_FAILED, PluginSpec
-from vsti_composer.presets import build_state
-from vsti_composer.render import Outcome, RenderJob, TrackStatus, render_song, render_stem
-from vsti_composer.song import ControlChange, Note, Song, Track, load_song, parse_song
+from poser import render
+from poser.plugin_check import EXIT_ALL_PASS, EXIT_BAD_CONFIG, EXIT_SOME_FAILED, PluginSpec
+from poser.presets import build_state
+from poser.render import Outcome, RenderJob, TrackStatus, render_song, render_stem
+from poser.song import ControlChange, Note, Song, Track, load_song, parse_song
 
 
 def make_song(*tracks: Track, bpm: float = 120) -> Song:
@@ -1259,7 +1259,7 @@ def test_render_refuses_to_start_while_the_song_is_locked(
 LOCK_HOLDER = """
 import sys, time
 from pathlib import Path
-from vsti_composer.render import song_lock
+from poser.render import song_lock
 
 with song_lock(Path(sys.argv[1])):
     print("locked", flush=True)

@@ -12,15 +12,15 @@ import pytest
 import yaml
 from pedalboard.io import ReadableAudioFile, WriteableAudioFile
 
-from vsti_composer import analyze, render
-from vsti_composer.analyze import Defect, TrackStatus, analyze_song
-from vsti_composer.plugin_check import (
+from poser import analyze, render
+from poser.analyze import Defect, TrackStatus, analyze_song
+from poser.plugin_check import (
     EXIT_ALL_PASS,
     EXIT_BAD_CONFIG,
     EXIT_SOME_FAILED,
     PluginSpec,
 )
-from vsti_composer.song import Note, Song, Track, load_song
+from poser.song import Note, Song, Track, load_song
 
 RATE = 48000
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"

@@ -25,7 +25,7 @@ from matplotlib.figure import Figure
 from pedalboard.io import ReadableAudioFile, WriteableAudioFile
 from scipy import signal
 
-from vsti_composer.plugin_check import (
+from poser.plugin_check import (
     DEFAULT_CONFIG,
     EXIT_ALL_PASS,
     EXIT_BAD_CONFIG,
@@ -39,7 +39,7 @@ from vsti_composer.plugin_check import (
     load_config,
     measure_peak_dbfs,
 )
-from vsti_composer.render import (
+from poser.render import (
     ANALYSIS_DIR,
     EXIT_SONG_BUSY,
     MIX_DIR,
@@ -61,8 +61,8 @@ from vsti_composer.render import (
     stem_path,
     track_key,
 )
-from vsti_composer.song import Song, SongError, load_song, write_song
-from vsti_composer.sounds import SOUNDS_DIR
+from poser.song import Song, SongError, load_song, write_song
+from poser.sounds import SOUNDS_DIR
 
 MIX_NAME = "mix"
 HISTORY_DIR = "history"

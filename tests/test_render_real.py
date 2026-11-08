@@ -7,10 +7,10 @@ import pytest
 from helpers import band_spectrum_db, change_time_s, read_stem
 from pedalboard.io import ReadableAudioFile
 
-from vsti_composer import render
-from vsti_composer.plugin_check import DEFAULT_CONFIG, PROJECT_DIR, load_config, measure_peak_dbfs
-from vsti_composer.render import TrackStatus
-from vsti_composer.song import ControlChange, Note, Song, Track, load_song
+from poser import render
+from poser.plugin_check import DEFAULT_CONFIG, PROJECT_DIR, load_config, measure_peak_dbfs
+from poser.render import TrackStatus
+from poser.song import ControlChange, Note, Song, Track, load_song
 
 
 @pytest.mark.real_plugins

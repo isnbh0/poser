@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING
 
 # Only for annotations: importing `plugin_check` at run time would load `mido`.
 if TYPE_CHECKING:
-    from vsti_composer.plugin_check import PluginSpec
+    from poser.plugin_check import PluginSpec
 
 FXP_HEADER_SIZE = 60
 STATE_MAGIC = b"VC2!"

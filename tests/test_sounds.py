@@ -11,9 +11,9 @@ import numpy as np
 import pytest
 from helpers import fxp_bytes
 
-from vsti_composer import sounds
-from vsti_composer.plugin_check import EXIT_ALL_PASS, EXIT_BAD_CONFIG, EXIT_SOME_FAILED
-from vsti_composer.worker import json_object, run_isolated
+from poser import sounds
+from poser.plugin_check import EXIT_ALL_PASS, EXIT_BAD_CONFIG, EXIT_SOME_FAILED
+from poser.worker import json_object, run_isolated
 
 WORKER_STATE = b"state-from-the-window"
 
