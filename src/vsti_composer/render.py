@@ -39,7 +39,17 @@ from vsti_composer.plugin_check import (
     measure_peak_dbfs,
 )
 from vsti_composer.presets import PresetError, build_state, preset_files, read_chunk
-from vsti_composer.song import Note, Song, SongError, Track, is_int, is_number, load_song
+from vsti_composer.song import (
+    ControlChange,
+    ControlData,
+    Note,
+    Song,
+    SongError,
+    Track,
+    is_int,
+    is_number,
+    load_song,
+)
 from vsti_composer.sounds import SOUNDS_DIR, SoundError, read_sound, sound_files
 from vsti_composer.worker import (
     WorkerCrashedError,
@@ -57,9 +67,12 @@ MIX_DIR = "mix"
 ANALYSIS_DIR = "analysis"
 TAIL_S = 2.0
 WAV_BIT_DEPTH = 32  # Float WAV, so levels above full scale survive until mixing.
+# Serum applies a controller change at the start of the processing block that contains it, so
+# the block size bounds controller timing. 512 samples is 10.7 ms at 48 kHz.
+BUFFER_SIZE = 512
 # Raise whenever rendering code changes what a stem contains for the same inputs, so every
 # existing stamp stops matching.
-RENDER_FORMAT = 1
+RENDER_FORMAT = 2
 
 WORKER_FIELDS = {"status", "peak_dbfs", "detail"}
 STAMP_FIELDS = {"track_key", "sound_key", "status", "peak_dbfs", "stem_size", "stem_mtime_ns"}
@@ -108,6 +121,7 @@ class TrackJob(TypedDict):
     engine: str
     sound: str
     notes: list[NoteJob]
+    cc: list[ControlData]
 
 
 class RenderJob(TypedDict):
@@ -145,8 +159,11 @@ class Stamp:
 
 
 def song_duration_s(song: Song) -> float:
-    """Return the length shared by every stem: the latest note end across tracks plus the tail."""
-    last_beat = max(note.beat + note.length for track in song.tracks for note in track.notes)
+    """Return the length shared by every stem: the latest note end or controller change across
+    tracks, plus the tail. Pedalboard ignores messages after the end, so changes must fall within.
+    """
+    note_ends = [note.beat + note.length for track in song.tracks for note in track.notes]
+    last_beat = max([*note_ends, *(change.beat for track in song.tracks for change in track.cc)])
     return song.seconds(last_beat) + TAIL_S
 
 
@@ -155,21 +172,87 @@ def expected_samples(duration_s: float) -> int:
     return int(duration_s * SAMPLE_RATE)
 
 
+def _sample(song: Song, beat: float) -> int:
+    return round(song.seconds(beat) * SAMPLE_RATE)
+
+
+def _ramp_events(
+    song: Song, start: ControlChange, end: ControlChange
+) -> list[tuple[int, int, int]]:
+    """Return one event per value along a linear segment, at the beat where the line rounds to it.
+
+    The segment's start value is the start entry's own event, so values run from one past it.
+    """
+    span = abs(end.value - start.value)
+    direction = 1 if end.value > start.value else -1
+    return [
+        (
+            _sample(song, start.beat + (step - 0.5) / span * (end.beat - start.beat)),
+            start.control,
+            start.value + direction * step,
+        )
+        for step in range(1, span + 1)
+    ]
+
+
+def control_events(song: Song, track: Track) -> list[tuple[int, int, int]]:
+    """Return a track's controller changes as `(sample, control, value)` events in time order.
+
+    Each controller holds its first value from the start of the song, as automation does in a
+    DAW, so a change at a note's start is already in place when the note begins. Linear segments
+    expand to one event per value. Per controller, only the last event at a sample is kept, and an
+    event that repeats the controller's current value is dropped.
+    """
+    events: list[tuple[int, int, int]] = []
+    seen: set[int] = set()
+    for index, change in enumerate(track.cc):
+        events.append((_sample(song, change.beat), change.control, change.value))
+        if change.control not in seen:
+            seen.add(change.control)
+            events.append((0, change.control, change.value))
+        if change.shape == "linear":
+            # Parsing guarantees a later change to the same controller; a track built in code may
+            # not have one.
+            target = next((c for c in track.cc[index + 1 :] if c.control == change.control), None)
+            if target is None or target.beat <= change.beat:
+                raise ValueError(f"linear change at beat {change.beat} has no later target")
+            events.extend(_ramp_events(song, change, target))
+    events.sort(key=lambda event: event[0])
+
+    last_at_sample = {
+        (sample, control): position for position, (sample, control, _) in enumerate(events)
+    }
+    kept: list[tuple[int, int, int]] = []
+    current: dict[int, int] = {}
+    for position, (sample, control, value) in enumerate(events):
+        if last_at_sample[(sample, control)] != position or current.get(control) == value:
+            continue
+        current[control] = value
+        kept.append((sample, control, value))
+    return kept
+
+
 def track_messages(song: Song, track: Track) -> list[mido.Message]:
-    """Build MIDI in time order, with note-off first at equal times so a repeated pitch retriggers.
+    """Build MIDI in time order. At one sample, note-offs come first, then controller changes,
+    then note-ons, so a repeated pitch retriggers.
 
     Times snap to whole samples first. Otherwise float error, as in beats 0.1 + 0.2 against 0.3,
     can place a note-off just after the note-on it should precede and silence the new note.
-    Pedalboard reads `time` as absolute seconds, not mido deltas.
+    Pedalboard reads `time` as absolute seconds, not mido deltas, converts it to a 32-bit float,
+    and truncates `time * sample_rate` to a sample, so each time sits half a sample past its
+    sample. That lands exactly for the first 128 seconds; later, float32 rounding can move a
+    message by a sample or more, without reordering messages.
     """
     events = []
     for note in track.notes:
-        start = round(song.seconds(note.beat) * SAMPLE_RATE)
-        end = max(round(song.seconds(note.beat + note.length) * SAMPLE_RATE), start + 1)
-        events.append((start, 1, mido.Message("note_on", note=note.pitch, velocity=note.velocity)))
+        start = _sample(song, note.beat)
+        end = max(_sample(song, note.beat + note.length), start + 1)
+        events.append((start, 2, mido.Message("note_on", note=note.pitch, velocity=note.velocity)))
         events.append((end, 0, mido.Message("note_off", note=note.pitch)))
+    for sample, control, value in control_events(song, track):
+        events.append((sample, 1, mido.Message("control_change", control=control, value=value)))
     events.sort(key=lambda event: event[:2])
-    return [message.copy(time=sample / SAMPLE_RATE) for sample, _, message in events]
+    return [message.copy(time=(sample + 0.5) / SAMPLE_RATE) for sample, _, message in events]
 
 
 def song_render_dir(output_dir: Path, song_name: str) -> Path:
@@ -208,6 +291,10 @@ def track_key(song: Song, track: Track) -> str:
             "notes": [
                 [float(note.beat), int(note.pitch), float(note.length), int(note.velocity)]
                 for note in track.notes
+            ],
+            "cc": [
+                [float(change.beat), int(change.control), int(change.value), change.shape]
+                for change in track.cc
             ],
         }
     )
@@ -309,6 +396,10 @@ def render_job(
             "notes": [
                 {"beat": n.beat, "pitch": n.pitch, "length": n.length, "velocity": n.velocity}
                 for n in track.notes
+            ],
+            "cc": [
+                {"beat": c.beat, "control": c.control, "value": c.value, "shape": c.shape}
+                for c in track.cc
             ],
         },
         "duration_s": duration_s,
@@ -518,7 +609,8 @@ def render_stem(job: RenderJob) -> Outcome:
     duration_s = job["duration_s"]
     track_data = job["track"]
     notes = tuple(Note(**note) for note in track_data["notes"])
-    track = Track(track_data["name"], track_data["engine"], track_data["sound"], notes)
+    cc = tuple(ControlChange(**change) for change in track_data["cc"])
+    track = Track(track_data["name"], track_data["engine"], track_data["sound"], notes, cc=cc)
     song = Song(bpm=job["bpm"], tracks=(track,))
 
     # Any exception from loading third-party plugin code, or from it rejecting a saved state, is
@@ -548,6 +640,7 @@ def render_stem(job: RenderJob) -> Outcome:
         duration=duration_s,
         sample_rate=SAMPLE_RATE,
         num_channels=NUM_CHANNELS,
+        buffer_size=BUFFER_SIZE,
         reset=True,
     )
     expected = (NUM_CHANNELS, expected_samples(duration_s))

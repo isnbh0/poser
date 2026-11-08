@@ -5,6 +5,7 @@ import json
 import os
 import sys
 from collections.abc import Callable, Mapping
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -17,7 +18,7 @@ from vsti_composer import render
 from vsti_composer.plugin_check import EXIT_ALL_PASS, EXIT_BAD_CONFIG, EXIT_SOME_FAILED, PluginSpec
 from vsti_composer.presets import build_state
 from vsti_composer.render import Outcome, RenderJob, TrackStatus, render_song, render_stem
-from vsti_composer.song import Note, Song, Track, parse_song
+from vsti_composer.song import ControlChange, Note, Song, Track, parse_song
 
 
 def make_song(*tracks: Track, bpm: float = 120) -> Song:
@@ -31,17 +32,39 @@ def make_track(name: str = "lead", sound: str = "Serum", *notes: Note) -> Track:
 SPECS = [PluginSpec("Serum", "/serum.vst3")]
 
 
-def message_times(track: Track, song: Song) -> list[tuple[str, int, float]]:
+def pedalboard_sample(time: float) -> int:
+    """Return the sample Pedalboard plays a message at: it truncates `time * sample_rate` in
+    32-bit floats."""
+    return int(np.float32(time) * np.float32(render.SAMPLE_RATE))
+
+
+def message_times(track: Track, song: Song) -> list[tuple[str, int, int]]:
     messages = render.track_messages(song, track)
     # mido sets message fields dynamically, so they are read through `dict()`.
-    return [(f["type"], f["note"], f["time"]) for f in (m.dict() for m in messages)]
+    return [
+        (f["type"], f["note"], pedalboard_sample(f["time"]))
+        for f in (m.dict() for m in messages)
+        if f["type"] != "control_change"
+    ]
+
+
+def message_fields(track: Track, song: Song) -> list[tuple[str, int, int]]:
+    """Return each message's type, its note or controller, and its sample."""
+    return [
+        (
+            f["type"],
+            f["control"] if f["type"] == "control_change" else f["note"],
+            pedalboard_sample(f["time"]),
+        )
+        for f in (m.dict() for m in render.track_messages(song, track))
+    ]
 
 
 def test_beats_convert_to_seconds_at_bpm() -> None:
     track = make_track("lead", "Serum", Note(2, 60, 1, 100))
     assert message_times(track, make_song(track)) == [
-        ("note_on", 60, 1.0),
-        ("note_off", 60, 1.5),
+        ("note_on", 60, 48000),
+        ("note_off", 60, 72000),
     ]
 
 
@@ -75,10 +98,10 @@ def test_every_track_gets_the_same_duration(
 def test_repeated_pitch_ends_before_it_retriggers() -> None:
     track = make_track("lead", "Serum", Note(1, 60, 1, 100), Note(0, 60, 1, 100))
     assert message_times(track, make_song(track)) == [
-        ("note_on", 60, 0.0),
-        ("note_off", 60, 0.5),
-        ("note_on", 60, 0.5),
-        ("note_off", 60, 1.0),
+        ("note_on", 60, 0),
+        ("note_off", 60, 24000),
+        ("note_on", 60, 24000),
+        ("note_off", 60, 48000),
     ]
 
 
@@ -104,10 +127,13 @@ def test_note_shorter_than_a_sample_still_ends_after_it_starts() -> None:
 class FakePlugin:
     def __init__(self, audio: np.ndarray) -> None:
         self.audio = audio
+        self.messages: list[object] = []
+        self.kwargs: dict[str, object] = {}
 
     def __call__(self, messages: list[object], **kwargs: object) -> np.ndarray:
         assert kwargs["sample_rate"] == render.SAMPLE_RATE
         assert kwargs["num_channels"] == render.NUM_CHANNELS
+        self.messages, self.kwargs = messages, kwargs
         return self.audio
 
 
@@ -122,6 +148,7 @@ def job_for(stem: Path, duration_s: float = 0.5, state: str | None = None) -> Re
             "engine": "pedalboard",
             "sound": "Serum",
             "notes": [{"beat": 0, "pitch": 60, "length": 0.5, "velocity": 100}],
+            "cc": [],
         },
         "duration_s": duration_s,
         "stem_path": str(stem),
@@ -681,7 +708,7 @@ BASS = make_track("bass", "Serum", Note(0, 36, 2, 100))  # Its note ends last, s
 
 
 def with_notes(track: Track, *notes: Note) -> Track:
-    return Track(track.name, track.engine, track.sound, notes, track.gain)
+    return replace(track, notes=notes)
 
 
 @pytest.mark.parametrize(
@@ -1006,3 +1033,195 @@ def test_well_formed_worker_result_is_kept(tmp_path: Path) -> None:
     assert render.parse_worker_result(payload, stem) == Outcome(TrackStatus.SILENT, -90.0)
     failed = {"status": "load_failed", "detail": "no"}
     assert render.parse_worker_result(failed, stem) == Outcome(TrackStatus.LOAD_FAILED, None, "no")
+
+
+# Controller changes
+
+
+def cc_track(*changes: ControlChange, notes: tuple[Note, ...] = (Note(0, 60, 1, 100),)) -> Track:
+    return Track("lead", "pedalboard", "Serum", notes, cc=changes)
+
+
+def events_for(*changes: ControlChange) -> list[tuple[int, int, int]]:
+    track = cc_track(*changes)
+    return render.control_events(make_song(track), track)
+
+
+def test_linear_change_sends_one_event_per_value_where_the_line_rounds_to_it() -> None:
+    rising = events_for(ControlChange(0, 1, 0, "linear"), ControlChange(1, 1, 4))
+    falling = events_for(ControlChange(0, 1, 4, "linear"), ControlChange(1, 1, 0))
+
+    assert rising == [(0, 1, 0), (3000, 1, 1), (9000, 1, 2), (15000, 1, 3), (21000, 1, 4)]
+    assert falling == [(0, 1, 4), (3000, 1, 3), (9000, 1, 2), (15000, 1, 1), (21000, 1, 0)]
+
+
+def test_full_ramp_sends_128_events_however_long_it_is() -> None:
+    short = events_for(ControlChange(0, 1, 0, "linear"), ControlChange(1, 1, 127))
+    long = events_for(ControlChange(0, 1, 0, "linear"), ControlChange(32, 1, 127))
+
+    assert [value for _, _, value in short] == list(range(128))
+    assert [value for _, _, value in long] == list(range(128))
+
+
+def test_linear_change_ramps_to_the_next_change_of_its_own_controller() -> None:
+    events = events_for(
+        ControlChange(0, 1, 0, "linear"), ControlChange(0.5, 74, 9), ControlChange(1, 1, 2)
+    )
+
+    assert events == [(0, 1, 0), (0, 74, 9), (6000, 1, 1), (18000, 1, 2)]
+
+
+def test_linear_change_can_ramp_into_another_linear_change() -> None:
+    events = events_for(
+        ControlChange(0, 1, 0, "linear"), ControlChange(1, 1, 2, "linear"), ControlChange(2, 1, 0)
+    )
+
+    assert events == [(0, 1, 0), (6000, 1, 1), (18000, 1, 2), (30000, 1, 1), (42000, 1, 0)]
+
+
+def test_linear_first_change_holds_its_start_value_until_its_beat() -> None:
+    events = events_for(ControlChange(2, 1, 0, "linear"), ControlChange(3, 1, 2))
+
+    assert events == [(0, 1, 0), (54000, 1, 1), (66000, 1, 2)]
+
+
+def test_linear_change_without_a_target_is_rejected() -> None:
+    with pytest.raises(ValueError, match="no later target"):
+        events_for(ControlChange(0, 1, 0, "linear"))
+
+
+def test_first_change_holds_from_the_start_of_the_song() -> None:
+    assert events_for(ControlChange(2, 1, 64)) == [(0, 1, 64)]
+    assert events_for(ControlChange(2, 1, 64), ControlChange(3, 1, 0)) == [
+        (0, 1, 64),
+        (72000, 1, 0),
+    ]
+
+
+def test_last_change_at_a_sample_wins_and_other_controllers_keep_listed_order() -> None:
+    assert events_for(ControlChange(0, 1, 10), ControlChange(0, 1, 20)) == [(0, 1, 20)]
+    assert events_for(ControlChange(1, 74, 5), ControlChange(1, 1, 6)) == [
+        (0, 74, 5),
+        (0, 1, 6),
+    ]
+
+
+def test_a_ramp_shorter_than_a_sample_sends_one_event() -> None:
+    events = events_for(ControlChange(0, 1, 0, "linear"), ControlChange(1e-9, 1, 127))
+
+    assert events == [(0, 1, 127)]
+
+
+def test_controller_change_sorts_between_note_off_and_note_on_at_one_sample() -> None:
+    notes = (Note(0, 60, 1, 100), Note(1, 62, 1, 100))
+    track = cc_track(ControlChange(0, 1, 0), ControlChange(1, 1, 90), notes=notes)
+
+    assert message_fields(track, make_song(track)) == [
+        ("control_change", 1, 0),
+        ("note_on", 60, 0),
+        ("note_off", 60, 24000),
+        ("control_change", 1, 24000),
+        ("note_on", 62, 24000),
+        ("note_off", 62, 48000),
+    ]
+
+
+def test_every_message_time_truncates_to_its_sample() -> None:
+    # One beat at 120 bpm is 24000 samples, so beat k / 24000 lands on sample k.
+    beats = [k / 24000 for k in (27, 49, 54, 61, 98, 12345)]
+    notes = tuple(Note(beat, 60, 1e-9, 100) for beat in beats)
+    changes = (ControlChange(beat, 1, i + 1) for i, beat in enumerate(beats))
+    track = cc_track(ControlChange(0, 1, 0), *changes, notes=notes)
+
+    messages = render.track_messages(make_song(track), track)
+    samples = {(m.dict()["type"], pedalboard_sample(m.dict()["time"])) for m in messages}
+
+    assert {("note_on", k) for k in (27, 49, 54, 61, 98, 12345)} <= samples
+    assert {("control_change", k) for k in (27, 49, 54, 61, 98, 12345)} <= samples
+
+
+def test_controller_value_reaches_the_message() -> None:
+    track = cc_track(ControlChange(0, 74, 33))
+    (change,) = [m.dict() for m in render.track_messages(make_song(track), track)][:1]
+    assert (change["type"], change["control"], change["value"], change["channel"]) == (
+        "control_change",
+        74,
+        33,
+        0,
+    )
+
+
+def test_duration_uses_a_controller_change_after_the_last_note() -> None:
+    late = cc_track(ControlChange(6, 1, 0))
+    early = cc_track(ControlChange(0.5, 1, 0))
+    assert render.song_duration_s(make_song(late)) == pytest.approx(3.0 + render.TAIL_S)
+    assert render.song_duration_s(make_song(early)) == pytest.approx(0.5 + render.TAIL_S)
+
+
+BASE_CC = (ControlChange(0, 1, 0),)
+
+
+@pytest.mark.parametrize(
+    "cc",
+    [
+        (*BASE_CC, ControlChange(1, 1, 64)),
+        (ControlChange(0.5, 1, 0),),
+        (ControlChange(0, 74, 0),),
+        (ControlChange(0, 1, 1),),
+    ],
+    ids=["added", "beat", "control", "value"],
+)
+def test_track_key_changes_with_controller_changes(cc: tuple[ControlChange, ...]) -> None:
+    base, changed = replace(LEAD, cc=BASE_CC), replace(LEAD, cc=cc)
+    assert render.track_key(make_song(changed, BASS), changed) != render.track_key(
+        make_song(base, BASS), base
+    )
+
+
+def test_track_key_changes_with_shape_and_not_with_an_empty_cc() -> None:
+    step = replace(LEAD, cc=(ControlChange(0, 1, 0), ControlChange(1, 1, 9)))
+    linear = replace(LEAD, cc=(ControlChange(0, 1, 0, "linear"), ControlChange(1, 1, 9)))
+    song = make_song(LEAD, BASS)
+    empty = replace(LEAD, cc=())
+
+    assert render.track_key(make_song(step, BASS), step) != render.track_key(
+        make_song(linear, BASS), linear
+    )
+    assert render.track_key(make_song(empty, BASS), empty) == render.track_key(song, LEAD)
+
+
+def test_worker_job_carries_controller_changes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    use_worker(tmp_path, monkeypatch, "pass")
+    track = cc_track(ControlChange(0, 1, 0, "linear"), ControlChange(1, 1, 127))
+
+    render_song(make_song(track), "song", SPECS, tmp_path)
+
+    (job,) = logged_jobs(tmp_path)
+    assert job["track"]["cc"] == [
+        {"beat": 0, "control": 1, "value": 0, "shape": "linear"},
+        {"beat": 1, "control": 1, "value": 127, "shape": "step"},
+    ]
+
+
+def test_worker_sends_controller_changes_in_512_sample_blocks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    plugin = FakePlugin(blank_audio())
+    monkeypatch.setattr("pedalboard.load_plugin", lambda *args, **kwargs: plugin)
+    job = job_for(tmp_path / "lead.wav")
+    job["track"]["cc"] = [
+        {"beat": 0.25, "control": 74, "value": 50},
+        {"beat": 0.5, "control": 74, "value": 60},
+    ]
+
+    render_stem(job)
+
+    sent = [m.dict() for m in plugin.messages if isinstance(m, render.mido.Message)]
+    changes = [m for m in sent if m["type"] == "control_change"]
+    assert [(m["control"], m["value"], pedalboard_sample(m["time"])) for m in changes] == [
+        (74, 50, 0),
+        (74, 60, 12000),
+    ]
+    assert plugin.kwargs["buffer_size"] == 512

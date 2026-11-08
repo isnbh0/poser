@@ -7,8 +7,9 @@ import stat
 import tempfile
 from collections.abc import Mapping
 from dataclasses import dataclass
+from itertools import pairwise
 from pathlib import Path
-from typing import NotRequired, TypedDict, TypeGuard
+from typing import Literal, NotRequired, TypedDict, TypeGuard
 
 import yaml
 
@@ -17,11 +18,19 @@ TRACK_NAME = re.compile(r"[A-Za-z0-9_-]+")
 
 SONG_KEYS = {"bpm", "tracks"}
 TRACK_KEYS = {"name", "engine", "sound", "notes"}
-OPTIONAL_TRACK_KEYS = {"gain"}
+OPTIONAL_TRACK_KEYS = {"gain", "cc"}
 NOTE_KEYS = {"beat", "pitch", "length", "velocity"}
+CC_KEYS = {"beat", "control", "value"}
+OPTIONAL_CC_KEYS = {"shape"}
 
 # A track's level in decibels, applied at mixdown.
 GAIN_MIN_DB, GAIN_MAX_DB = -60, 12
+
+# MIDI controllers 120 to 127 are channel mode messages, such as All Notes Off, not controls.
+CONTROL_MAX = 119
+# `step` holds a value until the next change of its controller; `linear` ramps to that change.
+type Shape = Literal["step", "linear"]
+SHAPES: tuple[Shape, ...] = ("step", "linear")
 
 
 class SongError(Exception):
@@ -41,12 +50,21 @@ class Note:
 
 
 @dataclass(frozen=True)
+class ControlChange:
+    beat: float
+    control: int
+    value: int
+    shape: Shape = "step"
+
+
+@dataclass(frozen=True)
 class Track:
     name: str
     engine: str
     sound: str
     notes: tuple[Note, ...]
     gain: float = 0.0
+    cc: tuple[ControlChange, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -65,12 +83,20 @@ class NoteData(TypedDict):
     velocity: int
 
 
+class ControlData(TypedDict):
+    beat: float
+    control: int
+    value: int
+    shape: NotRequired[Shape]
+
+
 class TrackData(TypedDict):
     name: str
     engine: str
     sound: str
     gain: NotRequired[float]
     notes: list[NoteData]
+    cc: NotRequired[list[ControlData]]
 
 
 class SongData(TypedDict):
@@ -145,6 +171,68 @@ def _parse_note(value: object, where: str, problems: list[str]) -> Note | None:
     return Note(beat=beat, pitch=pitch, length=length, velocity=velocity)
 
 
+def _is_shape(value: object) -> TypeGuard[Shape]:
+    return value in SHAPES
+
+
+def _parse_control_change(value: object, where: str, problems: list[str]) -> ControlChange | None:
+    data = _mapping(value)
+    if data is None:
+        problems.append(f"{where}: must be a mapping, got {value!r}")
+        return None
+    _check_keys(data, CC_KEYS, where, problems, OPTIONAL_CC_KEYS)
+
+    before = len(problems)
+    beat, control, cc_value = data.get("beat"), data.get("control"), data.get("value")
+    shape = data.get("shape", "step")
+    if "beat" in data and not (is_number(beat) and beat >= 0):
+        problems.append(f"{where}.beat: must be a number that is not negative, got {beat!r}")
+    if "control" in data and not _is_int_in_range(control, 0, CONTROL_MAX):
+        problems.append(
+            f"{where}.control: must be an integer from 0 to {CONTROL_MAX}, got {control!r}"
+        )
+    if "value" in data and not _is_int_in_range(cc_value, 0, 127):
+        problems.append(f"{where}.value: must be an integer from 0 to 127, got {cc_value!r}")
+    if not _is_shape(shape):
+        problems.append(f"{where}.shape: must be step or linear, got {shape!r}")
+
+    if len(problems) > before:
+        return None
+    # These fail only when a problem was reported. A missing key reads as None.
+    if not (is_number(beat) and is_int(control) and is_int(cc_value) and _is_shape(shape)):
+        return None
+    return ControlChange(beat=beat, control=control, value=cc_value, shape=shape)
+
+
+def _parse_cc(value: object, where: str, problems: list[str]) -> tuple[ControlChange, ...]:
+    """Parse a track's controller changes, which must be in time order."""
+    if not isinstance(value, list):
+        problems.append(f"{where}: must be a list of controller changes, got {value!r}")
+        return ()
+    parsed = [
+        (index, _parse_control_change(item, f"{where}[{index}]", problems))
+        for index, item in enumerate(value)
+    ]
+    changes = [(index, change) for index, change in parsed if change is not None]
+    for (_, previous), (index, change) in pairwise(changes):
+        if change.beat < previous.beat:
+            problems.append(
+                f"{where}[{index}].beat: must not be earlier than the previous change at beat "
+                f"{previous.beat}, got {change.beat}"
+            )
+    # A failed entry could be a ramp's target, so ramps are checked only when every entry parsed.
+    for position, (index, change) in enumerate(changes if len(changes) == len(value) else []):
+        if change.shape != "linear":
+            continue
+        following = (c for _, c in changes[position + 1 :] if c.control == change.control)
+        target = next(following, None)
+        if target is None or target.beat <= change.beat:
+            problems.append(
+                f"{where}[{index}].shape: linear needs a later change to control {change.control}"
+            )
+    return tuple(change for _, change in changes)
+
+
 def _parse_track(value: object, where: str, problems: list[str]) -> Track | None:
     data = _mapping(value)
     if data is None:
@@ -180,6 +268,8 @@ def _parse_track(value: object, where: str, problems: list[str]) -> Track | None
                 for index, note in enumerate(raw_notes)
             ]
 
+    cc = _parse_cc(data["cc"], f"{where}.cc", problems) if "cc" in data else ()
+
     # Each of these fails only when a problem was reported. A missing key reads as None.
     if len(problems) > before or not is_number(gain) or "notes" not in data:
         return None
@@ -191,6 +281,7 @@ def _parse_track(value: object, where: str, problems: list[str]) -> Track | None
         sound=sound,
         notes=tuple(n for n in notes if n is not None),
         gain=float(gain),
+        cc=cc,
     )
 
 
@@ -240,21 +331,36 @@ def load_song(path: Path) -> Song:
     return parse_song(data)
 
 
+def _control_to_data(change: ControlChange) -> ControlData:
+    data: ControlData = {
+        "beat": change.beat,
+        "control": change.control,
+        "value": change.value,
+        "shape": change.shape,
+    }
+    if change.shape == "step":
+        del data["shape"]
+    return data
+
+
 def _track_to_data(track: Track) -> TrackData:
-    notes: list[NoteData] = [
-        {"beat": note.beat, "pitch": note.pitch, "length": note.length, "velocity": note.velocity}
-        for note in track.notes
-    ]
-    # A gain of 0 is the default, so songs without gains are written as they were before gain.
-    if track.gain == 0:
-        return {"name": track.name, "engine": track.engine, "sound": track.sound, "notes": notes}
-    return {
+    data: TrackData = {
         "name": track.name,
         "engine": track.engine,
         "sound": track.sound,
         "gain": float(track.gain),
-        "notes": notes,
+        "notes": [
+            {"beat": n.beat, "pitch": n.pitch, "length": n.length, "velocity": n.velocity}
+            for n in track.notes
+        ],
+        "cc": [_control_to_data(change) for change in track.cc],
     }
+    # Defaults are left out, so a song without gains or controller changes keeps its old text.
+    if track.gain == 0:
+        del data["gain"]
+    if not track.cc:
+        del data["cc"]
+    return data
 
 
 def song_to_data(song: Song) -> SongData:

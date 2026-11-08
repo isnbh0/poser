@@ -14,6 +14,7 @@ from vsti_composer import song as song_module
 from vsti_composer.music import chord, notes, pitch, scale, swing
 from vsti_composer.plugin_check import PROJECT_DIR
 from vsti_composer.song import (
+    ControlChange,
     Note,
     NoteData,
     Song,
@@ -437,3 +438,146 @@ def test_song_with_gains_round_trips(tmp_path: Path) -> None:
 
     assert load_song(path) == gain_song()
     assert "gain" not in yaml.safe_load(path.read_text())["tracks"][1]
+
+
+# Controller changes
+
+
+def cc_song(*changes: object) -> dict[str, object]:
+    song = valid_song()
+    first_track(song)["cc"] = list(changes)
+    return song
+
+
+def cc_problems(*changes: object) -> list[str]:
+    song = cc_song(*changes)
+    set_bpm(song, -1)  # Another problem, so controller problems are reported alongside it.
+    with pytest.raises(SongError) as error:
+        parse_song(song)
+    assert "bpm: must be a positive number, got -1" in error.value.problems
+    return [p for p in error.value.problems if not p.startswith("bpm")]
+
+
+def test_controller_changes_parse_in_listed_order_with_step_by_default() -> None:
+    song = parse_song(
+        cc_song(
+            {"beat": 0, "control": 1, "value": 0, "shape": "linear"},
+            {"beat": 2, "control": 74, "value": 90},
+            {"beat": 2, "control": 1, "value": 127},
+        )
+    )
+
+    assert song.tracks[0].cc == (
+        ControlChange(0, 1, 0, "linear"),
+        ControlChange(2, 74, 90, "step"),
+        ControlChange(2, 1, 127, "step"),
+    )
+
+
+def test_empty_cc_equals_no_cc() -> None:
+    assert parse_song(cc_song()).tracks[0].cc == ()
+    assert parse_song(cc_song()) == parse_song(valid_song())
+
+
+def good_cc(**changes: object) -> dict[str, object]:
+    return {"beat": 0, "control": 1, "value": 0, **changes}
+
+
+@pytest.mark.parametrize(
+    ("changes", "message"),
+    [
+        (["x"], "tracks[0].cc[0]: must be a mapping, got 'x'"),
+        ([good_cc(depth=1)], "tracks[0].cc[0]: unknown key 'depth'"),
+        ([{"beat": 0, "control": 1}], "tracks[0].cc[0]: missing key 'value'"),
+        ([good_cc(beat=-1)], "tracks[0].cc[0].beat: must be a number that is not negative, got -1"),
+        (
+            [good_cc(beat="1")],
+            "tracks[0].cc[0].beat: must be a number that is not negative, got '1'",
+        ),
+        (
+            [good_cc(beat=4), good_cc(beat=2)],
+            "tracks[0].cc[1].beat: must not be earlier than the previous change at beat 4, got 2",
+        ),
+        (
+            [good_cc(control=-1)],
+            "tracks[0].cc[0].control: must be an integer from 0 to 119, got -1",
+        ),
+        (
+            [good_cc(control=120)],
+            "tracks[0].cc[0].control: must be an integer from 0 to 119, got 120",
+        ),
+        (
+            [good_cc(control=1.0)],
+            "tracks[0].cc[0].control: must be an integer from 0 to 119, got 1.0",
+        ),
+        (
+            [good_cc(control=True)],
+            "tracks[0].cc[0].control: must be an integer from 0 to 119, got True",
+        ),
+        ([good_cc(value=-1)], "tracks[0].cc[0].value: must be an integer from 0 to 127, got -1"),
+        ([good_cc(value=128)], "tracks[0].cc[0].value: must be an integer from 0 to 127, got 128"),
+        ([good_cc(value=1.0)], "tracks[0].cc[0].value: must be an integer from 0 to 127, got 1.0"),
+        ([good_cc(shape="curve")], "tracks[0].cc[0].shape: must be step or linear, got 'curve'"),
+        (
+            [good_cc(shape="linear"), good_cc(beat=1, control=74)],
+            "tracks[0].cc[0].shape: linear needs a later change to control 1",
+        ),
+        (
+            [good_cc(shape="linear"), good_cc(value=9)],
+            "tracks[0].cc[0].shape: linear needs a later change to control 1",
+        ),
+    ],
+)
+def test_bad_controller_change_is_reported_with_other_problems(
+    changes: list[object], message: str
+) -> None:
+    assert cc_problems(*changes) == [message]
+
+
+def test_cc_that_is_not_a_list_is_reported_with_other_problems() -> None:
+    song = valid_song()
+    first_track(song)["cc"] = "x"
+    set_bpm(song, -1)
+    with pytest.raises(SongError) as error:
+        parse_song(song)
+    assert error.value.problems == [
+        "bpm: must be a positive number, got -1",
+        "tracks[0].cc: must be a list of controller changes, got 'x'",
+    ]
+
+
+def test_bad_ramp_target_reports_only_its_own_problem() -> None:
+    problems = cc_problems(good_cc(shape="linear"), good_cc(beat=1, value=200))
+
+    assert problems == ["tracks[0].cc[1].value: must be an integer from 0 to 127, got 200"]
+
+
+def cc_track_song() -> Song:
+    note = Note(0, 60, 1, 100)
+    changes = (ControlChange(0, 1, 0, "linear"), ControlChange(2, 1, 127))
+    return Song(
+        120,
+        (
+            Track("lead", "pedalboard", "Serum", (note,), gain=-6.0, cc=changes),
+            Track("bass", "pedalboard", "Serum", (note,)),
+        ),
+    )
+
+
+def test_song_to_data_writes_cc_after_notes_and_shape_only_for_linear() -> None:
+    data = song_to_data(cc_track_song())
+
+    lead, bass = data["tracks"]
+    assert list(lead) == ["name", "engine", "sound", "gain", "notes", "cc"]
+    assert list(bass) == ["name", "engine", "sound", "notes"]
+    assert lead.get("cc") == [
+        {"beat": 0, "control": 1, "value": 0, "shape": "linear"},
+        {"beat": 2, "control": 1, "value": 127},
+    ]
+
+
+def test_song_with_controller_changes_round_trips(tmp_path: Path) -> None:
+    path = tmp_path / "song.yaml"
+    write_song(cc_track_song(), path)
+
+    assert load_song(path) == cc_track_song()

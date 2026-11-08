@@ -42,3 +42,50 @@ def fxp_bytes(chunk: bytes, name: str = "test", kind: bytes = b"FPCh") -> bytes:
         + chunk
     )
     return b"CcnK" + len(body).to_bytes(4, "big") + body
+
+
+def read_stem(stem: str) -> np.ndarray:
+    with ReadableAudioFile(stem) as audio_file:  # ty: ignore[no-matching-overload]
+        return audio_file.read(audio_file.frames)
+
+
+def _bands_db(segment: np.ndarray, bands: int) -> np.ndarray:
+    magnitude = np.abs(np.fft.rfft(segment * np.hanning(len(segment))))
+    return 20 * np.log10(
+        np.array([band.mean() for band in np.array_split(magnitude, bands)]) + 1e-9
+    )
+
+
+def band_spectrum_db(audio: np.ndarray, start_s: float, end_s: float) -> np.ndarray:
+    """Return 64 equal-width spectrum bands in dB for the channel mean between two times."""
+    mono = audio.mean(axis=0)[int(start_s * SAMPLE_RATE) : int(end_s * SAMPLE_RATE)]
+    return _bands_db(mono, 64)
+
+
+FRAME, HOP = 1024, 240
+
+
+def change_time_s(reference: np.ndarray, changed: np.ndarray) -> float:
+    """Return about when two renders start to differ, from frame spectra of 32 bands.
+
+    The per-frame mean difference in dB is split in two where the summed variance of the sides is
+    least, among frames starting from 0.9 to 1.7 seconds within frames from 0.6 to 2.0 seconds.
+    The result is the end of the first frame after the split, the latest a change there can start.
+    """
+    a, b = reference.mean(axis=0), changed.mean(axis=0)
+    starts = np.arange(0, len(a) - FRAME, HOP)
+    diff = np.array(
+        [
+            np.abs(_bands_db(a[s : s + FRAME], 32) - _bands_db(b[s : s + FRAME], 32)).mean()
+            for s in starts
+        ]
+    )
+    times = starts / SAMPLE_RATE
+    region = (times > 0.6) & (times < 2.0)
+    diff, times = diff[region], times[region]
+    candidates = [i for i in range(1, len(diff)) if 0.9 < times[i] < 1.7]
+    split = min(
+        candidates,
+        key=lambda i: diff[:i].var() * i + diff[i:].var() * (len(diff) - i),
+    )
+    return float(times[split] + FRAME / SAMPLE_RATE)
