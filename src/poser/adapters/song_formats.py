@@ -4,12 +4,15 @@ import os
 import runpy
 import stat
 import tempfile
+from collections.abc import Mapping
 from pathlib import Path
 
 import yaml
 
+from poser.adapters.loading import refuse_options
+from poser.core.jsonvalue import JsonValue
 from poser.core.names import Suffix
-from poser.core.ports import SongFormat
+from poser.core.ports import AdapterContext, SongFormat
 from poser.core.song import Song, SongError, parse_song, song_to_data
 
 
@@ -108,3 +111,15 @@ def write_yaml_song(song: Song, path: Path) -> None:
         if isinstance(error, OSError):
             raise SongError([f"cannot write {path}: {error}"]) from error
         raise
+
+
+def create_yaml(options: Mapping[str, JsonValue], _context: AdapterContext) -> YamlSongFormat:
+    """The factory for `yaml`, as a song format and as the record writer. Takes no options."""
+    refuse_options(options)
+    return YamlSongFormat()
+
+
+def create_script(options: Mapping[str, JsonValue], _context: AdapterContext) -> ScriptSongFormat:
+    """The factory for `script`. Takes no options."""
+    refuse_options(options)
+    return ScriptSongFormat()

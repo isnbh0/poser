@@ -1,7 +1,8 @@
-"""Workspaces: the directory holding a plugin list, saved sounds, and renders.
+"""Workspaces: the directory holding a workspace config, saved sounds, and renders.
 
-A workspace is the nearest directory at or above the working directory that holds a file named
-`plugins.toml`, found the way uv and ruff find `pyproject.toml`. Only command entry points look
+A workspace is the directory holding the `poser.toml` a command was given with `--config`, or
+else the nearest directory at or above the working directory that holds a file named
+`poser.toml`, found the way uv and ruff find `pyproject.toml`. Only command entry points look
 for one. Library functions take every directory as an argument.
 """
 
@@ -9,7 +10,9 @@ import argparse
 from dataclasses import dataclass
 from pathlib import Path
 
-CONFIG_NAME = "plugins.toml"
+from poser.core.names import SongId
+
+CONFIG_NAME = "poser.toml"
 
 # Each command path option, by its argparse destination, and the workspace property it defaults to.
 PATH_OPTIONS = {"config": "config", "sounds_dir": "sounds_dir", "output_dir": "renders_dir"}
@@ -20,7 +23,7 @@ class WorkspaceError(Exception):
 
 
 class SongOutsideWorkspaceError(WorkspaceError):
-    """A song's path is not below the directory render directories are relative to."""
+    """A song's path is not below the directory song ids are relative to."""
 
 
 @dataclass(frozen=True)
@@ -55,29 +58,32 @@ def find_workspace(start: Path | None = None) -> Workspace:
 def fill_path_options(args: argparse.Namespace) -> Path:
     """Set each path option the command has but was not given from the workspace.
 
-    The search runs only when an option was omitted, so a command given every path needs no
-    workspace. Returns the base that song render directories are relative to: the workspace root
-    when it searched, and the working directory otherwise. Raises WorkspaceError when a workspace
-    is needed and none is found.
+    The workspace is the directory holding `--config` when it was given, and is searched for
+    from the working directory otherwise. Returns the base that song ids are relative to: the
+    workspace root when an option was filled from it, and the working directory when every
+    option was given. Raises WorkspaceError when a search finds no workspace.
     """
     omitted = [dest for dest in PATH_OPTIONS if dest in vars(args) and getattr(args, dest) is None]
     if not omitted:
         return Path.cwd()
-    workspace = find_workspace()
+    config = getattr(args, "config", None)
+    workspace = find_workspace() if config is None else Workspace(Path(config).absolute().parent)
     for dest in omitted:
         setattr(args, dest, getattr(workspace, PATH_OPTIONS[dest]))
     return workspace.root
 
 
-def song_render_dir(renders_dir: Path, base: Path, song_path: Path) -> Path:
-    """Return a song's render directory: its path below `base`, under `renders_dir`.
+def song_id(base: Path, song_path: Path) -> SongId:
+    """Return a song's id: its resolved path below `base`, such as `songs/demo.yaml`.
 
-    The song's suffix is kept, so `songs/x.py` renders into `renders/songs/x.py/`. No entry poser
-    writes inside a render directory ends in a song suffix, so one song's directory never
-    coincides with an entry of another's. The song path is resolved, so a symlinked song is placed
-    by its target. Raises SongOutsideWorkspaceError when the song is not below `base`.
+    The song path is resolved, so a symlinked song is placed by its target. Raises
+    SongOutsideWorkspaceError when the song is not below `base`.
     """
     base, song = base.resolve(), song_path.resolve()
+    outside = SongOutsideWorkspaceError(f"{song} is outside the workspace at {base}")
     if not song.is_relative_to(base):
-        raise SongOutsideWorkspaceError(f"{song} is outside the workspace at {base}")
-    return renders_dir / song.relative_to(base)
+        raise outside
+    try:
+        return SongId(song.relative_to(base).as_posix())
+    except ValueError as error:
+        raise outside from error

@@ -7,14 +7,16 @@ from pathlib import Path
 
 import pytest
 import yaml
-from helpers import REPO_DIR, SCAFFOLD_DIR, real_specs
+from helpers import REPO_DIR, SCAFFOLD_DIR, real_analyze, real_composition, real_render
 
 import poser
-from poser import analyze, render
 from poser.adapters.song_formats import SONG_FORMATS
+from poser.compose import read_config
 from poser.core import music, report, song
 from poser.core.loading import load_song
+from poser.core.ports import ResolvedSound
 from poser.core.song import MAX_SONG_S, Song, SongError, parse_song
+from poser.core.sounds import parse_sound_ref
 from poser.core.statuses import RENDER_STATUSES
 
 GUIDE_PATH = SCAFFOLD_DIR / "guide.md"
@@ -99,8 +101,19 @@ def test_yaml_examples_parse() -> None:
 def test_commands_are_project_scripts() -> None:
     scripts = tomllib.loads((REPO_DIR / "pyproject.toml").read_text())["project"]["scripts"]
     commands = re.findall(r"uv run ([\w-]+)", GUIDE)
-    assert set(commands) <= set(scripts)
-    assert {"render-song", "analyze-song", "list-sounds"} <= set(commands)
+    assert set(commands) == set(scripts)
+
+
+# Words true of one instrument adapter or one render store, which their own guides hold.
+ADAPTER_WORDS = ("Serum", "Pedalboard", "pedalboard", "plugin window")
+STORE_WORDS = ("renders/", "stems/", "latest/", "history/", ".sound-previews")
+
+
+def test_guide_holds_only_text_true_in_every_workspace() -> None:
+    prose = FENCE.sub("", GUIDE)
+    for line in prose.splitlines():
+        assert not any(word in line for word in ADAPTER_WORDS), line
+    assert not [word for word in STORE_WORDS if word in GUIDE]
 
 
 def test_statuses_and_defects_are_named() -> None:
@@ -158,7 +171,7 @@ def with_key(key: str, value: int) -> dict[str, object]:
     cc: dict[str, object] = {"beat": 0, "control": 1, "value": 0}
     track: dict[str, object] = {
         "name": "lead",
-        "sound": "Serum",
+        "sound": "serum",
         "notes": [note],
         "cc": [cc],
     }
@@ -214,29 +227,36 @@ def test_song_length_limit_is_stated() -> None:
     assert f"{MAX_SONG_S:.0f} seconds" in " ".join(GUIDE.split())
 
 
+def scaffold_notes() -> list[str]:
+    config = read_config(SCAFFOLD_DIR / "poser.toml")
+    return [item.guide for item in config.instruments if item.guide is not None]
+
+
 @pytest.mark.real_plugins
 def test_sound_names_resolve(tmp_path: Path) -> None:
-    specs = real_specs()
-    prefixes = tuple(f"{spec.name}:" for spec in specs)
-    spans = {span for span in backticked() if span.startswith(prefixes)}
+    instruments = real_composition(tmp_path).instruments()
+    prefixes = tuple(f"{name}:" for name in instruments)
+    texts = [GUIDE, *scaffold_notes()]
+    spans = {
+        span for text in texts for span in BACKTICKED.findall(text) if span.startswith(prefixes)
+    }
     songs = python_songs(tmp_path) + [parse_song(yaml.safe_load(b)) for b in blocks("yaml")]
+    songs.append(load_song(SCAFFOLD_DIR / "demo.yaml", SONG_FORMATS))
     sounds = {track.sound for example in songs for track in example.tracks}
     assert spans
     assert sounds
     for name in sorted(spans | sounds):
-        resolved = render.resolve_sound(name, specs, tmp_path / "sounds")
-        assert not isinstance(resolved, render.Outcome), f"{name}: {resolved}"
+        ref = parse_sound_ref(name)
+        resolved = instruments[ref.instrument].resolve(ref)
+        assert isinstance(resolved, ResolvedSound), f"{name}: {resolved}"
 
 
 @pytest.mark.real_plugins
 def test_python_example_renders_without_defects(tmp_path: Path) -> None:
-    specs = real_specs()
     (example,) = python_songs(tmp_path)
-    song_path = tmp_path / "example0" / "example.py"
-    song_dir = tmp_path / "renders" / "example0" / "example.py"
-    render.render_song(example, song_dir, specs, sounds_dir=tmp_path / "sounds")
+    real_render(tmp_path, example, "example0/example.py")
 
-    result = analyze.analyze_song(example, song_path, specs, song_dir, tmp_path / "sounds")
+    result = real_analyze(tmp_path, example, "example0/example.py")
 
     for track in result.tracks:
         assert track.status is report.AnalysisStatus.ANALYZED, track.detail

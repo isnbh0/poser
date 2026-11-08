@@ -1,143 +1,106 @@
 """Tests that each song file renders into its own directory, named by its path in the workspace."""
 
-import sys
+import json
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
-import yaml
+from workspaces import CommandWorkspace, make_workspace, write_script_song, write_song
 
-from poser import analyze, render
 from poser.adapters.song_formats import SONG_FORMATS
-from poser.analyze import analyze_song
-from poser.cli.common import EXIT_BAD_CONFIG
-from poser.core.audio import stem_samples
+from poser.cli import analyze, render
+from poser.cli.common import EXIT_ALL_PASS, EXIT_BAD_CONFIG
 from poser.core.loading import load_song
-from poser.core.report import AnalysisStatus
-from poser.plugin_check import PluginSpec
-
-NOTE = {"beat": 0, "pitch": 60, "length": 1, "velocity": 100}
 
 
-def make_workspace(root: Path) -> None:
-    """Make `root` a workspace whose plugin list names one plugin at a missing path."""
-    (root / "plugins.toml").write_text(f'[[plugin]]\nname = "Serum"\npath = "{root / "x.vst3"}"\n')
+@pytest.fixture
+def workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> CommandWorkspace:
+    return make_workspace(tmp_path, monkeypatch)
 
 
-def write_yaml_song(path: Path, sound: str = "Nope", bpm: int = 120) -> Path:
-    """Write a one-track song; the default unknown sound means no worker runs."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    track = {"name": "lead", "sound": sound, "notes": [NOTE]}
-    path.write_text(yaml.safe_dump({"bpm": bpm, "tracks": [track]}))
-    return path
-
-
-def write_script_song(path: Path, bpm: int = 90) -> Path:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        "from poser import Note, Song, Track\n\n\n"
-        "def build() -> Song:\n"
-        "    note = Note(0, 60, 1, 100)\n"
-        f"    return Song({bpm}, (Track('lead', 'Nope', (note,)),))\n"
-    )
-    return path
-
-
-def test_songs_with_one_name_in_different_directories_keep_apart(tmp_path: Path) -> None:
-    make_workspace(tmp_path)
-    first = write_yaml_song(tmp_path / "songs" / "x.yaml")
-    second = write_yaml_song(tmp_path / "drafts" / "x.yaml")
+def test_songs_with_one_name_in_different_directories_keep_apart(
+    workspace: CommandWorkspace,
+) -> None:
+    first = write_song(workspace.root / "songs" / "x.yaml", ("lead", "synth"))
+    second = write_song(workspace.root / "drafts" / "x.yaml", ("lead", "synth"))
     render.main([str(first)])
-    stem = tmp_path / "renders" / "songs" / "x.yaml" / "lead.wav"
-    stem.write_bytes(b"first song's stem")
+    stem = workspace.renders / "songs" / "x.yaml" / "stems" / "lead.wav"
+    before = stem.read_bytes()
 
     render.main([str(second)])
 
-    assert (tmp_path / "renders" / "drafts" / "x.yaml").is_dir()
-    assert stem.read_bytes() == b"first song's stem"
+    assert (workspace.renders / "drafts" / "x.yaml" / "stems" / "lead.wav").is_file()
+    assert stem.read_bytes() == before
 
 
-def test_script_and_yaml_with_one_stem_render_apart(tmp_path: Path) -> None:
-    make_workspace(tmp_path)
-    script = write_script_song(tmp_path / "songs" / "x.py")
-    data = write_yaml_song(tmp_path / "songs" / "x.yaml")
+def test_script_and_yaml_with_one_stem_render_apart(workspace: CommandWorkspace) -> None:
+    script = write_script_song(workspace.root / "songs" / "x.py", "synth")
+    data = write_song(workspace.root / "songs" / "x.yaml", ("lead", "synth"))
 
-    assert load_song(script, SONG_FORMATS).bpm == 90
-    assert load_song(data, SONG_FORMATS).bpm == 120
+    assert load_song(script, SONG_FORMATS).tracks == load_song(data, SONG_FORMATS).tracks
     for song in (script, data):
-        render.main([str(song)])
+        assert render.main([str(song)]) == EXIT_ALL_PASS
 
-    assert (tmp_path / "renders" / "songs" / "x.py").is_dir()
-    assert (tmp_path / "renders" / "songs" / "x.yaml").is_dir()
+    assert (workspace.renders / "songs" / "x.py" / "stems" / "lead.wav").is_file()
+    assert (workspace.renders / "songs" / "x.yaml" / "stems" / "lead.wav").is_file()
 
 
-def test_song_beside_a_directory_of_its_name_keeps_its_mix(tmp_path: Path) -> None:
-    make_workspace(tmp_path)
-    outer = write_script_song(tmp_path / "songs" / "x.py")
-    inner = write_script_song(tmp_path / "songs" / "x" / "mix.py")
+def test_song_beside_a_directory_of_its_name_keeps_its_mix(
+    workspace: CommandWorkspace, capsys: pytest.CaptureFixture[str]
+) -> None:
+    outer = write_script_song(workspace.root / "songs" / "x.py", "synth")
+    inner = write_script_song(workspace.root / "songs" / "x" / "mix.py", "synth")
     render.main([str(outer)])
-    mix = tmp_path / "renders" / "songs" / "x.py" / "mix" / "mix.wav"
-    mix.parent.mkdir()
-    mix.write_bytes(b"outer song's mix")
+    analyze.main([str(outer)])
+    mix = workspace.renders / "songs" / "x.py" / "latest" / "mix.wav"
+    before = mix.read_bytes()
 
-    render.main([str(inner)])
+    assert render.main([str(inner)]) == EXIT_ALL_PASS
+    assert analyze.main([str(inner)]) == EXIT_ALL_PASS
 
-    assert (tmp_path / "renders" / "songs" / "x" / "mix.py").is_dir()
-    assert mix.read_bytes() == b"outer song's mix"
+    assert (workspace.renders / "songs" / "x" / "mix.py" / "latest" / "mix.wav").is_file()
+    assert mix.read_bytes() == before
 
 
 @pytest.mark.parametrize(
     ("prog", "main"), [("render-song", render.main), ("analyze-song", analyze.main)]
 )
 def test_song_outside_the_workspace_exits_2(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str], prog: str, main: object
+    workspace: CommandWorkspace,
+    tmp_path_factory: pytest.TempPathFactory,
+    capsys: pytest.CaptureFixture[str],
+    prog: str,
+    main: Callable[[list[str]], int],
 ) -> None:
-    assert callable(main)
-    make_workspace(tmp_path)
-    song = write_yaml_song(tmp_path.parent / f"elsewhere-{tmp_path.name}" / "x.yaml")
+    song = write_song(tmp_path_factory.mktemp("elsewhere") / "x.yaml", ("lead", "synth"))
 
     assert main([str(song)]) == EXIT_BAD_CONFIG
 
     assert capsys.readouterr().err == (
-        f"{prog}: {song.resolve()} is outside the workspace at {tmp_path.resolve()}\n"
+        f"{prog}: {song.resolve()} is outside the workspace at {workspace.root}\n"
     )
-    assert not (tmp_path / "renders").exists()
-
-
-@pytest.mark.parametrize("main", [render.main, analyze.main], ids=["render", "analyze"])
-def test_script_outside_the_workspace_never_runs(tmp_path: Path, main: object) -> None:
-    assert callable(main)
-    make_workspace(tmp_path)
-    outside = tmp_path.parent / f"elsewhere-{tmp_path.name}"
-    sentinel = outside / "ran"
-    song = outside / "x.py"
-    outside.mkdir()
-    song.write_text(f"from pathlib import Path\nPath({str(sentinel)!r}).touch()\n")
-
-    assert main([str(song)]) == EXIT_BAD_CONFIG
-
-    assert not sentinel.exists()
+    assert not workspace.renders.exists()
 
 
 def test_every_path_option_given_makes_the_working_directory_the_base(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    config = tmp_path / "cfg" / "plugins.toml"
-    config.parent.mkdir()
-    config.write_text('[[plugin]]\nname = "Serum"\npath = "/missing.vst3"\n')
-    song = write_yaml_song(tmp_path / "songs" / "x.yaml")
+    workspace = make_workspace(tmp_path / "cfg", monkeypatch)
+    song = write_song(tmp_path / "songs" / "x.yaml", ("lead", "synth"))
     out = tmp_path / "out"
     argv = [
         str(song),
         "--config",
-        str(config),
+        str(workspace.config),
         "--output-dir",
         str(out),
         "--sounds-dir",
         str(tmp_path / "sounds"),
     ]
 
-    render.main(argv)
-    assert (out / "songs" / "x.yaml").is_dir()
+    assert render.main(argv) == EXIT_ALL_PASS
+    assert (out / "songs" / "x.yaml" / "stems" / "lead.wav").is_file()
+    assert not workspace.renders.exists()
 
     (tmp_path / "sub").mkdir()
     monkeypatch.chdir(tmp_path / "sub")
@@ -146,33 +109,38 @@ def test_every_path_option_given_makes_the_working_directory_the_base(
     assert f"outside the workspace at {(tmp_path / 'sub').resolve()}\n" in capsys.readouterr().err
 
 
-def test_analysis_reads_the_stems_render_wrote(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("cwd", ["another-workspace", "no-workspace"])
+def test_config_alone_makes_its_directory_the_workspace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cwd: str
 ) -> None:
-    specs = [PluginSpec("Serum", "/serum.vst3")]
-    song_path = write_yaml_song(tmp_path / "songs" / "x.yaml", sound="Serum")
-    song = load_song(song_path, SONG_FORMATS)
-    samples = stem_samples(song)
-    worker = tmp_path / "worker.py"
-    worker.write_text(
-        "import json, sys\n"
-        "from pathlib import Path\n"
-        "import numpy as np\n"
-        "from poser.adapters.wav import WavAudioFiles\n"
-        "from poser.core.audio import Audio\n"
-        "job = json.loads(Path(sys.argv[-2]).read_text())\n"
-        f"audio = Audio(np.full((2, {samples}), 0.1, np.float32))\n"
-        "WavAudioFiles().write(Path(job['stem_path']), audio)\n"
-        "Path(sys.argv[-1]).write_text(json.dumps(dict(status='rendered', peak_dbfs=-20.0)))\n"
-    )
-    monkeypatch.setattr(
-        render, "worker_command", lambda job_path: [sys.executable, str(worker), str(job_path)]
-    )
-    song_dir = tmp_path / "renders" / "songs" / "x.yaml"
+    workspace = make_workspace(tmp_path / "cfg", monkeypatch)
+    song = write_song(workspace.root / "songs" / "x.yaml", ("lead", "synth"))
+    here = tmp_path / cwd
+    here.mkdir()
+    if cwd == "another-workspace":
+        make_workspace(here, monkeypatch)
+    before = sorted(path.name for path in here.iterdir())
+    monkeypatch.chdir(here)
+    config = ["--config", str(workspace.config)]
 
-    render.render_song(song, song_dir, specs, sounds_dir=tmp_path / "sounds")
-    report = analyze_song(song, song_path, specs, song_dir, tmp_path / "sounds")
+    assert render.main([str(song), *config]) == EXIT_ALL_PASS
+    assert analyze.main([str(song), *config]) == EXIT_ALL_PASS
 
-    assert [track.status for track in report.tracks] == [AnalysisStatus.ANALYZED]
-    assert report.mix is not None
-    assert report.mix.path == str(song_dir.resolve() / "mix" / "mix.wav")
+    assert (workspace.renders / "songs" / "x.yaml" / "stems" / "lead.wav").is_file()
+    assert (workspace.renders / "songs" / "x.yaml" / "latest" / "mix.wav").is_file()
+    assert sorted(path.name for path in here.iterdir()) == before
+
+
+def test_analysis_reads_the_stems_render_wrote(
+    workspace: CommandWorkspace, capsys: pytest.CaptureFixture[str]
+) -> None:
+    write_song(workspace.root / "songs" / "x.yaml", ("lead", "synth"))
+    render.main(["songs/x.yaml"])
+    capsys.readouterr()
+
+    assert analyze.main(["songs/x.yaml", "--json"]) == EXIT_ALL_PASS
+
+    report = json.loads(capsys.readouterr().out)
+    assert [track["status"] for track in report["tracks"]] == ["analyzed"]
+    song_dir = workspace.renders / "songs" / "x.yaml"
+    assert report["mix"]["path"] == str(song_dir / "latest" / "mix.wav")

@@ -5,11 +5,13 @@ from pathlib import Path
 
 import pytest
 
-from poser import init_workspace
 from poser.adapters.song_formats import SONG_FORMATS
+from poser.cli import init_workspace
+from poser.cli.init_workspace import GITIGNORE_RESOURCE, SCAFFOLD_FILES, WRITTEN_FILES
+from poser.cli.workspace import Workspace, find_workspace
+from poser.compose import load
+from poser.core.guide import GENERATED, compose_guide
 from poser.core.loading import load_song
-from poser.init_workspace import GITIGNORE_RESOURCE, SCAFFOLD_FILES
-from poser.workspace import Workspace, find_workspace
 
 
 def resource(name: str) -> bytes:
@@ -34,9 +36,9 @@ def test_init_creates_the_directory_and_writes_the_scaffold(
     assert capsys.readouterr().out.splitlines() == [
         "AGENTS.md",
         "CLAUDE.md",
-        "plugins.toml",
+        "poser.toml",
         "songs/demo.yaml",
-        "Edit plugins.toml to match this machine's plugins, then run: uv run check-plugins",
+        "Edit poser.toml to match this machine's plugins, then run: uv run check-instruments",
     ]
     assert not (target / "sounds").exists()
     assert not (target / "renders").exists()
@@ -58,7 +60,25 @@ def test_init_merges_an_existing_gitignore(tmp_path: Path) -> None:
     )
 
 
-@pytest.mark.parametrize("existing", list(SCAFFOLD_FILES.values()))
+def test_init_writes_the_composed_guide(tmp_path: Path) -> None:
+    init_workspace.main([str(tmp_path)])
+
+    guide = (tmp_path / "AGENTS.md").read_text()
+    composition = load(tmp_path / "poser.toml", tmp_path / "sounds", tmp_path / "renders")
+    core = resource("guide.md").decode()
+    assert guide == compose_guide(core, composition.instrument_notes(), composition.guide_parts())
+    assert guide.startswith(GENERATED + "\n")
+    for heading in (
+        "## Instruments here",
+        "## Pedalboard instruments",
+        "## Where results are kept",
+    ):
+        assert f"\n{heading}\n" in guide
+    assert not (tmp_path / "sounds").exists()
+    assert not (tmp_path / "renders").exists()
+
+
+@pytest.mark.parametrize("existing", list(WRITTEN_FILES))
 def test_existing_target_refuses_and_writes_nothing(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], existing: str
 ) -> None:
@@ -69,7 +89,7 @@ def test_existing_target_refuses_and_writes_nothing(
 
     assert capsys.readouterr().err == f"init-workspace: {tmp_path / existing} exists\n"
     assert (tmp_path / existing).read_text() == "mine"
-    for path in SCAFFOLD_FILES.values():
+    for path in WRITTEN_FILES:
         if path != existing:
             assert not (tmp_path / path).exists(), path
     assert not (tmp_path / ".gitignore").exists()

@@ -17,8 +17,15 @@ from importlib import metadata, resources
 from pathlib import Path
 
 from poser.adapters.isolation import WorkerCrashedError, WorkerTimedOutError, run_isolated
-from poser.adapters.pedalboard.config import SAVED_SOURCE, PedalboardConfig
-from poser.adapters.pedalboard.formats import PresetError, PresetFormat, SavedFormat, SavedSound
+from poser.adapters.loading import load_object
+from poser.adapters.pedalboard.config import SAVED_SOURCE, PedalboardConfig, from_options
+from poser.adapters.pedalboard.formats import (
+    PRESET_FORMATS,
+    PresetError,
+    PresetFormat,
+    SavedFormat,
+    SavedSound,
+)
 from poser.adapters.pedalboard.sources import (
     DEFAULT_DESCRIPTION,
     SourceScan,
@@ -37,9 +44,11 @@ from poser.core.jsonvalue import Json, JsonValue, digest, json_object
 from poser.core.names import Identifier, Suffix
 from poser.core.performance import performance_to_data
 from poser.core.ports import (
+    AdapterContext,
     Captured,
     CaptureFailure,
     CaptureRequest,
+    ConfigError,
     RenderFailure,
     RenderRequest,
     ResolvedSound,
@@ -287,3 +296,44 @@ class PedalboardInstrument:
             SavedFormat().write_sound(target, sound)
         self._refresh_saved()
         return self._ref(f"{SAVED_SOURCE}/{name}")
+
+
+def _preset_format(owner: str, entry: str) -> PresetFormat:
+    """Return the preset format a `formats` entry names: a built-in name, or an import path to a
+    factory taking no arguments."""
+    if entry in PRESET_FORMATS:
+        return PRESET_FORMATS[entry]
+    if ":" not in entry:
+        known = ", ".join(sorted(PRESET_FORMATS))
+        raise ConfigError(
+            f"{owner}: unknown preset format {entry!r}; use one of {known} or an import path"
+        )
+    factory = load_object(entry)
+    if not callable(factory):
+        raise ConfigError(f"{owner}: preset format {entry!r} is not a factory")
+    made = factory()
+    if not isinstance(made, PresetFormat):
+        raise ConfigError(
+            f"{owner}: {entry!r} made a {type(made).__name__}, which is not a PresetFormat"
+        )
+    if not isinstance(made.suffix, Suffix):
+        raise ConfigError(
+            f"{owner}: preset format {entry!r} has suffix {made.suffix!r}, not a Suffix"
+        )
+    return made
+
+
+def create(
+    name: Identifier, options: Mapping[str, JsonValue], context: AdapterContext
+) -> PedalboardInstrument:
+    """The factory for `pedalboard`. Relative paths in the options resolve against the workspace
+    root, and saved sounds live under the command's sounds directory."""
+    config = from_options(name, options, context.root)
+    owner = f"instrument {config.name!r}"
+    formats: dict[Suffix, PresetFormat] = {}
+    for entry in config.formats:
+        fmt = _preset_format(owner, entry)
+        if fmt.suffix in formats:
+            raise ConfigError(f"{owner}: two preset formats read {fmt.suffix!r} files")
+        formats[fmt.suffix] = fmt
+    return PedalboardInstrument(config, context.sounds_dir, formats)

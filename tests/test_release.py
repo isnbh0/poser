@@ -2,6 +2,7 @@
 
 import re
 import tomllib
+from importlib import metadata
 
 from helpers import REPO_DIR
 
@@ -26,8 +27,27 @@ def test_project_metadata() -> None:
 def test_readme_commands_are_project_scripts() -> None:
     commands = re.findall(r"uv run ([\w-]+)", (REPO_DIR / "README.md").read_text())
 
-    assert set(commands) <= set(PROJECT["scripts"])
-    assert "init-workspace" in commands
+    assert set(commands) == set(PROJECT["scripts"])
+    assert {"check-instruments", "update-guide"} <= set(commands)
+
+
+def test_installed_entry_points_load() -> None:
+    scripts = [
+        entry
+        for entry in metadata.distribution("poser").entry_points
+        if entry.group == "console_scripts"
+    ]
+
+    assert {entry.name for entry in scripts} == set(PROJECT["scripts"])
+    for entry in scripts:
+        assert callable(entry.load()), entry.name
+
+
+def test_makefile_checks_instruments() -> None:
+    targets = re.findall(r"^([\w-]+):", (REPO_DIR / "Makefile").read_text(), re.MULTILINE)
+
+    assert "check-instruments" in targets
+    assert "check-plugins" not in targets
 
 
 def test_package_is_marked_typed() -> None:

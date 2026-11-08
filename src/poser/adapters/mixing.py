@@ -1,11 +1,13 @@
 """The gain mixer: stems scaled by their gains and summed, with nothing else applied."""
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 
 import numpy as np
 
+from poser.adapters.loading import refuse_options
 from poser.core.audio import NUM_CHANNELS, Audio
-from poser.core.ports import MixInput
+from poser.core.jsonvalue import JsonValue
+from poser.core.ports import AdapterContext, MixInput
 
 OVERFLOW = "mix is not finite: a sum exceeds the float32 range"
 
@@ -34,3 +36,9 @@ class GainMixer:
         if not np.isfinite(mixed).all():
             raise ValueError(OVERFLOW)
         return Audio(mixed)
+
+
+def create(options: Mapping[str, JsonValue], _context: AdapterContext) -> GainMixer:
+    """The factory for `gain`. Takes no options."""
+    refuse_options(options)
+    return GainMixer()

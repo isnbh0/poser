@@ -4,10 +4,9 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-from helpers import SCAFFOLD_DIR, band_spectrum_db, change_time_s, read_stem, real_specs
+from helpers import SCAFFOLD_DIR, band_spectrum_db, change_time_s, read_stem, real_render
 from pedalboard.io import ReadableAudioFile
 
-from poser import render
 from poser.adapters.song_formats import SONG_FORMATS
 from poser.core.audio import (
     NUM_CHANNELS,
@@ -26,29 +25,25 @@ def test_demo_song_renders_aligned_audible_stems(tmp_path: Path) -> None:
     song = load_song(SCAFFOLD_DIR / "demo.yaml", SONG_FORMATS)
     expected_samples = stem_samples(song)
 
-    results = render.render_song(
-        song, tmp_path / "demo", real_specs(), sounds_dir=tmp_path / "sounds"
-    )
+    results = real_render(tmp_path, song, "songs/demo.yaml")
 
     assert [result.track for result in results] == [track.name for track in song.tracks]
     for result in results:
         assert result.status is StemStatus.RENDERED, result.detail
         assert result.stem is not None
-        with ReadableAudioFile(result.stem) as stem:  # ty: ignore[no-matching-overload]
+        with ReadableAudioFile(str(result.stem)) as stem:  # ty: ignore[no-matching-overload]
             assert stem.samplerate == SAMPLE_RATE
             audio = stem.read(stem.frames)
         assert audio.shape == (NUM_CHANNELS, expected_samples)
         assert measure_peak_dbfs(audio) > SILENCE_DBFS
 
 
-SOUND = "Serum:Leads/LD A Bit of Luck [SD]"
+SOUND = "serum:presets/Leads/LD A Bit of Luck [SD]"
 
 
 def render_cc_song(tmp_path: Path, name: str, beats: float, *changes: ControlChange) -> np.ndarray:
     track = Track("lead", SOUND, (Note(0, 60, beats, 100),), cc=changes)
-    (result,) = render.render_song(
-        Song(120, (track,)), tmp_path / name, real_specs(), sounds_dir=tmp_path / "sounds"
-    )
+    (result,) = real_render(tmp_path, Song(120, (track,)), f"songs/{name}.yaml")
     assert result.status is StemStatus.RENDERED, result.detail
     assert result.stem is not None
     return read_stem(str(result.stem))

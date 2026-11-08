@@ -5,44 +5,33 @@ from collections.abc import Callable
 from pathlib import Path
 
 import pytest
-import yaml
+from workspaces import make_workspace, write_song
 
-from poser import analyze, plugin_check, render, sounds
+from poser.cli import analyze, check, guide, render, sounds
 from poser.cli.common import EXIT_ALL_PASS, EXIT_BAD_CONFIG
-from poser.sounds import SavedSound, write_sound
-from poser.workspace import (
+from poser.cli.workspace import (
     SongOutsideWorkspaceError,
     Workspace,
     WorkspaceError,
     find_workspace,
-    song_render_dir,
+    song_id,
 )
 
 
-def make_workspace(root: Path) -> Path:
-    """Make `root` a workspace whose plugin list names one plugin at a missing path."""
+def mark(root: Path) -> Path:
     root.mkdir(parents=True, exist_ok=True)
-    missing = root / "Missing.vst3"
-    (root / "plugins.toml").write_text(f'[[plugin]]\nname = "Serum"\npath = "{missing}"\n')
+    (root / "poser.toml").write_text("")
     return root
 
 
-def write_song_file(path: Path) -> Path:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    note = {"beat": 0, "pitch": 60, "length": 1, "velocity": 100}
-    track = {"name": "lead", "sound": "Nope", "notes": [note]}
-    path.write_text(yaml.safe_dump({"bpm": 120, "tracks": [track]}))
-    return path
-
-
-def test_workspace_is_the_directory_with_a_plugin_list(tmp_path: Path) -> None:
-    make_workspace(tmp_path)
+def test_workspace_is_the_directory_with_a_poser_toml(tmp_path: Path) -> None:
+    mark(tmp_path)
 
     assert find_workspace(tmp_path) == Workspace(tmp_path.resolve())
 
 
-def test_search_walks_up_to_the_nearest_plugin_list(tmp_path: Path) -> None:
-    make_workspace(tmp_path)
+def test_search_walks_up_to_the_nearest_poser_toml(tmp_path: Path) -> None:
+    mark(tmp_path)
     start = tmp_path / "a" / "b"
     start.mkdir(parents=True)
 
@@ -50,13 +39,20 @@ def test_search_walks_up_to_the_nearest_plugin_list(tmp_path: Path) -> None:
 
 
 def test_search_starts_in_the_working_directory(tmp_path: Path) -> None:
-    make_workspace(tmp_path)
+    mark(tmp_path)
 
     assert find_workspace() == Workspace(tmp_path.resolve())
 
 
-def test_directory_named_plugins_toml_is_not_a_workspace(tmp_path: Path) -> None:
-    (tmp_path / "plugins.toml").mkdir()
+def test_a_plugins_toml_no_longer_marks_a_workspace(tmp_path: Path) -> None:
+    (tmp_path / "plugins.toml").write_text("")
+
+    with pytest.raises(WorkspaceError):
+        find_workspace(tmp_path)
+
+
+def test_directory_named_poser_toml_is_not_a_workspace(tmp_path: Path) -> None:
+    (tmp_path / "poser.toml").mkdir()
 
     with pytest.raises(WorkspaceError):
         find_workspace(tmp_path)
@@ -67,7 +63,7 @@ def test_missing_workspace_names_the_start_and_the_fix(tmp_path: Path) -> None:
         find_workspace(tmp_path)
 
     assert str(error.value) == (
-        f"no plugins.toml in {tmp_path.resolve()} or any parent; "
+        f"no poser.toml in {tmp_path.resolve()} or any parent; "
         "run `uv run init-workspace` to create a workspace"
     )
 
@@ -75,17 +71,18 @@ def test_missing_workspace_names_the_start_and_the_fix(tmp_path: Path) -> None:
 def test_workspace_layout(tmp_path: Path) -> None:
     workspace = Workspace(tmp_path)
 
-    assert workspace.config == tmp_path / "plugins.toml"
+    assert workspace.config == tmp_path / "poser.toml"
     assert workspace.sounds_dir == tmp_path / "sounds"
     assert workspace.renders_dir == tmp_path / "renders"
 
 
 COMMANDS: list[tuple[str, Callable[[list[str]], int], list[str]]] = [
-    ("check-plugins", plugin_check.main, []),
+    ("check-instruments", check.main, []),
     ("render-song", render.main, ["song.yaml"]),
     ("analyze-song", analyze.main, ["song.yaml"]),
     ("list-sounds", sounds.list_main, []),
-    ("save-sound", sounds.save_main, ["x", "--plugin", "Serum", "--description", "d"]),
+    ("save-sound", sounds.save_main, ["synth", "x", "--description", "d"]),
+    ("update-guide", guide.main, []),
 ]
 
 
@@ -97,80 +94,72 @@ def test_command_outside_a_workspace_exits_2(
     main: Callable[[list[str]], int],
     argv: list[str],
 ) -> None:
-    write_song_file(tmp_path / "song.yaml")
+    write_song(tmp_path / "song.yaml", ("lead", "synth"))
 
     assert main(argv) == EXIT_BAD_CONFIG
 
-    assert capsys.readouterr().err.startswith(f"{prog}: no plugins.toml in ")
+    assert capsys.readouterr().err.startswith(f"{prog}: no poser.toml in ")
 
 
-def test_explicit_paths_need_no_workspace(tmp_path: Path) -> None:
-    config = make_workspace(tmp_path / "elsewhere") / "plugins.toml"
-    (tmp_path / "plugins.toml").unlink(missing_ok=True)
+def test_explicit_paths_need_no_workspace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    workspace = make_workspace(tmp_path / "elsewhere", monkeypatch)
+    here = tmp_path / "here"
+    here.mkdir()
+    monkeypatch.chdir(here)
+    argv = ["--config", str(workspace.config), "--sounds-dir", str(tmp_path / "sounds")]
 
-    argv = ["--config", str(config), "--sounds-dir", str(tmp_path / "sounds")]
-
-    assert sounds.list_main(argv) == EXIT_ALL_PASS
+    assert sounds.list_main([*argv, "--json"]) == EXIT_ALL_PASS
+    assert json.loads(capsys.readouterr().out)[0]["sound"] == "synth"
 
 
 def test_render_from_a_subdirectory_writes_at_the_workspace_root(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    make_workspace(tmp_path)
-    song = write_song_file(tmp_path / "songs" / "tune.yaml")
+    make_workspace(tmp_path, monkeypatch)
+    song = write_song(tmp_path / "songs" / "tune.yaml", ("lead", "synth"))
     monkeypatch.chdir(tmp_path / "songs")
 
-    render.main([str(song)])
+    assert render.main([song.name]) == EXIT_ALL_PASS
 
-    assert (tmp_path / "renders" / "songs" / "tune.yaml").is_dir()
+    assert (tmp_path / "renders" / "songs" / "tune.yaml" / "stems" / "lead.wav").is_file()
     assert not (tmp_path / "songs" / "renders").exists()
 
 
-def test_list_sounds_reads_the_workspace_sounds(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    make_workspace(tmp_path)
-    write_sound(tmp_path / "sounds", SavedSound("warm", "Serum", "a warm pad", "c3RhdGU="))
-
-    sounds.list_main(["--json"])
-
-    names = [entry["name"] for entry in json.loads(capsys.readouterr().out)]
-    assert "warm" in names
-
-
 @pytest.mark.parametrize("name", ["x.py", "x.yaml", "x.yml"])
-def test_render_dir_is_the_song_path_with_its_suffix(tmp_path: Path, name: str) -> None:
-    base, renders = tmp_path / "base", tmp_path / "r"
-
-    assert song_render_dir(renders, base, base / "songs" / name) == renders / "songs" / name
+def test_song_id_is_the_song_path_with_its_suffix(tmp_path: Path, name: str) -> None:
+    assert song_id(tmp_path, tmp_path / "songs" / name) == f"songs/{name}"
 
 
-def test_song_in_a_directory_named_like_a_song_gets_its_own_render_dir(tmp_path: Path) -> None:
-    base, renders = tmp_path / "base", tmp_path / "r"
+def test_song_in_a_directory_named_like_a_song_gets_its_own_id(tmp_path: Path) -> None:
+    nested = song_id(tmp_path, tmp_path / "songs" / "x" / "mix.py")
 
-    nested = song_render_dir(renders, base, base / "songs" / "x" / "mix.py")
-
-    assert nested == renders / "songs" / "x" / "mix.py"
-    assert nested != song_render_dir(renders, base, base / "songs" / "x.py")
+    assert nested == "songs/x/mix.py"
+    assert nested != song_id(tmp_path, tmp_path / "songs" / "x.py")
 
 
 def test_relative_song_path_resolves_from_the_working_directory(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    base, renders = tmp_path / "base", tmp_path / "r"
-    (base / "songs").mkdir(parents=True)
-    monkeypatch.chdir(base / "songs")
+    (tmp_path / "songs").mkdir()
+    monkeypatch.chdir(tmp_path / "songs")
 
-    assert song_render_dir(renders, base, Path("../drafts/x.py")) == renders / "drafts" / "x.py"
+    assert song_id(tmp_path, Path("../drafts/x.py")) == "drafts/x.py"
 
 
-def test_render_dir_does_not_need_the_song_file(tmp_path: Path) -> None:
+def test_song_id_does_not_need_the_song_file(tmp_path: Path) -> None:
     song = tmp_path / "songs" / "missing.yaml"
 
-    assert (
-        song_render_dir(tmp_path / "r", tmp_path, song) == tmp_path / "r" / "songs" / "missing.yaml"
-    )
+    assert song_id(tmp_path, song) == "songs/missing.yaml"
     assert not song.exists()
+
+
+def test_symlinked_song_is_placed_by_its_target(tmp_path: Path) -> None:
+    target = write_song(tmp_path / "songs" / "real.yaml", ("lead", "synth"))
+    (tmp_path / "link.yaml").symlink_to(target)
+
+    assert song_id(tmp_path, tmp_path / "link.yaml") == "songs/real.yaml"
 
 
 def test_song_outside_the_base_is_refused(tmp_path: Path) -> None:
@@ -178,7 +167,13 @@ def test_song_outside_the_base_is_refused(tmp_path: Path) -> None:
     song = tmp_path / "elsewhere" / "x.py"
 
     with pytest.raises(SongOutsideWorkspaceError) as error:
-        song_render_dir(tmp_path / "r", base, song)
+        song_id(base, song)
 
     assert isinstance(error.value, WorkspaceError)
     assert str(error.value) == f"{song.resolve()} is outside the workspace at {base.resolve()}"
+
+
+def test_path_that_is_no_song_id_is_refused(tmp_path: Path) -> None:
+    for path in (tmp_path, tmp_path / "a\\b.yaml"):
+        with pytest.raises(SongOutsideWorkspaceError):
+            song_id(tmp_path, path)

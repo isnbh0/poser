@@ -139,7 +139,7 @@ def test_json_value_is_a_new_copy() -> None:
 
 def test_sound_ref() -> None:
     assert SoundRef(Identifier("serum")).name is None
-    assert SoundRef(Identifier("serum"), "Bass/X").name == "Bass/X"
+    assert SoundRef(Identifier("serum"), "presets/Bass/X").name == "presets/Bass/X"
     _bad(SoundRef, "serum")  # A plain str is not an Identifier.
     _bad(SoundRef, Identifier("serum"), "")
     _bad(SoundRef, Identifier("serum"), 1)
@@ -158,7 +158,7 @@ def test_sound_entry() -> None:
     [
         ("serum", "serum", None),
         ("serum:presets/Bass/X [Y]", "serum", "presets/Bass/X [Y]"),
-        ("Serum:Leads/LD: Two Parts", "Serum", "Leads/LD: Two Parts"),
+        ("serum:presets/LD: Two Parts", "serum", "presets/LD: Two Parts"),
         ("serum::x", "serum", ":x"),
     ],
 )
@@ -183,7 +183,7 @@ def test_parse_sound_ref_refuses_non_text() -> None:
 
 def test_track_and_song() -> None:
     note = Note(0, 60, 1, 100)
-    track = Track("lead", "serum:Bass/X", (note,))
+    track = Track("lead", "serum:presets/Bass/X", (note,))
     assert Song(120, (track,)).tracks == (track,)
     for args in (
         ("bad name", "serum", (note,)),

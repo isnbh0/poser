@@ -6,50 +6,71 @@ import numpy as np
 import pytest
 from pedalboard.io import ReadableAudioFile
 
-from poser.adapters.pedalboard.config import PedalboardConfig
 from poser.adapters.pedalboard.formats import PRESET_FORMATS
 from poser.adapters.pedalboard.instrument import PedalboardInstrument
+from poser.cli.common import RENDER_TIMEOUT_S
+from poser.compose import Composition, load
+from poser.core.analysis import analyze_song
 from poser.core.audio import SAMPLE_RATE
-from poser.core.names import Identifier
-from poser.plugin_check import PluginSpec, load_config
+from poser.core.names import SongId
+from poser.core.rendering import TrackResult, render_song
+from poser.core.report import Report
+from poser.core.song import Song
 
 REPO_DIR = Path(__file__).resolve().parents[1]
 SCAFFOLD_DIR = REPO_DIR / "src" / "poser" / "scaffold"
+REAL_CONFIG = REPO_DIR / "poser.toml"
 
 
-def real_specs() -> list[PluginSpec]:
-    """Return the plugins listed in the repository's local plugin list."""
-    config = REPO_DIR / "plugins.toml"
-    if not config.is_file():
+def real_composition(tmp_path: Path) -> Composition:
+    """Load the repository's local `poser.toml`, keeping sounds and results under `tmp_path`."""
+    if not REAL_CONFIG.is_file():
         pytest.fail(
-            "real-plugin tests read plugins.toml at the repository root; "
-            "copy src/poser/scaffold/plugins.toml there and edit its paths"
+            "real-plugin tests read poser.toml at the repository root; "
+            "copy src/poser/scaffold/poser.toml there and edit its paths"
         )
-    return load_config(config)
+    return load(REAL_CONFIG, tmp_path / "sounds", tmp_path / "renders")
+
+
+def real_render(tmp_path: Path, song: Song, song_id: str) -> list[TrackResult]:
+    """Render a song through the real composition, as `render-song` does."""
+    composition = real_composition(tmp_path)
+    return render_song(
+        song,
+        composition.render_store(),
+        SongId(song_id),
+        composition.instruments(),
+        composition.audio_files(),
+        timeout_s=RENDER_TIMEOUT_S,
+        force=False,
+    )
+
+
+def real_analyze(tmp_path: Path, song: Song, song_id: str) -> Report:
+    """Analyze a rendered song through the real composition, as `analyze-song` does."""
+    composition = real_composition(tmp_path)
+    return analyze_song(
+        song,
+        Path(song_id).stem,
+        composition.render_store(),
+        SongId(song_id),
+        composition.instruments(),
+        composition.audio_files(),
+        composition.record_writer(),
+        composition.analysis_tools(),
+    )
 
 
 REAL_FORMATS = {fmt.suffix: fmt for fmt in PRESET_FORMATS.values()}
 
 
-def real_pedalboard_configs() -> dict[str, PedalboardConfig]:
-    """Return a Pedalboard config for each plugin in the repository's local plugin list."""
+def real_pedalboard_instruments(tmp_path: Path) -> dict[str, PedalboardInstrument]:
+    """Return each Pedalboard instrument in the repository's local `poser.toml`, by name."""
+    instruments = real_composition(tmp_path).instruments()
     return {
-        spec.name: PedalboardConfig(
-            name=Identifier(spec.name),
-            path=Path(spec.path),
-            plugin_name=spec.plugin_name,
-            sources={} if spec.presets is None else {Identifier("presets"): Path(spec.presets)},
-            formats=tuple(PRESET_FORMATS),
-        )
-        for spec in real_specs()
-    }
-
-
-def real_pedalboard_instruments(sounds_dir: Path) -> dict[str, PedalboardInstrument]:
-    """Return a Pedalboard instrument for each plugin in the repository's local plugin list."""
-    return {
-        name: PedalboardInstrument(config, sounds_dir, REAL_FORMATS)
-        for name, config in real_pedalboard_configs().items()
+        name: instrument
+        for name, instrument in instruments.items()
+        if isinstance(instrument, PedalboardInstrument)
     }
 
 

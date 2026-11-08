@@ -51,7 +51,7 @@ def build() -> Song:
     line = notes([degree(key, i) for i in (0, 2, 4, 7, 6, 4, 2, 0)], 0, 0.5, 100, step=0.5)
     lead = Track(
         name="lead",
-        sound="Serum:Leads/LD A Bit of Luck [SD]",
+        sound="serum:presets/Leads/LD A Bit of Luck [SD]",
         notes=humanize(line, seed=1, velocity=8),
         gain=-2,
         cc=(
@@ -61,13 +61,13 @@ def build() -> Song:
     )
     bass = Track(
         name="bass",
-        sound="Serum:Bass/BA Ampology [CFA]",
+        sound="serum:presets/Bass/BA Ampology [CFA]",
         notes=notes([pitch("A2")], 0, 2, 100) + notes([pitch("F2")], 2, 2, 100),
         gain=-2,
     )
     pad = Track(
         name="pad",
-        sound="Serum:Pads/PD Celestial Light [SW]",
+        sound="serum:presets/Pads/PD Celestial Light [SW]",
         notes=notes(chord(pitch("A3"), "min"), 0, 4, 70),
         gain=-8,
     )
@@ -86,17 +86,15 @@ Music helpers, from `poser`; their docstrings give the parameters:
 
 ## Sounds
 
-`uv run list-sounds` lists plugin defaults, saved sounds, and installed presets. A `sound` must
-match a listed name exactly. Choose presets by the role each track plays. Serum's default patch
-neither repeats between renders nor responds to controllers.
-
-`save-sound` opens a plugin window for the owner to shape a sound by hand, so it is not for agents.
+A `sound` is `<instrument>` or `<instrument>:<name>`, such as
+`serum:presets/Bass/BA Ampology [CFA]`, exactly as `uv run list-sounds` prints it. A bare
+instrument name is that instrument's default sound, and each instrument has its own names. Choose
+presets by the role each track plays. This workspace's instruments are under "Instruments here".
 
 ## Rendering
 
-`uv run render-song songs/<name>.py` writes one stem per track to `renders/<song path>/`, such as
-`renders/songs/demo.yaml/` for `songs/demo.yaml`. Stems are cached by their inputs, so only
-changed tracks render, and a gain-only edit renders nothing.
+`uv run render-song songs/<name>.py` writes one stem per track and prints each stem's path. Stems
+are cached by their inputs, so only changed tracks render, and a gain-only edit renders nothing.
 Every track's inputs include the song's tempo and total length, so lengthening the song re-renders
 every track. `--force` re-renders every track. Add `--json` for a machine-readable report.
 
@@ -105,17 +103,19 @@ Exit codes, for both `render-song` and `analyze-song`:
 - 0: everything passed.
 - 1: from `render-song`, a track did not end `rendered`; from `analyze-song`, a track or the mix
   failed. The report says which.
-- 2: the song or plugin list could not be read; the message names the problem.
+- 2: the song or `poser.toml` could not be read; the message names the problem.
 - 3: another run holds this song's lock; wait and rerun.
 
 ## Reading the analysis
 
 `uv run analyze-song songs/<name>.py --json` mixes the stems with each track's `gain` and prints
-the report. Report fields whose meaning is not obvious from their names:
+the report, which names the files it wrote: the mix, and a spectrogram per track and for the mix.
+Every analysis keeps a numbered record, even a failed one, holding the song as analyzed and that
+run's report and images. Report fields whose meaning is not obvious from their names:
 
 | Field | Meaning |
 |---|---|
-| `run` | This analysis's number under `history/` |
+| `run` | This analysis's record number |
 | `song_sha256` | Digest of the song version analyzed; equal digests mean the same song |
 | `track_key` | Digest of the track's render inputs: everything but `gain`, including the song's length |
 | `sound_key` | Digest of the sound itself; it changes when a preset or saved sound file changes |
@@ -142,24 +142,21 @@ Defects fail the analysis: `silent`, for a track or the mix; `clipping`, for mix
 full scale; and `headroom`, for a mix peak above -1 dBFS. A section's defects and errors also
 fail the analysis.
 
-Results live in `renders/<song path>/`. `analysis/` and `mix/` exist only when every track
-analyzed:
+`run` and `song_sha256` tell versions apart; `track_key` and `sound_key` show which tracks
+changed.
 
-- `analysis/report.json` and `analysis/<track>.png`, one spectrogram per track.
-- `mix/mix.wav` and `mix/mix.png`. The PNGs are images you can view.
-- `history/<n>/`, one record per analysis, written even when the analysis fails: the song as
-  `song.yaml`, also for a script song, `report.json`, and the spectrograms.
-  `run` and `song_sha256` tell versions apart; `track_key` and `sound_key` show which tracks
-  changed.
+## Commands
+
+- `uv run render-song` and `uv run analyze-song`: render and analyze a song, as above.
+- `uv run list-sounds`: every sound a song can name, with a description.
+- `uv run check-instruments`: whether each instrument loads, sounds, and repeats.
+- `uv run update-guide`: rewrite this guide after `poser.toml` changes.
+- `uv run save-sound`: for the owner, who shapes a sound by hand and saves it; not for agents.
+- `uv run init-workspace`: makes a new workspace; not needed here.
 
 ## Judging a revision
 
 Analysis finds defects and measures; it does not say a song is good. Compare a revision against an
-earlier history record. Treat a band or bar
-difference under 1 dB as possible render noise.
-
-Controllers do nothing in Serum here except CC 1, the mod wheel, in presets that route it. CC 1 on
-`Serum:Leads/LD A Bit of Luck [SD]` is confirmed. On another preset, compare history records with
-the lane low and high to see whether it routes CC 1.
+earlier record. Treat a band or bar difference under 1 dB as possible render noise.
 
 Keep the mix peak at or below -1 dBFS by lowering track `gain`.

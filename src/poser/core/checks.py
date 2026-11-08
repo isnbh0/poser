@@ -84,26 +84,24 @@ def _note_peaks_dbfs(render: np.ndarray) -> list[float]:
     return [measure_peak_dbfs(render[..., start:stop]) for start, stop in _note_windows()]
 
 
-def analyze_check(first: Audio | np.ndarray, second: Audio | np.ndarray) -> CheckAnalysis:
-    """Measure two channels-first renders of the check pattern.
+def analyze_check(first: Audio, second: Audio) -> CheckAnalysis:
+    """Measure two renders of the check pattern.
 
     Peaks report the quieter of the two renders, so a plugin that goes silent on reload is caught.
-    An `Audio` is always finite; an array may not be, and then the status is `non_finite`.
     """
-    first = np.asarray(first.samples if isinstance(first, Audio) else first, dtype=np.float64)
-    second = np.asarray(second.samples if isinstance(second, Audio) else second, dtype=np.float64)
+    first_samples = np.asarray(first.samples, dtype=np.float64)
+    second_samples = np.asarray(second.samples, dtype=np.float64)
+    difference = np.abs(first_samples - second_samples).max(initial=0.0)
 
-    both_finite = np.isfinite(first) & np.isfinite(second)
-    difference = np.abs(first[both_finite] - second[both_finite]).max(initial=0.0)
-
-    peak_dbfs = min(measure_peak_dbfs(first), measure_peak_dbfs(second))
+    peak_dbfs = min(measure_peak_dbfs(first_samples), measure_peak_dbfs(second_samples))
     note_peaks_dbfs = tuple(
-        min(a, b) for a, b in zip(_note_peaks_dbfs(first), _note_peaks_dbfs(second), strict=True)
+        min(a, b)
+        for a, b in zip(
+            _note_peaks_dbfs(first_samples), _note_peaks_dbfs(second_samples), strict=True
+        )
     )
 
-    if not bool(both_finite.all()):
-        status = CheckStatus.NON_FINITE
-    elif peak_dbfs < SILENCE_DBFS:
+    if peak_dbfs < SILENCE_DBFS:
         status = CheckStatus.SILENT
     elif min(note_peaks_dbfs) < SILENCE_DBFS:
         status = CheckStatus.MISSING_NOTES
@@ -114,7 +112,7 @@ def analyze_check(first: Audio | np.ndarray, second: Audio | np.ndarray) -> Chec
         status=status,
         peak_dbfs=peak_dbfs,
         note_peaks_dbfs=note_peaks_dbfs,
-        clipped=bool((np.abs(first) >= 1.0).any() or (np.abs(second) >= 1.0).any()),
-        repeatable=bool(np.array_equal(first, second)),
+        clipped=bool((np.abs(first_samples) >= 1.0).any() or (np.abs(second_samples) >= 1.0).any()),
+        repeatable=bool(np.array_equal(first_samples, second_samples)),
         max_difference_dbfs=to_dbfs(float(difference)),
     )

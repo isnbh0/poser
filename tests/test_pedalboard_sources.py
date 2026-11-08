@@ -281,7 +281,6 @@ def test_describe_raises_for_an_unreadable_saved_sound(tmp_path: Path) -> None:
         ("poser.adapters.pedalboard.formats", {"pedalboard", "mido"}),
         ("poser.adapters.pedalboard.state", {"pedalboard", "mido"}),
         ("poser.adapters.pedalboard.config", {"pedalboard", "mido"}),
-        ("poser.presets", {"pedalboard", "mido"}),
         # The instrument names the worker's functions as targets, which imports mido, but no
         # plugin code loads until a worker runs.
         ("poser.adapters.pedalboard.instrument", {"pedalboard"}),

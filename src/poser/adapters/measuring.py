@@ -4,12 +4,16 @@ It relies on the port's precondition that audio is at least `TAIL_S` long.
 """
 
 import math
+from collections.abc import Mapping
 
 import numpy as np
 import pyloudnorm
 from scipy import signal
 
+from poser.adapters.loading import refuse_options
 from poser.core.audio import SAMPLE_RATE, Audio
+from poser.core.jsonvalue import JsonValue
+from poser.core.ports import AdapterContext
 from poser.core.report import BANDS, Levels
 
 POWER_FLOOR = 1e-12  # -120 dB, which keeps the logarithm finite for silence.
@@ -44,3 +48,9 @@ class StandardMeasurer:
     def measure(self, audio: Audio) -> Levels:
         samples = audio.samples
         return Levels(integrated_lufs(samples), bands_db(samples))
+
+
+def create(options: Mapping[str, JsonValue], _context: AdapterContext) -> StandardMeasurer:
+    """The factory for `standard`. Takes no options."""
+    refuse_options(options)
+    return StandardMeasurer()

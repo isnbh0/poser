@@ -23,12 +23,13 @@ dependencies = [
 Repository = "https://github.com/isnbh0/poser"
 
 [project.scripts]
-check-plugins = "poser.plugin_check:main"
-render-song = "poser.render:main"
-analyze-song = "poser.analyze:main"
-save-sound = "poser.sounds:save_main"
-list-sounds = "poser.sounds:list_main"
-init-workspace = "poser.init_workspace:main"
+render-song = "poser.cli.render:main"
+analyze-song = "poser.cli.analyze:main"
+check-instruments = "poser.cli.check:main"
+list-sounds = "poser.cli.sounds:list_main"
+save-sound = "poser.cli.sounds:save_main"
+init-workspace = "poser.cli.init_workspace:main"
+update-guide = "poser.cli.guide:main"
 
 [build-system]
 requires = ["uv_build>=0.13.6,<0.14.0"]

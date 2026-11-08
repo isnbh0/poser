@@ -1,9 +1,0 @@
-# Plugins that `check-plugins` tests. Add an entry to check another plugin.
-# Multi-plugin bundles also need `plugin_name`. `presets` names a folder of .fxp presets that
-# songs can use as `<plugin name>:<path without .fxp>`.
-
-# Serum's default macOS install paths. Change them to match this machine.
-[[plugin]]
-name = "Serum"
-path = "/Library/Audio/Plug-Ins/VST3/Serum.vst3"
-presets = "/Library/Audio/Presets/Xfer Records/Serum Presets/Presets"

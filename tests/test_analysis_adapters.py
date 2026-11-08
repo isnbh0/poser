@@ -91,7 +91,14 @@ def test_sine_band_level_leads_every_other_band(frequency: float, band: str) -> 
     assert levels[band] >= max(others) + 20
 
 
-# The values below are what `poser.analyze` measured before the measurer became an adapter.
+# The values below pin the measurements, so any change to what the measurer reports shows here.
+
+
+def test_ebu_tech_3341_case_1_measures_minus_23_lufs() -> None:
+    # Stereo 1000 Hz sine at -23.0 dBFS per channel, in phase, for 20 seconds.
+    levels = StandardMeasurer().measure(Audio(sine(1000.0, 20.0, 10 ** (-23.0 / 20))))
+
+    assert levels.integrated_lufs == pytest.approx(-23.0, abs=0.1)
 
 
 def test_standard_measurer_measures_a_sine() -> None:

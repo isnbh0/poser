@@ -2,10 +2,12 @@
 
 import os
 import tempfile
+from collections.abc import Mapping
 from pathlib import Path
 
 from pedalboard.io import ReadableAudioFile, WriteableAudioFile
 
+from poser.adapters.loading import refuse_options
 from poser.core.audio import (
     NUM_CHANNELS,
     SAMPLE_RATE,
@@ -14,8 +16,9 @@ from poser.core.audio import (
     AudioProblem,
     make_audio,
 )
+from poser.core.jsonvalue import JsonValue
 from poser.core.names import Suffix
-from poser.core.ports import AudioFileError
+from poser.core.ports import AdapterContext, AudioFileError
 
 
 class WavAudioFiles:
@@ -73,3 +76,9 @@ class WavAudioFiles:
             temp.replace(path)
         finally:
             temp.unlink(missing_ok=True)
+
+
+def create(options: Mapping[str, JsonValue], _context: AdapterContext) -> WavAudioFiles:
+    """The factory for `wav`. Takes no options."""
+    refuse_options(options)
+    return WavAudioFiles()

@@ -1,0 +1,19 @@
+# Instruments that songs name in a track's `sound`. Each table's name is the instrument's name.
+# `adapter = "pedalboard"` loads a VST3 or Audio Unit plugin from `path`. A multi-plugin bundle
+# also needs `plugin_name`. Each entry under `sources` names a folder of presets, which songs use
+# as `<instrument>:<source>/<path without suffix>`. Sounds saved with `save-sound` are the
+# source `saved`. `guide` is a note about the instrument for the workspace guide; run
+# `uv run update-guide` after changing this file.
+
+# Serum's default macOS install paths. Change them to match this machine.
+[instruments.serum]
+adapter = "pedalboard"
+path = "/Library/Audio/Plug-Ins/VST3/Serum.vst3"
+guide = """
+Serum's default patch neither repeats between renders nor responds to controllers. Controllers \
+do nothing in Serum here except CC 1, the mod wheel, in presets that route it. CC 1 on \
+`serum:presets/Leads/LD A Bit of Luck [SD]` is confirmed. On another preset, compare history \
+records with the lane low and high to see whether it routes CC 1."""
+
+[instruments.serum.sources]
+presets = "/Library/Audio/Presets/Xfer Records/Serum Presets/Presets"

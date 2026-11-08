@@ -3,6 +3,7 @@
 It relies on the port's precondition that audio is at least `TAIL_S` long.
 """
 
+from collections.abc import Mapping
 from pathlib import Path
 
 import numpy as np
@@ -10,8 +11,11 @@ from matplotlib import mlab
 from matplotlib.backends.backend_agg import FigureCanvasAgg
 from matplotlib.figure import Figure
 
+from poser.adapters.loading import refuse_options
 from poser.core.audio import SAMPLE_RATE, Audio
+from poser.core.jsonvalue import JsonValue
 from poser.core.names import Suffix
+from poser.core.ports import AdapterContext
 
 SPECGRAM_NFFT = 2048
 SPECGRAM_NOVERLAP = 1536
@@ -75,3 +79,9 @@ class SpectrogramVisualizer:
 
     def draw(self, audio: Audio, path: Path, title: str) -> None:
         write_spectrogram(audio.samples, path, title)
+
+
+def create(options: Mapping[str, JsonValue], _context: AdapterContext) -> SpectrogramVisualizer:
+    """The factory for `spectrogram`. Takes no options."""
+    refuse_options(options)
+    return SpectrogramVisualizer()

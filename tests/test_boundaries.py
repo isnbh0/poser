@@ -24,28 +24,10 @@ USE_CASES = (
 )
 DYNAMIC_IMPORT_LOADERS = {"poser.adapters.loading", "poser.adapters.isolation"}
 ADAPTER_LIBRARIES = ("pedalboard", "mido", "yaml", "matplotlib", "scipy", "pyloudnorm")
-LEGACY_MODULES = (
-    "poser.render",
-    "poser.analyze",
-    "poser.plugin_check",
-    "poser.sounds",
-    "poser.worker",
-    "poser.workspace",
-    "poser.init_workspace",
-    "poser.presets",
-)
-# Phase 4 deletes the legacy commands, leaving the Pedalboard worker as the only plugin code.
-PLUGIN_LOADERS = {
-    "poser/adapters/pedalboard/worker.py",
-    "poser/render.py",
-    "poser/plugin_check.py",
-    "poser/sounds.py",
-}
-FCNTL_USERS = {
-    "poser/adapters/filestore.py",
-    "poser/adapters/pedalboard/instrument.py",
-    "poser/render.py",
-}
+CLI = POSER / "cli"
+COMPOSE = POSER / "compose.py"
+PLUGIN_LOADERS = {"poser/adapters/pedalboard/worker.py"}
+FCNTL_USERS = {"poser/adapters/filestore.py", "poser/adapters/pedalboard/instrument.py"}
 LIBRARY_HOMES = {
     "pyloudnorm": {"poser/adapters/measuring.py"},
     "scipy": {"poser/adapters/measuring.py"},
@@ -276,13 +258,15 @@ def test_boundary_check_can_fail(tmp_path: Path) -> None:
     named.write_text("from importlib import import_module\n")
     assert has_dynamic_import(named)
 
-    legacy = tmp_path / "legacy.py"
-    legacy.write_text("from poser.presets import preset_files\nfrom poser import sounds\n")
-    assert adapter_refuses("poser.presets")
-    assert {"poser.presets", "poser.sounds"} <= {
-        name for name in adapter_edges(legacy) if adapter_refuses(name)
+    command = tmp_path / "command.py"
+    command.write_text("from poser.cli import common\nfrom poser import compose\n")
+    assert {"poser.cli.common", "poser.compose"} <= {
+        name for name in adapter_edges(command) if adapter_refuses(name)
     }
     assert not adapter_refuses("poser.adapters.isolation")
+    assert is_adapter("poser.adapters")
+    assert is_adapter("poser.adapters.wav")
+    assert not is_adapter("poser.adaptersx")
 
     plugins = tmp_path / "plugins.py"
     plugins.write_text("import mido\nfrom pedalboard import load_plugin\nimport pedalboard.io\n")
@@ -298,10 +282,7 @@ def test_boundary_check_can_fail(tmp_path: Path) -> None:
 
 
 def adapter_refuses(name: str) -> bool:
-    """Return whether an adapter may not import the module `name`: a command, the composition,
-    or a legacy module."""
-    if name in LEGACY_MODULES:
-        return True
+    """Return whether an adapter may not import the module `name`: a command or the composition."""
     return any(
         name == banned or name.startswith(f"{banned}.") for banned in ("poser.cli", "poser.compose")
     )
@@ -341,10 +322,42 @@ def files_importing(test: Callable[[str], bool]) -> set[str]:
     }
 
 
+def is_adapter(name: str) -> bool:
+    return name == "poser.adapters" or name.startswith("poser.adapters.")
+
+
+def test_commands_import_no_adapter() -> None:
+    refused = [
+        f"{module_name(path)} imports {name}"
+        for path in source_files(CLI)
+        for name in sorted(adapter_edges(path))
+        if is_adapter(name)
+    ]
+    assert source_files(CLI)
+    assert not refused
+
+
+def test_composition_imports_only_the_adapter_loader() -> None:
+    found = {name for name in adapter_edges(COMPOSE) if is_adapter(name)}
+    assert found == {"poser.adapters.loading"}
+
+
+def test_importing_the_composition_loads_no_adapter_library() -> None:
+    script = "import json, sys\nimport poser.compose\nprint(json.dumps(sorted(sys.modules)))\n"
+    result = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True, check=True
+    )
+    loaded = json.loads(result.stdout)
+    assert "poser.compose" in loaded
+    assert not [
+        name
+        for name in loaded
+        if any(name == lib or name.startswith(f"{lib}.") for lib in ADAPTER_LIBRARIES)
+    ]
+
+
 def test_only_plugin_workers_load_plugins() -> None:
-    loaders = files_importing(is_plugin_code)
-    assert loaders <= PLUGIN_LOADERS, sorted(loaders - PLUGIN_LOADERS)
-    assert "poser/adapters/pedalboard/worker.py" in loaders
+    assert files_importing(is_plugin_code) == PLUGIN_LOADERS
 
 
 def test_analysis_libraries_stay_in_their_adapters() -> None:
@@ -355,7 +368,7 @@ def test_analysis_libraries_stay_in_their_adapters() -> None:
 
 def test_only_locking_modules_import_fcntl() -> None:
     found = files_importing(lambda name: name.split(".", 1)[0] == "fcntl")
-    assert found <= FCNTL_USERS, sorted(found - FCNTL_USERS)
+    assert found == FCNTL_USERS
 
 
 def test_only_the_wav_adapter_reads_audio_files() -> None:

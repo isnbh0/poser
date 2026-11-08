@@ -31,7 +31,7 @@ def test_valid_song_loads_with_expected_values(tmp_path: Path) -> None:
 
     assert song.bpm == 120
     assert song.tracks == (
-        Track("lead", "Serum", (Note(beat=0, pitch=60, length=1, velocity=100),)),
+        Track("lead", "serum", (Note(beat=0, pitch=60, length=1, velocity=100),)),
     )
 
 
@@ -39,7 +39,7 @@ def test_demo_song_loads_with_two_serum_preset_tracks_and_eight_notes() -> None:
     song = load_song(SCAFFOLD_DIR / "demo.yaml", SONG_FORMATS)
 
     assert len(song.tracks) == 2
-    assert all(track.sound.startswith("Serum:") for track in song.tracks)
+    assert all(track.sound.startswith("serum:presets/") for track in song.tracks)
     assert sum(len(track.notes) for track in song.tracks) >= 8
 
 
@@ -157,7 +157,7 @@ def test_writing_into_a_missing_directory_is_a_song_error(tmp_path: Path) -> Non
 
 def test_numpy_gain_writes_as_a_plain_float(tmp_path: Path) -> None:
     note = (Note(beat=0, pitch=60, length=1, velocity=100),)
-    song = Song(bpm=120, tracks=(Track("lead", "Serum", note, gain=np.float64(-6)),))
+    song = Song(bpm=120, tracks=(Track("lead", "serum", note, gain=np.float64(-6)),))
     path = tmp_path / "song.yaml"
 
     write_yaml_song(song, path)
@@ -169,7 +169,7 @@ def test_numbers_write_in_one_spelling(tmp_path: Path) -> None:
     def write(beat: float, length: float, bpm: float) -> str:
         note = (Note(beat=beat, pitch=60, length=length, velocity=100),)
         path = tmp_path / "song.yaml"
-        write_yaml_song(Song(bpm=bpm, tracks=(Track("lead", "Serum", note),)), path)
+        write_yaml_song(Song(bpm=bpm, tracks=(Track("lead", "serum", note),)), path)
         return path.read_text()
 
     assert write(0, 1, 120) == write(0.0, np.float64(1.0), 120.0)
@@ -183,7 +183,7 @@ class Pitch(int):
 
 def test_unrepresentable_value_is_a_song_error(tmp_path: Path) -> None:
     note = (Note(beat=0.5, pitch=Pitch(60), length=1, velocity=100),)
-    song = Song(bpm=120, tracks=(Track("lead", "Serum", note),))
+    song = Song(bpm=120, tracks=(Track("lead", "serum", note),))
     with pytest.raises(SongError, match="cannot write"):
         write_yaml_song(song, tmp_path / "song.yaml")
     assert list(tmp_path.iterdir()) == []
@@ -194,7 +194,7 @@ def test_gain_from_yaml_nan_and_inf_is_rejected(tmp_path: Path) -> None:
         path = tmp_path / "song.yaml"
         path.write_text(
             yaml.safe_dump(valid_song()).replace(
-                "  sound: Serum", f"  sound: Serum\n  gain: {text}"
+                "  sound: serum", f"  sound: serum\n  gain: {text}"
             )
         )
         with pytest.raises(SongError, match="gain"):
@@ -232,13 +232,13 @@ def test_script_song_loads_equal_to_the_song_it_builds(tmp_path: Path) -> None:
         """
 def build():
     note = Note(0, 60, 1, 100)
-    return Song(120, (Track("lead", "Serum", (note,), gain=-3),))
+    return Song(120, (Track("lead", "serum", (note,), gain=-3),))
 """,
     )
 
     song = load_song(path, SONG_FORMATS)
 
-    assert song == Song(120, (Track("lead", "Serum", (Note(0, 60, 1, 100),), gain=-3.0),))
+    assert song == Song(120, (Track("lead", "serum", (Note(0, 60, 1, 100),), gain=-3.0),))
 
 
 @pytest.mark.parametrize(
@@ -281,7 +281,7 @@ def test_script_song_is_validated_like_yaml(tmp_path: Path) -> None:
         tmp_path,
         """
 def build():
-    return Song(120, (Track("lead", "Serum", (Note(0, 200, 1, 100),)),))
+    return Song(120, (Track("lead", "serum", (Note(0, 200, 1, 100),)),))
 """,
         "pitch.py",
     )
@@ -291,7 +291,7 @@ def build():
 def build():
     notes = (Note(0, 60, 1, 100),)
     ramp = (ControlChange(0, 1, 0, "linear"),)
-    return Song(120, (Track("lead", "Serum", notes, cc=ramp),))
+    return Song(120, (Track("lead", "serum", notes, cc=ramp),))
 """,
         "ramp.py",
     )
@@ -312,7 +312,7 @@ def build():
 def test_script_and_yaml_with_one_stem_both_load(tmp_path: Path) -> None:
     write_script(
         tmp_path,
-        "def build():\n    return Song(90, (Track('lead', 'Serum', (Note(0, 60, 1, 100),)),))\n",
+        "def build():\n    return Song(90, (Track('lead', 'serum', (Note(0, 60, 1, 100),)),))\n",
         "x.py",
     )
     (tmp_path / "x.yaml").write_text(yaml.safe_dump(valid_song()))
@@ -337,9 +337,9 @@ def test_script_song_that_exits_is_a_song_error(tmp_path: Path, where: str) -> N
     ("build", "problem"),
     [
         ("Song(120, None)", "Song.tracks:"),
-        ('Song(120, (Track("lead", "Serum", None),))', "Track.notes:"),
+        ('Song(120, (Track("lead", "serum", None),))', "Track.notes:"),
         (
-            'Song(120, (Track("lead", "Serum", ((0, 60, 1, 100),)),))',
+            'Song(120, (Track("lead", "serum", ((0, 60, 1, 100),)),))',
             "Track.notes[0]:",
         ),
     ],

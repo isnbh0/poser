@@ -1,0 +1,27 @@
+"""Runs the instrument check on the instruments in the root poser.toml. Deselected by default."""
+
+import math
+from pathlib import Path
+
+import pytest
+from helpers import real_composition
+
+from poser.cli.common import RENDER_TIMEOUT_S
+from poser.core.checking import check_instrument
+from poser.core.checks import CheckStatus
+
+
+@pytest.mark.real_plugins
+def test_each_instrument_returns_a_known_status_with_finite_numbers(tmp_path: Path) -> None:
+    instruments = real_composition(tmp_path).instruments()
+
+    results = [
+        check_instrument(instrument, name, RENDER_TIMEOUT_S)
+        for name, instrument in instruments.items()
+    ]
+
+    assert [result.name for result in results] == list(instruments)
+    for result in results:
+        assert result.status in CheckStatus
+        numbers = [result.peak_dbfs, result.max_difference_dbfs, *(result.note_peaks_dbfs or ())]
+        assert all(math.isfinite(number) for number in numbers if number is not None)

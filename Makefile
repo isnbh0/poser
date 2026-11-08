@@ -1,4 +1,4 @@
-.PHONY: check test-real check-plugins
+.PHONY: check test-real check-instruments
 
 check:
 	uv run ruff format --check .
@@ -9,5 +9,5 @@ check:
 test-real:
 	uv run pytest -m real_plugins
 
-check-plugins:
-	uv run check-plugins
+check-instruments:
+	uv run check-instruments

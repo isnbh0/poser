@@ -22,14 +22,15 @@ import json
 import os
 import shutil
 import tempfile
-from collections.abc import Generator
+from collections.abc import Generator, Mapping
 from contextlib import contextmanager
 from pathlib import Path
 
+from poser.adapters.loading import refuse_options
 from poser.core.cache import Stamp, StampProblem
-from poser.core.jsonvalue import json_object
+from poser.core.jsonvalue import JsonValue, json_object
 from poser.core.names import Identifier, SongId, Suffix, TrackName
-from poser.core.ports import Record, SongBusyError
+from poser.core.ports import AdapterContext, Record, SongBusyError
 from poser.core.song import is_int, is_number
 from poser.core.statuses import StemStatus
 
@@ -293,3 +294,11 @@ class FileRenderStore:
         directory = self._renders_dir / PREVIEWS_DIR / instrument
         directory.mkdir(parents=True, exist_ok=True)
         return directory / f"{name}{self._stem_suffix}"
+
+
+def create(
+    options: Mapping[str, JsonValue], context: AdapterContext, stem_suffix: Suffix
+) -> FileRenderStore:
+    """The factory for `files`: a store under the command's renders directory. Takes no options."""
+    refuse_options(options)
+    return FileRenderStore(context.renders_dir, stem_suffix)

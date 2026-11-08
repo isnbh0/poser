@@ -1,48 +1,47 @@
 # Developing poser
 
 poser renders songs written as code through VST instruments and measures the result. This guide is
-for changing poser itself. The composer guide that every workspace receives as its `AGENTS.md` is
-`src/poser/scaffold/guide.md`.
+for changing poser itself. A workspace's `AGENTS.md` is composed by `update-guide` from the core
+guide, `src/poser/scaffold/guide.md`, the instrument notes in its `poser.toml`, and the guide text
+of each adapter it uses.
 
 ## Layout
 
-- `src/poser/__init__.py`: the composer API that song scripts import, re-exported from the core.
-- `src/poser/core/`: the application. Model modules hold values and pure functions (`names`,
-  `jsonvalue`, `song`, `music`, `sounds`, `audio`, `performance`, `statuses`, `cache`, `report`,
-  `checks`); `ports` declares the protocols adapters implement; use-case modules (`loading`,
-  `rendering`, `checking`, `capturing`, and `analysis`) run the model through ports.
-- `src/poser/adapters/`: implementations of the ports, such as `song_formats` (YAML and script
-  songs) and `wav` (stem files).
-- `src/poser/cli/`: what the commands share, such as exit codes and `align_rows`.
-- `src/poser/`: the command modules (`init_workspace`, `plugin_check`, `render`, `analyze`, and
-  `sounds`, which holds `save-sound` and `list-sounds`) and the modules they share (`presets`,
-  `workspace`, and `worker`).
-- `src/poser/scaffold/`: package data that `uv run init-workspace` writes into a new workspace.
-- `tests/`: the tests. Tests marked `real_plugins` load real plugins. `tests/contracts.py` holds
-  the checks every adapter of a port must pass, and `tests/fakes.py` holds a pure-Python fake of
-  every port, which passes them.
+- `src/poser/core/`: the models, the ports (`core/ports.py`), and the use cases (`loading`,
+  `rendering`, `checking`, `capturing`, and `analysis`). The core imports only the standard
+  library, numpy, and itself.
+- `src/poser/adapters/`: the adapters behind the ports, such as the Pedalboard instrument in
+  `adapters/pedalboard/`, the file render store, and the analysis adapters.
+- `src/poser/compose.py`: the composition root. It reads `poser.toml` and builds the adapters it
+  selects, by built-in name or import path.
+- `src/poser/cli/`: the commands, which load the composition and run a use case on it, and
+  `cli/workspace.py`, which finds the workspace.
+- `src/poser/scaffold/`: package data that `uv run init-workspace` writes into a new workspace,
+  and the core guide.
+- `tests/`: the tests. Tests marked `real_plugins` load real plugins.
 
 ## Rules
 
-- `poser.core` imports only the standard library, numpy, and `poser.core`. Within it, model
-  modules import only model modules, `ports` imports only model modules, and a use case imports
-  model modules, `ports`, and use cases earlier in `USE_CASES`. No module uses a relative import,
-  the import graph has no cycle, and package `__init__.py` files hold no imports except the
-  composer API. `tests/test_boundaries.py` enforces these rules.
-- Core value types check their rules in their constructor and raise `ValueError`, so code that
-  receives one never checks again.
 - `tests/test_guide.py` checks `src/poser/scaffold/guide.md` against the code. A change to song
   keys, report fields, statuses, bands, music helpers, or scripts updates the guide in the same
-  commit.
-- Library functions take explicit paths. Only command entry points search for a workspace, through
-  `poser.workspace`.
-- Plugin code runs only in worker subprocesses (`poser.worker.run_isolated`).
+  commit. The core guide holds only text true in every workspace; text about one adapter is that
+  adapter's `guide`, and text about one instrument is its `guide` in `poser.toml`.
+- Library functions take explicit paths. Only command entry points search for a workspace,
+  through `poser.cli.workspace`.
+- Commands import no adapter; `poser.compose` imports only the core and
+  `poser.adapters.loading`, and names poser's own adapters by import path.
+- Plugin code runs only in worker subprocesses, which the Pedalboard adapter starts through
+  `poser.adapters.isolation`.
+- Building an adapter loads no plugin, starts no process, writes no file, and reads nothing but
+  its arguments and imported modules. Work with side effects waits for a method call, and a
+  `guide` property reads only package data, so a guide composes on a machine without the plugins.
 - `typing.Any` is banned (ruff `TID251`), and the line length is 100.
 
 ## Checking
 
 - `make check` runs format, lint, types, and the tests that need no plugins.
-- `make test-real` loads the plugins listed in a root `plugins.toml`. To create one, copy
-  `src/poser/scaffold/plugins.toml` and edit its paths.
+- `make test-real` loads the instruments in a root `poser.toml`. To create one, copy
+  `src/poser/scaffold/poser.toml` and edit its paths.
+- `make check-instruments` checks that each instrument in the root `poser.toml` loads and sounds.
 - To try the commands, run `uv --project <this repo> run init-workspace` in a scratch directory
   outside the repo, then run the other commands there the same way.

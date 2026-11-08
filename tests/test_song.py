@@ -26,7 +26,7 @@ def valid_note() -> dict[str, object]:
 
 
 def valid_track(name: str = "lead") -> dict[str, object]:
-    return {"name": name, "sound": "Serum", "notes": [valid_note()]}
+    return {"name": name, "sound": "serum", "notes": [valid_note()]}
 
 
 def valid_song() -> dict[str, object]:
@@ -85,7 +85,7 @@ def set_note(song: dict[str, object], key: str, value: object) -> None:
         (lambda s: set_track(s, "name", 7), "tracks[0].name"),
         (lambda s: set_track(s, "engine", "pedalboard"), "tracks[0]: unknown key 'engine'"),
         (lambda s: set_track(s, "sound", "bad name"), "tracks[0].sound: must be <instrument>"),
-        (lambda s: set_track(s, "sound", "Serum:"), "tracks[0].sound"),
+        (lambda s: set_track(s, "sound", "serum:"), "tracks[0].sound"),
         (lambda s: set_track(s, "sound", ":preset"), "tracks[0].sound"),
         (lambda s: set_track(s, "sound", ""), "tracks[0].sound"),
         (lambda s: set_note(s, "pitch", -1), "notes[0].pitch"),
@@ -141,8 +141,8 @@ def helper_song() -> Song:
     return Song(
         bpm=96.5,
         tracks=(
-            Track("lead", "Serum:Leads/LD A Bit of Luck [SD]", lead),
-            Track("pad", "Serum", notes(progression, 0, 4, 70)),
+            Track("lead", "serum:presets/Leads/LD A Bit of Luck [SD]", lead),
+            Track("pad", "serum", notes(progression, 0, 4, 70)),
         ),
     )
 
@@ -208,8 +208,8 @@ def gain_song() -> Song:
     return Song(
         bpm=120,
         tracks=(
-            Track("lead", "Serum", note, gain=-6),
-            Track("bass", "Serum", note),
+            Track("lead", "serum", note, gain=-6),
+            Track("bass", "serum", note),
         ),
     )
 
@@ -228,11 +228,11 @@ def test_song_to_data_is_the_song_format() -> None:
         "tracks": [
             {
                 "name": "lead",
-                "sound": "Serum",
+                "sound": "serum",
                 "gain": -6.0,
                 "notes": [note],
             },
-            {"name": "bass", "sound": "Serum", "notes": [note]},
+            {"name": "bass", "sound": "serum", "notes": [note]},
         ],
     }
 
@@ -367,8 +367,8 @@ def cc_track_song() -> Song:
     return Song(
         120,
         (
-            Track("lead", "Serum", (note,), gain=-6.0, cc=changes),
-            Track("bass", "Serum", (note,)),
+            Track("lead", "serum", (note,), gain=-6.0, cc=changes),
+            Track("bass", "serum", (note,)),
         ),
     )
 
@@ -393,7 +393,7 @@ def construct[T](cls: type[T], **values: object) -> T:
 def make_track(**changes: object) -> Track:
     values: dict[str, object] = {
         "name": "lead",
-        "sound": "Serum",
+        "sound": "serum",
         "notes": (Note(0, 60, 1, 100),),
     }
     return construct(Track, **(values | changes))
@@ -502,10 +502,10 @@ def test_sound_that_is_not_a_reference_is_a_song_error() -> None:
 @pytest.mark.parametrize(
     ("sound", "ref"),
     [
-        ("Serum", SoundRef(Identifier("Serum"))),
+        ("serum", SoundRef(Identifier("serum"))),
         (
-            "Serum:Leads/LD A Bit of Luck [SD]",
-            SoundRef(Identifier("Serum"), "Leads/LD A Bit of Luck [SD]"),
+            "serum:presets/Leads/LD A Bit of Luck [SD]",
+            SoundRef(Identifier("serum"), "presets/Leads/LD A Bit of Luck [SD]"),
         ),
         ("serum-2:a:b", SoundRef(Identifier("serum-2"), "a:b")),
     ],

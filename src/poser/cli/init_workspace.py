@@ -5,16 +5,22 @@ import sys
 from importlib.resources import files
 from pathlib import Path
 
+from poser.cli.guide import GUIDE_NAME, guide_path, workspace_guide, write_guide
+from poser.cli.workspace import CONFIG_NAME, Workspace
+from poser.compose import load
+from poser.core.ports import ConfigError
+
 EXIT_OK = 0
 EXIT_CONFLICT = 2
 
 # Each scaffold resource, by its name in `poser/scaffold/`, and where it goes in a workspace.
 SCAFFOLD_FILES = {
-    "guide.md": "AGENTS.md",
     "claude.md": "CLAUDE.md",
-    "plugins.toml": "plugins.toml",
+    CONFIG_NAME: CONFIG_NAME,
     "demo.yaml": "songs/demo.yaml",
 }
+# Composed from poser's guide and the new poser.toml, as `update-guide` does.
+WRITTEN_FILES = (GUIDE_NAME, *SCAFFOLD_FILES.values())
 GITIGNORE_RESOURCE = "gitignore"  # Merged into .gitignore, never refused.
 
 
@@ -41,7 +47,7 @@ def merge_gitignore(path: Path) -> None:
 
 def conflicts(directory: Path) -> list[str]:
     """Describe each existing path that stops the scaffold from being written whole."""
-    targets = [directory / target for target in SCAFFOLD_FILES.values()]
+    targets = [directory / target for target in WRITTEN_FILES]
     folders = sorted({directory, *(target.parent for target in targets)})
     problems = [f"{folder} is not a directory" for folder in folders if folder.is_file()]
     problems += [f"{target} exists" for target in targets if target.exists()]
@@ -51,8 +57,8 @@ def conflicts(directory: Path) -> list[str]:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="init-workspace",
-        description="Write a composer guide, an example plugin list, and a demo song into a "
-        "directory, making it a workspace.",
+        description="Write a composer guide, an example workspace config, and a demo song into "
+        "a directory, making it a workspace.",
     )
     parser.add_argument(
         "directory",
@@ -75,8 +81,15 @@ def main(argv: list[str] | None = None) -> int:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(scaffold_bytes(name))
     merge_gitignore(directory / ".gitignore")
+    workspace = Workspace(directory)
+    try:
+        composition = load(workspace.config, workspace.sounds_dir, workspace.renders_dir)
+        write_guide(guide_path(workspace.config), workspace_guide(composition))
+    except ConfigError as error:
+        print(f"init-workspace: {error}", file=sys.stderr)
+        return EXIT_CONFLICT
 
-    for target in SCAFFOLD_FILES.values():
+    for target in WRITTEN_FILES:
         print(target)
-    print("Edit plugins.toml to match this machine's plugins, then run: uv run check-plugins")
+    print(f"Edit {CONFIG_NAME} to match this machine's plugins, then run: uv run check-instruments")
     return EXIT_OK

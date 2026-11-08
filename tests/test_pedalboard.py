@@ -33,6 +33,7 @@ from poser.adapters.pedalboard.state import build_state, encode_state
 from poser.adapters.pedalboard.worker import (
     capture_job,
     performance_messages,
+    play,
     render_duration_s,
     render_job,
 )
@@ -41,6 +42,7 @@ from poser.core.jsonvalue import Json, JsonValue
 from poser.core.names import Identifier, Suffix
 from poser.core.performance import Control, NoteOff, NoteOn, Performance, performance_to_data
 from poser.core.ports import (
+    AdapterContext,
     Captured,
     CaptureFailure,
     CaptureRequest,
@@ -967,3 +969,128 @@ def test_messages_carry_every_event_field_in_order() -> None:
 @pytest.mark.parametrize("samples", [1, 240000, 485925, 3600 * SAMPLE_RATE])
 def test_render_duration_gives_exactly_the_samples_after_truncation(samples: int) -> None:
     assert int(render_duration_s(samples) * SAMPLE_RATE) == samples
+
+
+# The factory
+
+
+TEXT_FORMATS = """
+from pathlib import Path
+
+from poser.core.names import Suffix
+
+
+class TextFormat:
+    suffix = Suffix(".txt")
+
+    def read_state(self, path):
+        return path.read_bytes()
+
+    def describe(self, path):
+        return path.read_text().strip()
+
+
+def text_format():
+    return TextFormat()
+
+
+def fxp_too():
+    fmt = TextFormat()
+    fmt.suffix = Suffix(".fxp")
+    return fmt
+
+
+def not_a_format():
+    return object()
+
+
+def plain_suffix():
+    fmt = TextFormat()
+    fmt.suffix = ".txt"
+    return fmt
+"""
+
+
+def format_module(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> str:
+    name = f"preset_formats_{tmp_path.name.replace('-', '_')}"
+    (tmp_path / f"{name}.py").write_text(TEXT_FORMATS)
+    monkeypatch.syspath_prepend(str(tmp_path))
+    return name
+
+
+def create_serum(tmp_path: Path, formats: list[JsonValue]) -> PedalboardInstrument:
+    options: dict[str, JsonValue] = {
+        "path": "Serum.vst3",
+        "sources": {"presets": "presets"},
+        "formats": formats,
+    }
+    context = AdapterContext(tmp_path, tmp_path / "sounds", tmp_path / "renders")
+    return instrument_module.create(SERUM, options, context)
+
+
+def test_create_scans_the_suffix_of_a_format_named_by_import_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = format_module(tmp_path, monkeypatch)
+    (tmp_path / "presets").mkdir()
+    (tmp_path / "presets" / "Warm.txt").write_text("a warm pad\n")
+    (tmp_path / "presets" / "Bright.fxp").write_bytes(fxp_bytes(b"state"))
+
+    made = create_serum(tmp_path, [f"{module}:text_format"])
+
+    assert isinstance(made, PedalboardInstrument)
+    entries = made.sounds().entries
+    assert [(str(entry.ref), entry.description) for entry in entries[1:]] == [
+        ("serum:presets/Warm", "a warm pad")
+    ]
+    assert not (tmp_path / "sounds").exists()
+    assert not (tmp_path / "renders").exists()
+
+
+@pytest.mark.parametrize(
+    ("entry", "message"),
+    [
+        ("vital", "unknown preset format 'vital'; use one of "),
+        ("{module}:not_a_format", "made a object, which is not a PresetFormat"),
+        ("{module}:plain_suffix", "has suffix '.txt', not a Suffix"),
+    ],
+)
+def test_create_refuses_a_format_it_cannot_use(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, entry: str, message: str
+) -> None:
+    module = format_module(tmp_path, monkeypatch)
+
+    with pytest.raises(ConfigError, match=re.escape(message)) as error:
+        create_serum(tmp_path, [entry.format(module=module)])
+
+    assert str(error.value).startswith("instrument 'serum': ")
+
+
+def test_create_refuses_two_formats_with_one_suffix(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = format_module(tmp_path, monkeypatch)
+
+    with pytest.raises(ConfigError) as error:
+        create_serum(tmp_path, ["fxp", f"{module}:fxp_too"])
+
+    assert str(error.value) == "instrument 'serum': two preset formats read '.fxp' files"
+
+
+def test_play_renders_in_512_sample_blocks_after_a_reset() -> None:
+    class RecordingPlugin:
+        def __call__(self, messages: object, **kwargs: object) -> np.ndarray:
+            self.kwargs = kwargs
+            return np.zeros((2, 100), np.float32)
+
+    plugin = RecordingPlugin()
+
+    play(plugin, PERFORMANCE)  # ty: ignore[invalid-argument-type]
+
+    assert plugin.kwargs == {
+        "duration": render_duration_s(PERFORMANCE.samples),
+        "sample_rate": SAMPLE_RATE,
+        "num_channels": 2,
+        "buffer_size": 512,
+        "reset": True,
+    }
