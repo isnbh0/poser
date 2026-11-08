@@ -3,6 +3,7 @@
 import base64
 import json
 import os
+import subprocess
 import sys
 from collections.abc import Callable, Mapping
 from dataclasses import replace
@@ -18,7 +19,7 @@ from vsti_composer import render
 from vsti_composer.plugin_check import EXIT_ALL_PASS, EXIT_BAD_CONFIG, EXIT_SOME_FAILED, PluginSpec
 from vsti_composer.presets import build_state
 from vsti_composer.render import Outcome, RenderJob, TrackStatus, render_song, render_stem
-from vsti_composer.song import ControlChange, Note, Song, Track, parse_song
+from vsti_composer.song import ControlChange, Note, Song, Track, load_song, parse_song
 
 
 def make_song(*tracks: Track, bpm: float = 120) -> Song:
@@ -332,7 +333,7 @@ def test_failed_track_removes_earlier_stem_and_temp_file(
 
     render_song(make_song(make_track()), "song", SPECS, tmp_path, timeout_s=3)
 
-    assert list(song_dir.iterdir()) == []
+    assert entries(song_dir) == []
 
 
 def test_render_removes_earlier_mix_and_analysis(
@@ -346,7 +347,7 @@ def test_render_removes_earlier_mix_and_analysis(
 
     render_song(make_song(make_track()), "song", SPECS, tmp_path)
 
-    assert sorted(path.name for path in song_dir.iterdir()) == ["lead.json", "lead.wav"]
+    assert entries(song_dir) == ["lead.json", "lead.wav"]
 
 
 def test_unknown_sound_removes_earlier_stem(tmp_path: Path) -> None:
@@ -356,7 +357,7 @@ def test_unknown_sound_removes_earlier_stem(tmp_path: Path) -> None:
 
     render_song(make_song(make_track("lead", "Nope")), "song", SPECS, tmp_path)
 
-    assert list(song_dir.iterdir()) == []
+    assert entries(song_dir) == []
 
 
 def test_worker_claiming_a_stem_it_did_not_write_is_crashed(
@@ -380,7 +381,7 @@ def test_earlier_stem_does_not_vouch_for_a_worker_that_wrote_none(
     (result,) = render_song(make_song(make_track()), "song", SPECS, tmp_path)
 
     assert result.detail == "worker reported a stem it did not write"
-    assert list(song_dir.iterdir()) == []
+    assert entries(song_dir) == []
 
 
 def write_song(tmp_path: Path, name: str = "song.yaml") -> Path:
@@ -399,6 +400,12 @@ def write_song(tmp_path: Path, name: str = "song.yaml") -> Path:
     path = tmp_path / name
     path.write_text(yaml.safe_dump(data))
     return path
+
+
+def entries(song_dir: Path) -> list[str]:
+    """Return the sorted names in a song's render directory, without the lock file every run
+    leaves."""
+    return sorted(path.name for path in song_dir.iterdir() if path.name != render.LOCK_NAME)
 
 
 def write_plugins(tmp_path: Path) -> Path:
@@ -937,7 +944,7 @@ def test_failure_after_a_success_leaves_neither_stem_nor_stamp(
     (result,) = render_song(make_song(LEAD), "song", SPECS, tmp_path, force=True)
 
     assert result.status is TrackStatus.CRASHED
-    assert list((tmp_path / "song").iterdir()) == []
+    assert entries(tmp_path / "song") == []
 
 
 def test_unknown_sound_deletes_stem_and_stamp(
@@ -949,7 +956,7 @@ def test_unknown_sound_deletes_stem_and_stamp(
     (result,) = render_song(make_song(make_track("lead", "Nope")), "song", SPECS, tmp_path)
 
     assert result.status is TrackStatus.UNKNOWN_SOUND
-    assert list((tmp_path / "song").iterdir()) == []
+    assert entries(tmp_path / "song") == []
 
 
 def test_stamp_records_the_keys_and_the_stem_file(
@@ -971,7 +978,7 @@ def test_stamp_records_the_keys_and_the_stem_file(
         "stem_size": info.st_size,
         "stem_mtime_ns": info.st_mtime_ns,
     }
-    assert sorted(path.name for path in song_dir.iterdir()) == ["lead.json", "lead.wav"]
+    assert entries(song_dir) == ["lead.json", "lead.wav"]
 
 
 def test_failed_stamp_write_leaves_no_temporary_file(
@@ -1225,3 +1232,59 @@ def test_worker_sends_controller_changes_in_512_sample_blocks(
         (74, 60, 12000),
     ]
     assert plugin.kwargs["buffer_size"] == 512
+
+
+def test_render_refuses_to_start_while_the_song_is_locked(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    use_worker(tmp_path, monkeypatch, "pass")
+    song_path = write_song(tmp_path, "tune.yaml")
+    song = load_song(song_path)
+    song_dir = (tmp_path / "out" / "tune").resolve()
+
+    with render.song_lock(song_dir):
+        with pytest.raises(render.SongBusyError):
+            render_song(song, "tune", SPECS, tmp_path / "out")
+        assert render.main(cli_args(tmp_path, song_path)) == render.EXIT_SONG_BUSY
+        assert capsys.readouterr().err == (
+            "render-song: another render-song or analyze-song is running on tune\n"
+        )
+        assert not (song_dir / "lead.wav").exists()
+
+    assert statuses(render_song(song, "tune", SPECS, tmp_path / "out")) == [
+        ("lead", TrackStatus.RENDERED)
+    ]
+
+
+LOCK_HOLDER = """
+import sys, time
+from pathlib import Path
+from vsti_composer.render import song_lock
+
+with song_lock(Path(sys.argv[1])):
+    print("locked", flush=True)
+    time.sleep(60)
+"""
+
+
+def test_lock_of_a_killed_run_does_not_block(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    use_worker(tmp_path, monkeypatch, "pass")
+    song = load_song(write_song(tmp_path, "tune.yaml"))
+    song_dir = (tmp_path / "out" / "tune").resolve()
+    holder = subprocess.Popen(
+        [sys.executable, "-c", LOCK_HOLDER, str(song_dir)], stdout=subprocess.PIPE, text=True
+    )
+    try:
+        assert holder.stdout is not None
+        assert holder.stdout.readline() == "locked\n"
+        with pytest.raises(render.SongBusyError), render.song_lock(song_dir):
+            pass
+    finally:
+        holder.kill()
+        holder.wait()
+
+    assert statuses(render_song(song, "tune", SPECS, tmp_path / "out")) == [
+        ("lead", TrackStatus.RENDERED)
+    ]

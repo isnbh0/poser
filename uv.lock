@@ -715,6 +715,7 @@ dependencies = [
     { name = "pedalboard" },
     { name = "pyloudnorm" },
     { name = "pyyaml" },
+    { name = "scipy" },
 ]
 
 [package.dev-dependencies]
@@ -735,6 +736,7 @@ requires-dist = [
     { name = "pedalboard", specifier = ">=0.9.26" },
     { name = "pyloudnorm", specifier = ">=0.2.0" },
     { name = "pyyaml", specifier = ">=6.0.3" },
+    { name = "scipy", specifier = ">=1.18.1" },
 ]
 
 [package.metadata.requires-dev]

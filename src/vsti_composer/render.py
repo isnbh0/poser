@@ -7,12 +7,15 @@ inputs it came from, and a later run reuses a stem whose stamp still matches.
 
 import argparse
 import base64
+import fcntl
 import hashlib
 import json
 import os
 import shutil
 import sys
 import tempfile
+from collections.abc import Generator
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -73,6 +76,10 @@ BUFFER_SIZE = 512
 # Raise whenever rendering code changes what a stem contains for the same inputs, so every
 # existing stamp stops matching.
 RENDER_FORMAT = 2
+
+# Exit code when another render-song or analyze-song holds the song's lock.
+EXIT_SONG_BUSY = 3
+LOCK_NAME = ".lock"
 
 WORKER_FIELDS = {"status", "peak_dbfs", "detail"}
 STAMP_FIELDS = {"track_key", "sound_key", "status", "peak_dbfs", "stem_size", "stem_mtime_ns"}
@@ -158,13 +165,17 @@ class Stamp:
     stem_mtime_ns: int
 
 
-def song_duration_s(song: Song) -> float:
-    """Return the length shared by every stem: the latest note end or controller change across
-    tracks, plus the tail. Pedalboard ignores messages after the end, so changes must fall within.
-    """
+def song_last_beat(song: Song) -> float:
+    """Return the latest note end or controller change across tracks."""
     note_ends = [note.beat + note.length for track in song.tracks for note in track.notes]
-    last_beat = max([*note_ends, *(change.beat for track in song.tracks for change in track.cc)])
-    return song.seconds(last_beat) + TAIL_S
+    return max([*note_ends, *(change.beat for track in song.tracks for change in track.cc)])
+
+
+def song_duration_s(song: Song) -> float:
+    """Return the length shared by every stem: the song's last beat plus the tail. Pedalboard
+    ignores messages after the end, so changes must fall within.
+    """
+    return song.seconds(song_last_beat(song)) + TAIL_S
 
 
 def expected_samples(duration_s: float) -> int:
@@ -366,6 +377,32 @@ def stamp_matches_stem(stamp: Stamp, stem: Path) -> bool:
     return (info.st_size, info.st_mtime_ns) == (stamp.stem_size, stamp.stem_mtime_ns)
 
 
+class SongBusyError(Exception):
+    """Another render-song or analyze-song is running on the same song."""
+
+
+@contextmanager
+def song_lock(song_dir: Path) -> Generator[None]:
+    """Hold a song's lock for a run, or raise SongBusyError at once if another run holds it.
+
+    Two runs on one song would stamp each other's stems and number the same history record. The
+    operating system releases the lock when its descriptor closes, even if the process dies, so
+    the lock file left on disk means nothing by itself.
+    """
+    song_dir.mkdir(parents=True, exist_ok=True)
+    fd = os.open(song_dir / LOCK_NAME, os.O_RDWR | os.O_CREAT, 0o644)
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as error:
+            raise SongBusyError(
+                f"another render-song or analyze-song is running on {song_dir.name}"
+            ) from error
+        yield
+    finally:
+        os.close(fd)
+
+
 def clear_results(song_dir: Path) -> None:
     """Delete a song's mix and analysis, so nothing downstream reads results from older audio."""
     shutil.rmtree(song_dir / MIX_DIR, ignore_errors=True)
@@ -488,9 +525,20 @@ def render_song(
 
     A stem is reused when its stamp matches the file and both the track's and the sound's keys.
     """
-    duration_s = song_duration_s(song)
     song_dir = song_render_dir(output_dir, song_name)
-    song_dir.mkdir(parents=True, exist_ok=True)
+    with song_lock(song_dir):
+        return _render_tracks(song, song_dir, specs, timeout_s, sounds_dir, force)
+
+
+def _render_tracks(
+    song: Song,
+    song_dir: Path,
+    specs: list[PluginSpec],
+    timeout_s: float,
+    sounds_dir: Path,
+    force: bool,
+) -> list[TrackResult]:
+    duration_s = song_duration_s(song)
     clear_results(song_dir)
 
     results = []
@@ -561,7 +609,7 @@ def format_table(results: list[TrackResult]) -> str:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="render-song", description=__doc__)
-    parser.add_argument("song", type=Path, help="song file (YAML)")
+    parser.add_argument("song", type=Path, help="song file (YAML, or a script defining build())")
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG, help="plugin list (TOML)")
     parser.add_argument("--output-dir", type=Path, default=RENDERS_DIR, help="where stems go")
     parser.add_argument("--sounds-dir", type=Path, default=SOUNDS_DIR, help="saved sound files")
@@ -578,9 +626,18 @@ def main(argv: list[str] | None = None) -> int:
         print(f"render-song: {error}", file=sys.stderr)
         return EXIT_BAD_CONFIG
 
-    results = render_song(
-        song, args.song.stem, specs, args.output_dir, sounds_dir=args.sounds_dir, force=args.force
-    )
+    try:
+        results = render_song(
+            song,
+            args.song.stem,
+            specs,
+            args.output_dir,
+            sounds_dir=args.sounds_dir,
+            force=args.force,
+        )
+    except SongBusyError as error:
+        print(f"render-song: {error}", file=sys.stderr)
+        return EXIT_SONG_BUSY
     if args.json:
         print(json.dumps([asdict(result) for result in results], indent=2))
     else:

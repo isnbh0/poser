@@ -3,13 +3,14 @@
 import math
 import os
 import re
+import runpy
 import stat
 import tempfile
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from itertools import pairwise
 from pathlib import Path
-from typing import Literal, NotRequired, TypedDict, TypeGuard
+from typing import Literal, NotRequired, TypedDict, TypeGuard, cast
 
 import yaml
 
@@ -323,7 +324,29 @@ def parse_song(value: object) -> Song:
     return Song(bpm=bpm, tracks=tuple(t for t in tracks if t is not None))
 
 
+YAML_SUFFIXES = (".yaml", ".yml")
+SCRIPT_SUFFIX = ".py"
+
+
 def load_song(path: Path) -> Song:
+    """Load a song from YAML, or from a script whose `build()` returns one.
+
+    A script's song passes the same checks as YAML. A script and a YAML file with the same stem
+    in one directory would share a render directory, so either one is refused.
+    """
+    suffix = path.suffix
+    if suffix not in (*YAML_SUFFIXES, SCRIPT_SUFFIX):
+        raise SongError([f"cannot read {path}: a song is a .yaml, .yml, or .py file"])
+    siblings = [
+        path.with_suffix(other)
+        for other in (*YAML_SUFFIXES, SCRIPT_SUFFIX)
+        if (other == SCRIPT_SUFFIX) != (suffix == SCRIPT_SUFFIX)
+    ]
+    for sibling in siblings:
+        if sibling.exists():
+            raise SongError([f"{path} and {sibling} both define song {path.stem}"])
+    if suffix == SCRIPT_SUFFIX:
+        return _build_song(path)
     try:
         data = yaml.safe_load(path.read_text())
     except (OSError, UnicodeDecodeError, yaml.YAMLError) as error:
@@ -331,9 +354,52 @@ def load_song(path: Path) -> Song:
     return parse_song(data)
 
 
+def _build_song(path: Path) -> Song:
+    # A song script is the owner's or agent's own code, run like any project script.
+    try:
+        build = runpy.run_path(str(path)).get("build")
+    except (Exception, SystemExit) as error:
+        raise SongError([f"cannot run {path}: {type(error).__name__}: {error}"]) from error
+    if not callable(build):
+        raise SongError([f"{path}: must define a function build() that returns a Song"])
+    try:
+        song = build()
+    except (Exception, SystemExit) as error:
+        raise SongError([f"{path}: build() raised {type(error).__name__}: {error}"]) from error
+    if not isinstance(song, Song):
+        raise SongError([f"{path}: build() must return a Song, got {type(song).__name__}"])
+    return parse_song(song_to_data(song))
+
+
+def _plain(value: float) -> float:
+    """Return a number in one spelling, so equal songs write equal text: an integral number as an
+    int, any other as a float. Any other value is returned as it is, for `parse_song` to report.
+    """
+    if not is_number(value):
+        return value
+    return int(value) if float(value).is_integer() else float(value)
+
+
+def _items[T, D](values: Sequence[T], kind: type[T], to_data: Callable[[T], D]) -> list[D]:
+    """Convert a sequence of `kind` to a list of data. A built song may hold anything, so any other
+    value is passed through as it is."""
+    if not isinstance(values, tuple | list):
+        return cast("list[D]", values)
+    return [to_data(value) if isinstance(value, kind) else cast("D", value) for value in values]
+
+
+def _note_to_data(note: Note) -> NoteData:
+    return {
+        "beat": _plain(note.beat),
+        "pitch": note.pitch,
+        "length": _plain(note.length),
+        "velocity": note.velocity,
+    }
+
+
 def _control_to_data(change: ControlChange) -> ControlData:
     data: ControlData = {
-        "beat": change.beat,
+        "beat": _plain(change.beat),
         "control": change.control,
         "value": change.value,
         "shape": change.shape,
@@ -348,12 +414,10 @@ def _track_to_data(track: Track) -> TrackData:
         "name": track.name,
         "engine": track.engine,
         "sound": track.sound,
-        "gain": float(track.gain),
-        "notes": [
-            {"beat": n.beat, "pitch": n.pitch, "length": n.length, "velocity": n.velocity}
-            for n in track.notes
-        ],
-        "cc": [_control_to_data(change) for change in track.cc],
+        # Only a number becomes a float, so `parse_song` still sees a wrong type as it is.
+        "gain": float(track.gain) if is_number(track.gain) else track.gain,
+        "notes": _items(track.notes, Note, _note_to_data),
+        "cc": _items(track.cc, ControlChange, _control_to_data),
     }
     # Defaults are left out, so a song without gains or controller changes keeps its old text.
     if track.gain == 0:
@@ -364,8 +428,15 @@ def _track_to_data(track: Track) -> TrackData:
 
 
 def song_to_data(song: Song) -> SongData:
-    """Return a song as plain data in the song format's key order, the inverse of `parse_song`."""
-    return {"bpm": song.bpm, "tracks": [_track_to_data(track) for track in song.tracks]}
+    """Return a song as plain data in the song format's key order, the inverse of `parse_song`.
+
+    Numbers are written in one spelling, so equal songs give equal data. A value of the wrong type
+    is passed through as it is, so `parse_song` reports it with its path.
+    """
+    return {
+        "bpm": _plain(song.bpm),
+        "tracks": _items(song.tracks, Track, _track_to_data),
+    }
 
 
 def write_song(song: Song, path: Path) -> None:

@@ -16,15 +16,17 @@ from vsti_composer.song import load_song
 def test_demo_song_mixes_and_analyzes(tmp_path: Path) -> None:
     song_path = PROJECT_DIR / "songs" / "demo.yaml"
     song = load_song(song_path)
-    render.render_song(song, "demo", load_config(DEFAULT_CONFIG), tmp_path)
+    specs = load_config(DEFAULT_CONFIG)
+    render.render_song(song, "demo", specs, tmp_path)
 
-    report = analyze_song(song, song_path, tmp_path)
+    report = analyze_song(song, song_path, specs, tmp_path)
 
     for track in report.tracks:
         assert track.status is TrackStatus.ANALYZED, track.detail
         assert Defect.SILENT not in track.defects
     assert report.mix is not None
-    assert Defect.SILENT not in report.mix.defects
+    assert report.mix.defects == []
+    assert all(track.sound_key is not None for track in report.tracks)
     assert report.mix.integrated_lufs is not None
     assert math.isfinite(report.mix.integrated_lufs)
     with ReadableAudioFile(report.mix.path) as mix:  # ty: ignore[no-matching-overload]

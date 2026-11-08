@@ -13,6 +13,7 @@ dependencies = [
     "pedalboard>=0.9.26",
     "pyloudnorm>=0.2.0",
     "pyyaml>=6.0.3",
+    "scipy>=1.18.1",
 ]
 
 [project.scripts]

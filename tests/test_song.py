@@ -367,8 +367,24 @@ def test_numpy_gain_writes_as_a_plain_float(tmp_path: Path) -> None:
     assert load_song(path).tracks[0].gain == -6.0
 
 
+def test_numbers_write_in_one_spelling(tmp_path: Path) -> None:
+    def write(beat: float, length: float, bpm: float) -> str:
+        note = (Note(beat=beat, pitch=60, length=length, velocity=100),)
+        path = tmp_path / "song.yaml"
+        write_song(Song(bpm=bpm, tracks=(Track("lead", "pedalboard", "Serum", note),)), path)
+        return path.read_text()
+
+    assert write(0, 1, 120) == write(0.0, np.float64(1.0), 120.0)
+    assert write(np.float64(0.5), 1, 120) == write(0.5, 1, 120)
+    assert "beat: 0.5" in write(np.float64(0.5), 1, 120)
+
+
+class Pitch(int):
+    pass
+
+
 def test_unrepresentable_value_is_a_song_error(tmp_path: Path) -> None:
-    note = (Note(beat=np.float64(0.5), pitch=60, length=1, velocity=100),)
+    note = (Note(beat=0.5, pitch=Pitch(60), length=1, velocity=100),)
     song = Song(bpm=120, tracks=(Track("lead", "pedalboard", "Serum", note),))
     with pytest.raises(SongError, match="cannot write"):
         write_song(song, tmp_path / "song.yaml")
@@ -581,3 +597,141 @@ def test_song_with_controller_changes_round_trips(tmp_path: Path) -> None:
     write_song(cc_track_song(), path)
 
     assert load_song(path) == cc_track_song()
+
+
+SCRIPT_HEADER = """from vsti_composer.song import ControlChange, Note, Song, Track
+"""
+
+
+def write_script(tmp_path: Path, body: str, name: str = "tune.py") -> Path:
+    path = tmp_path / name
+    path.write_text(SCRIPT_HEADER + body)
+    return path
+
+
+def test_script_song_loads_equal_to_the_song_it_builds(tmp_path: Path) -> None:
+    path = write_script(
+        tmp_path,
+        """
+def build():
+    note = Note(0, 60, 1, 100)
+    return Song(120, (Track("lead", "pedalboard", "Serum", (note,), gain=-3),))
+""",
+    )
+
+    song = load_song(path)
+
+    assert song == Song(
+        120, (Track("lead", "pedalboard", "Serum", (Note(0, 60, 1, 100),), gain=-3.0),)
+    )
+
+
+@pytest.mark.parametrize(
+    ("body", "message"),
+    [
+        ("x = 1\n", "must define a function build() that returns a Song"),
+        ("build = 3\n", "must define a function build() that returns a Song"),
+        ("raise ImportError('no module')\n", "cannot run"),
+        ("def build():\n    raise ValueError('boom')\n", "build() raised ValueError: boom"),
+        ("def build():\n    return {'bpm': 120, 'tracks': []}\n", "must return a Song, got dict"),
+    ],
+)
+def test_broken_script_song_is_one_song_error_naming_the_file(
+    tmp_path: Path, body: str, message: str
+) -> None:
+    path = write_script(tmp_path, body)
+
+    with pytest.raises(SongError) as error:
+        load_song(path)
+
+    assert len(error.value.problems) == 1
+    assert str(path) in error.value.problems[0]
+    assert message in error.value.problems[0]
+
+
+def test_unknown_song_suffix_is_a_song_error(tmp_path: Path) -> None:
+    path = tmp_path / "tune.json"
+    path.write_text("{}")
+
+    with pytest.raises(SongError) as error:
+        load_song(path)
+
+    assert len(error.value.problems) == 1
+    assert str(path) in error.value.problems[0]
+    assert ".yaml, .yml, or .py" in error.value.problems[0]
+
+
+def test_script_song_is_validated_like_yaml(tmp_path: Path) -> None:
+    pitch_path = write_script(
+        tmp_path,
+        """
+def build():
+    return Song(120, (Track("lead", "pedalboard", "Serum", (Note(0, 200, 1, 100),)),))
+""",
+        "pitch.py",
+    )
+    ramp_path = write_script(
+        tmp_path,
+        """
+def build():
+    notes = (Note(0, 60, 1, 100),)
+    ramp = (ControlChange(0, 1, 0, "linear"),)
+    return Song(120, (Track("lead", "pedalboard", "Serum", notes, cc=ramp),))
+""",
+        "ramp.py",
+    )
+
+    with pytest.raises(SongError) as pitch_error:
+        load_song(pitch_path)
+    with pytest.raises(SongError) as ramp_error:
+        load_song(ramp_path)
+
+    assert any(p.startswith("tracks[0].notes[0].pitch:") for p in pitch_error.value.problems)
+    assert any(p.startswith("tracks[0].cc[0].shape:") for p in ramp_error.value.problems)
+
+
+@pytest.mark.parametrize(("loaded", "sibling"), [("x.py", "x.yaml"), ("x.yaml", "x.py")])
+def test_script_and_yaml_with_one_stem_are_a_song_error(
+    tmp_path: Path, loaded: str, sibling: str
+) -> None:
+    write_script(tmp_path, "def build():\n    return None\n", "x.py")
+    (tmp_path / "x.yaml").write_text(yaml.safe_dump(valid_song()))
+
+    with pytest.raises(SongError) as error:
+        load_song(tmp_path / loaded)
+
+    assert error.value.problems == [
+        f"{tmp_path / loaded} and {tmp_path / sibling} both define song x"
+    ]
+
+
+@pytest.mark.parametrize("where", ["import", "build"])
+def test_script_song_that_exits_is_a_song_error(tmp_path: Path, where: str) -> None:
+    exits = "import sys\nsys.exit(2)\n"
+    body = exits if where == "import" else "def build():\n    import sys\n    sys.exit(2)\n"
+    path = write_script(tmp_path, body)
+
+    with pytest.raises(SongError) as error:
+        load_song(path)
+
+    assert "SystemExit" in error.value.problems[0]
+
+
+@pytest.mark.parametrize(
+    ("build", "problem"),
+    [
+        ("Song(120, None)", "tracks:"),
+        ('Song(120, (Track("lead", "pedalboard", "Serum", None),))', "tracks[0].notes:"),
+        (
+            'Song(120, (Track("lead", "pedalboard", "Serum", ((0, 60, 1, 100),)),))',
+            "tracks[0].notes[0]:",
+        ),
+    ],
+)
+def test_misshapen_script_song_reports_the_path(tmp_path: Path, build: str, problem: str) -> None:
+    path = write_script(tmp_path, f"def build():\n    return {build}\n")
+
+    with pytest.raises(SongError) as error:
+        load_song(path)
+
+    assert any(p.startswith(problem) for p in error.value.problems), error.value.problems
