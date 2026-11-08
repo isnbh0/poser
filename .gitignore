@@ -6,3 +6,5 @@ __pycache__/
 .DS_Store
 dist/
 .agents/skill-configs/*/config.local.yaml
+/plugins.toml
+/sounds/
