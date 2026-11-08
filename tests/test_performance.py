@@ -3,7 +3,6 @@
 import json
 from collections.abc import Callable
 
-import numpy as np
 import pytest
 
 from poser.core.audio import SAMPLE_RATE, TAIL_S
@@ -18,7 +17,6 @@ from poser.core.performance import (
     performance_to_data,
 )
 from poser.core.song import ControlChange, Note, Song, Track
-from poser.worker import performance_messages, render_duration_s
 
 
 def make_song(*tracks: Track, bpm: float = 120) -> Song:
@@ -67,12 +65,6 @@ def events_for(*changes: ControlChange) -> list[tuple[int, int, int]]:
         for event in performed(cc_track(*changes)).events
         if isinstance(event, Control)
     ]
-
-
-def pedalboard_sample(time: float) -> int:
-    """Return the sample Pedalboard plays a message at: it truncates `time * sample_rate` in
-    32-bit floats."""
-    return int(np.float32(time) * np.float32(SAMPLE_RATE))
 
 
 # Notes
@@ -223,45 +215,6 @@ def test_performance_uses_a_controller_change_after_the_last_note() -> None:
     early = cc_track(ControlChange(0.5, 1, 0))
     assert performed(late).samples == int((3.0 + TAIL_S) * SAMPLE_RATE)
     assert performed(early).samples == int((0.5 + TAIL_S) * SAMPLE_RATE)
-
-
-# Messages for Pedalboard
-
-
-def test_every_message_time_truncates_to_its_sample() -> None:
-    # One beat at 120 bpm is 24000 samples, so beat k / 24000 lands on sample k.
-    beats = [k / 24000 for k in (27, 49, 54, 61, 98, 12345)]
-    notes = tuple(Note(beat, 60, 1e-9, 100) for beat in beats)
-    changes = (ControlChange(beat, 1, i + 1) for i, beat in enumerate(beats))
-    track = cc_track(ControlChange(0, 1, 0), *changes, notes=notes)
-
-    messages = performance_messages(performed(track))
-    samples = {(m.dict()["type"], pedalboard_sample(m.dict()["time"])) for m in messages}
-
-    assert {("note_on", k) for k in (27, 49, 54, 61, 98, 12345)} <= samples
-    assert {("control_change", k) for k in (27, 49, 54, 61, 98, 12345)} <= samples
-
-
-def test_messages_carry_every_event_field_in_order() -> None:
-    performance = Performance(100, (Control(0, 74, 33), NoteOn(0, 60, 37), NoteOff(50, 60)))
-
-    # mido sets message fields dynamically, so they are read through `dict()`.
-    fields = [m.dict() for m in performance_messages(performance)]
-
-    assert [(f["type"], f["channel"]) for f in fields] == [
-        ("control_change", 0),
-        ("note_on", 0),
-        ("note_off", 0),
-    ]
-    assert (fields[0]["control"], fields[0]["value"]) == (74, 33)
-    assert (fields[1]["note"], fields[1]["velocity"]) == (60, 37)
-    assert fields[2]["note"] == 60
-    assert [pedalboard_sample(f["time"]) for f in fields] == [0, 0, 50]
-
-
-@pytest.mark.parametrize("samples", [1, 240000, 485925, 3600 * SAMPLE_RATE])
-def test_render_duration_gives_exactly_the_samples_after_truncation(samples: int) -> None:
-    assert int(render_duration_s(samples) * SAMPLE_RATE) == samples
 
 
 # Constructors

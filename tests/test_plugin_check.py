@@ -9,6 +9,7 @@ import numpy as np
 import pytest
 
 from poser import plugin_check
+from poser.adapters.pedalboard.worker import render_duration_s
 from poser.cli.common import EXIT_ALL_PASS, EXIT_BAD_CONFIG, EXIT_SOME_FAILED
 from poser.core.audio import NUM_CHANNELS, SAMPLE_RATE
 from poser.core.checks import CHECK_NOTES, CHECK_SAMPLES, CheckStatus
@@ -20,7 +21,6 @@ from poser.plugin_check import (
     parse_worker_result,
     run_worker,
 )
-from poser.worker import render_duration_s
 
 PASS_RESULT: dict[str, object] = {
     "status": "pass",
@@ -336,3 +336,28 @@ def test_identifier_plugin_names_load(tmp_path: Path, name: str) -> None:
     config = tmp_path / "plugins.toml"
     config.write_text(f'[[plugin]]\nname = "{name}"\npath = "/s.vst3"\n')
     assert load_config(config) == [PluginSpec(name, "/s.vst3")]
+
+
+def write_entry(tmp_path: Path, entry: str) -> Path:
+    path = tmp_path / "plugins.toml"
+    path.write_text(f"[[plugin]]\n{entry}\n")
+    return path
+
+
+def test_load_config_reads_presets(tmp_path: Path) -> None:
+    path = write_entry(tmp_path, 'name = "Serum"\npath = "/s.vst3"\npresets = "/p"')
+    assert load_config(path) == [PluginSpec("Serum", "/s.vst3", None, "/p")]
+
+
+@pytest.mark.parametrize(
+    "entry",
+    [
+        'name = "Serum"\npath = "/s.vst3"\nsamples = "/p"',
+        'name = "Ser:um"\npath = "/s.vst3"',
+        'name = "Serum"\npath = "/s.vst3"\npresets = ""',
+    ],
+    ids=["unknown key", "colon in name", "empty presets"],
+)
+def test_load_config_rejects_bad_entries(tmp_path: Path, entry: str) -> None:
+    with pytest.raises(ConfigError):
+        load_config(write_entry(tmp_path, entry))

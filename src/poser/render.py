@@ -19,6 +19,9 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, TypedDict, cast
 
+from poser.adapters.pedalboard.formats import PresetError, read_chunk
+from poser.adapters.pedalboard.state import build_state
+from poser.adapters.pedalboard.worker import BUFFER_SIZE, performance_messages, render_duration_s
 from poser.adapters.song_formats import SONG_FORMATS
 from poser.adapters.wav import WavAudioFiles
 from poser.cli.common import (
@@ -44,7 +47,7 @@ from poser.core.performance import perform, performance_from_data, performance_t
 from poser.core.song import Song, SongError, Track, is_int, is_number
 from poser.core.statuses import RenderFailureStatus, RenderStatus, SoundFailureStatus, StemStatus
 from poser.plugin_check import INITIALIZATION_TIMEOUT_S, ConfigError, PluginSpec, load_config
-from poser.presets import PresetError, build_state, preset_files, read_chunk
+from poser.presets import preset_files
 from poser.sounds import SoundError, read_sound, sound_files
 from poser.worker import (
     MalformedJobError,
@@ -52,8 +55,6 @@ from poser.worker import (
     WorkerTimedOutError,
     job_fields,
     optional_str,
-    performance_messages,
-    render_duration_s,
     run_isolated,
 )
 from poser.workspace import WorkspaceError, fill_path_options, song_render_dir
@@ -64,10 +65,6 @@ if TYPE_CHECKING:
 # Directories, so a track named `mix` or `analysis` still writes its stem beside them.
 MIX_DIR = "mix"
 ANALYSIS_DIR = "analysis"
-# Serum applies a controller change at the start of the processing block that contains it, so
-# the block size bounds controller timing. 512 samples is 10.7 ms at 48 kHz.
-BUFFER_SIZE = 512
-
 LOCK_NAME = ".lock"
 
 WORKER_FIELDS = {"status", "peak_dbfs", "detail"}

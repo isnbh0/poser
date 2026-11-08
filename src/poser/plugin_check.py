@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, NotRequired, TypedDict, cast
 
 import numpy as np
 
+from poser.adapters.pedalboard.worker import performance_messages, render_duration_s
 from poser.cli.common import (
     EXIT_ALL_PASS,
     EXIT_BAD_CONFIG,
@@ -26,14 +27,7 @@ from poser.core.audio import NUM_CHANNELS, SAMPLE_RATE
 from poser.core.checks import CHECK_SAMPLES, CheckStatus, analyze_check, check_pattern
 from poser.core.names import Identifier
 from poser.core.song import is_number
-from poser.worker import (
-    WorkerCrashedError,
-    WorkerTimedOutError,
-    json_object,
-    performance_messages,
-    render_duration_s,
-    run_isolated,
-)
+from poser.worker import WorkerCrashedError, WorkerTimedOutError, json_object, run_isolated
 from poser.workspace import WorkspaceError, fill_path_options
 
 if TYPE_CHECKING:

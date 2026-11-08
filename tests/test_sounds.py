@@ -12,9 +12,12 @@ import pytest
 from helpers import fxp_bytes
 
 from poser import sounds
+from poser.adapters.pedalboard.formats import PresetError
 from poser.cli.common import EXIT_ALL_PASS, EXIT_BAD_CONFIG, EXIT_SOME_FAILED
 from poser.core.checks import CHECK_SAMPLES
 from poser.core.jsonvalue import json_object
+from poser.plugin_check import PluginSpec
+from poser.presets import preset_description, preset_files
 from poser.worker import run_isolated
 
 WORKER_STATE = b"state-from-the-window"
@@ -613,3 +616,50 @@ def test_save_job_missing_a_key_raises_value_error() -> None:
 
     with pytest.raises(ValueError, match=r"^malformed save job"):
         sounds.parse_save_job(data)
+
+
+def test_preset_files_names_nested_presets_by_plugin(tmp_path: Path) -> None:
+    root = write_presets(tmp_path)
+    (root / "Bass" / ".Hidden.fxp").write_bytes(fxp_bytes(b"chunk"))
+    (root / "Bass" / "Notes.txt").write_text("")
+    upper = root / "Pads" / "Tall.FXP"
+    upper.write_bytes(fxp_bytes(b"chunk"))
+    files = preset_files(PluginSpec("Serum", "/serum.vst3", None, str(root)))
+
+    assert sorted(files) == [
+        "Serum:Bass (Hard)/Grit",
+        "Serum:Bass/Acid",
+        "Serum:Bass/Deep",
+        "Serum:Init",
+        "Serum:Pads/Tall",
+        "Serum:Pads/Wide",
+    ]
+    assert files["Serum:Pads/Tall"] == upper
+    assert preset_description("Serum:Bass (Hard)/Grit") == "Bass (Hard) preset"
+    assert preset_description("Serum:Init") == "preset"
+
+
+def test_preset_files_refuses_a_missing_or_file_directory(tmp_path: Path) -> None:
+    assert preset_files(PluginSpec("Serum", "/serum.vst3")) == {}
+    missing = PluginSpec("Serum", "/serum.vst3", None, str(tmp_path / "missing"))
+    with pytest.raises(PresetError, match="does not exist"):
+        preset_files(missing)
+    (tmp_path / "file").write_text("")
+    with pytest.raises(PresetError, match="not a directory"):
+        preset_files(PluginSpec("Serum", "/serum.vst3", None, str(tmp_path / "file")))
+
+
+@pytest.mark.parametrize(("state", "problem"), [("not base64!", "not valid base64"), ("", "empty")])
+def test_list_reports_a_saved_sound_with_an_unusable_state(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], state: str, problem: str
+) -> None:
+    write_sound_file(
+        tmp_path, "zap", {"plugin": "Serum", "description": "laser pluck", "state": encode(b"s")}
+    )
+    write_sound_file(tmp_path, "bad", {"plugin": "Serum", "description": "x", "state": state})
+
+    assert list_sounds(tmp_path, "--json") == EXIT_SOME_FAILED
+    captured = capsys.readouterr()
+    assert [entry["name"] for entry in json.loads(captured.out)] == ["Serum", "Primer", "zap"]
+    assert "bad.json" in captured.err
+    assert problem in captured.err

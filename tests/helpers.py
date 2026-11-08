@@ -6,7 +6,11 @@ import numpy as np
 import pytest
 from pedalboard.io import ReadableAudioFile
 
+from poser.adapters.pedalboard.config import PedalboardConfig
+from poser.adapters.pedalboard.formats import PRESET_FORMATS
+from poser.adapters.pedalboard.instrument import PedalboardInstrument
 from poser.core.audio import SAMPLE_RATE
+from poser.core.names import Identifier
 from poser.plugin_check import PluginSpec, load_config
 
 REPO_DIR = Path(__file__).resolve().parents[1]
@@ -24,23 +28,47 @@ def real_specs() -> list[PluginSpec]:
     return load_config(config)
 
 
+REAL_FORMATS = {fmt.suffix: fmt for fmt in PRESET_FORMATS.values()}
+
+
+def real_pedalboard_configs() -> dict[str, PedalboardConfig]:
+    """Return a Pedalboard config for each plugin in the repository's local plugin list."""
+    return {
+        spec.name: PedalboardConfig(
+            name=Identifier(spec.name),
+            path=Path(spec.path),
+            plugin_name=spec.plugin_name,
+            sources={} if spec.presets is None else {Identifier("presets"): Path(spec.presets)},
+            formats=tuple(PRESET_FORMATS),
+        )
+        for spec in real_specs()
+    }
+
+
+def real_pedalboard_instruments(sounds_dir: Path) -> dict[str, PedalboardInstrument]:
+    """Return a Pedalboard instrument for each plugin in the repository's local plugin list."""
+    return {
+        name: PedalboardInstrument(config, sounds_dir, REAL_FORMATS)
+        for name, config in real_pedalboard_configs().items()
+    }
+
+
 # Runs in a subprocess, so plugin code stays out of the test process. Serum's oscillator A octave
 # at raw value 0.1 is -3 octaves, which moves middle C from about 262 Hz to about 33 Hz. The state
 # is captured as `save-sound` captures it after the window closes.
 CAPTURE_STATE = """
 import sys
 from pedalboard import load_plugin
-from poser.sounds import capture_state, encode_state
+from poser.adapters.pedalboard.state import encode_state
+from poser.adapters.pedalboard.worker import capture_state
 plugin = load_plugin(sys.argv[1])
 plugin.parameters["a_octave_oct"].raw_value = 0.1
 open(sys.argv[2], "w").write(encode_state(capture_state(plugin)))
 """
 
 
-def strongest_hz(stem: str) -> float:
+def strongest_hz(audio: np.ndarray) -> float:
     """Return the strongest frequency above 20 Hz between 0.2 and 1.2 seconds."""
-    with ReadableAudioFile(stem) as audio_file:  # ty: ignore[no-matching-overload]
-        audio = audio_file.read(audio_file.frames)
     mono = audio.mean(axis=0)[int(0.2 * SAMPLE_RATE) : int(1.2 * SAMPLE_RATE)]
     spectrum = np.abs(np.fft.rfft(mono * np.hanning(len(mono))))
     freqs = np.fft.rfftfreq(len(mono), 1 / SAMPLE_RATE)

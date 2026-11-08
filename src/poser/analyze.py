@@ -9,20 +9,15 @@ renamed track cannot enter the mix.
 import argparse
 import hashlib
 import json
-import math
 import shutil
 import sys
 from dataclasses import replace
 from pathlib import Path
 
-import numpy as np
-import pyloudnorm
-from matplotlib import mlab
-from matplotlib.backends.backend_agg import FigureCanvasAgg
-from matplotlib.figure import Figure
-from scipy import signal
-
+from poser.adapters.measuring import StandardMeasurer
+from poser.adapters.mixing import GainMixer
 from poser.adapters.song_formats import SONG_FORMATS, YamlSongFormat
+from poser.adapters.spectrogram import SpectrogramVisualizer
 from poser.adapters.wav import WavAudioFiles
 from poser.cli.common import (
     EXIT_ALL_PASS,
@@ -31,26 +26,24 @@ from poser.cli.common import (
     EXIT_SONG_BUSY,
     align_rows,
 )
-from poser.core.audio import NUM_CHANNELS, SAMPLE_RATE, Audio, measure_peak_dbfs, stem_samples
+from poser.core.analysis import measure
+from poser.core.audio import Audio, stem_samples
 from poser.core.cache import StampProblem, track_key
 from poser.core.loading import load_song
-from poser.core.ports import AudioFileError
+from poser.core.names import TrackName
+from poser.core.ports import AudioFileError, MixInput
 from poser.core.report import (
-    BANDS,
-    BAR_BEATS,
     MIX_NAME,
     AnalysisStatus,
-    Measurements,
     MixReport,
     Report,
     TrackReport,
-    bar_dbfs,
     mix_defects,
     report_failed,
     report_to_data,
     silent_defects,
 )
-from poser.core.song import Song, SongError, song_last_beat
+from poser.core.song import Song, SongError
 from poser.plugin_check import ConfigError, PluginSpec, load_config
 from poser.render import (
     ANALYSIS_DIR,
@@ -69,12 +62,6 @@ from poser.render import (
 from poser.workspace import WorkspaceError, fill_path_options, song_render_dir
 
 HISTORY_DIR = "history"
-
-SPECGRAM_NFFT = 2048
-SPECGRAM_NOVERLAP = 1536
-POWER_FLOOR = 1e-12  # -120 dB, which keeps the spectrogram's logarithm finite for silence.
-SPECTROGRAM_MIN_HZ, SPECTROGRAM_MAX_HZ = 20.0, 20000.0
-WELCH_NPERSEG = 8192
 
 
 class StaleStemError(Exception):
@@ -100,74 +87,6 @@ def read_stem(path: Path, stamp_file: Path, key: str, sound: str, samples: int) 
         return WavAudioFiles().read(path, samples)
     except AudioFileError as error:
         raise StaleStemError(str(error)) from error
-
-
-def integrated_lufs(audio: np.ndarray) -> float | None:
-    """Return loudness per ITU-R BS.1770, or None for silence, because JSON has no infinity."""
-    # Pyloudnorm takes samples-first arrays, and stems are channels-first.
-    loudness = pyloudnorm.Meter(SAMPLE_RATE).integrated_loudness(audio.T.astype(np.float64))
-    return float(loudness) if math.isfinite(loudness) else None
-
-
-def bands_db(audio: np.ndarray) -> dict[str, float]:
-    """Return each band's mean power spectral density in dB, for comparing bands and versions.
-
-    The values are relative, not calibrated to a loudness scale.
-    """
-    mono = audio.mean(axis=0, dtype=np.float64)
-    freqs, density = signal.welch(mono, fs=SAMPLE_RATE, nperseg=min(WELCH_NPERSEG, mono.size))
-    levels = {}
-    for name, (low, high) in BANDS.items():
-        inside = density[(freqs >= low) & (freqs < high)]
-        power = float(inside.mean()) if inside.size else 0.0
-        levels[name] = round(10.0 * math.log10(max(power, POWER_FLOOR)), 2)
-    return levels
-
-
-def measure(audio: np.ndarray, song: Song) -> Measurements:
-    # Counted in beats, so a bar starting exactly at the last beat is never included.
-    bars = math.ceil(song_last_beat(song) / BAR_BEATS)
-    return Measurements(
-        peak_dbfs=measure_peak_dbfs(audio),
-        integrated_lufs=integrated_lufs(audio),
-        clipped_samples=int(np.count_nonzero(np.abs(audio) > 1.0)),
-        bands_db=bands_db(audio),
-        bar_dbfs=tuple(bar_dbfs(audio, song.seconds(BAR_BEATS), bars)),
-    )
-
-
-def spectrogram_figure(audio: np.ndarray, title: str) -> Figure:
-    """Draw a spectrogram on a logarithmic frequency axis from 20 Hz to 20 kHz, with a dB scale."""
-    figure = Figure(figsize=(10, 4))
-    FigureCanvasAgg(figure)
-    axes = figure.add_subplot()
-    # This follows `Axes.specgram`, which takes the logarithm of the power directly, so silent
-    # bins would give -inf and a warning. The floor goes on the power for that reason.
-    power, freqs, times = (
-        np.asarray(result, dtype=np.float64)
-        for result in mlab.specgram(
-            audio.sum(axis=0, dtype=np.float64),
-            NFFT=SPECGRAM_NFFT,
-            Fs=SAMPLE_RATE,
-            noverlap=SPECGRAM_NOVERLAP,
-        )
-    )
-    # A logarithmic axis cannot show the 0 Hz bin, and nothing below 20 Hz is audible.
-    keep = freqs >= SPECTROGRAM_MIN_HZ
-    mesh = axes.pcolormesh(
-        times, freqs[keep], 10.0 * np.log10(power[keep] + POWER_FLOOR), shading="nearest"
-    )
-    axes.set_yscale("log")
-    axes.set_ylim(SPECTROGRAM_MIN_HZ, SPECTROGRAM_MAX_HZ)
-    figure.colorbar(mesh, ax=axes, label="dB")
-    axes.set_xlabel("Time (s)")
-    axes.set_ylabel("Frequency (Hz)")
-    axes.set_title(title)
-    return figure
-
-
-def write_spectrogram(audio: np.ndarray, path: Path, title: str) -> None:
-    spectrogram_figure(audio, title).savefig(path, format="png")
 
 
 def start_record(song_dir: Path, song: Song) -> tuple[Path, int, str]:
@@ -228,6 +147,7 @@ def _analyze(
 ) -> Report:
     mix_dir, analysis_dir = song_dir / MIX_DIR, song_dir / ANALYSIS_DIR
     samples = stem_samples(song)
+    measurer, visualizer = StandardMeasurer(), SpectrogramVisualizer()
 
     keys: dict[str, tuple[str, str | None]] = {}
     stems: dict[str, Audio] = {}
@@ -281,12 +201,12 @@ def _analyze(
         if track.name in failures:
             tracks.append(failures[track.name])
             continue
-        audio = stems[track.name].samples
-        measurements = measure(audio, song)
+        audio = stems[track.name]
+        measurements = measure(audio, song, measurer)
         spectrogram = None
         if complete:
-            spectrogram = analysis_dir / f"{track.name}.png"
-            write_spectrogram(audio, spectrogram, track.name)
+            spectrogram = analysis_dir / f"{track.name}{visualizer.suffix}"
+            visualizer.draw(audio, spectrogram, track.name)
         tracks.append(
             TrackReport(
                 track.name,
@@ -305,17 +225,15 @@ def _analyze(
 
     mix = None
     if complete:
-        # Each stem is scaled by its track's gain, then summed, with no limiter or normalization.
-        # Accumulating in place keeps one float64 buffer, not a float64 copy of every stem.
-        total = np.zeros((NUM_CHANNELS, samples), dtype=np.float64)
-        for track in song.tracks:
-            total += stems[track.name].samples.astype(np.float64) * 10 ** (track.gain / 20)
-        mixed = total.astype(np.float32)
+        inputs = [
+            MixInput(TrackName(track.name), stems[track.name], track.gain) for track in song.tracks
+        ]
+        mixed = GainMixer().mix(inputs, samples)
         mix_path = mix_dir / f"{MIX_NAME}{WavAudioFiles().suffix}"
-        WavAudioFiles().write(mix_path, Audio(mixed))
-        mix_png = mix_dir / f"{MIX_NAME}.png"
-        write_spectrogram(mixed, mix_png, MIX_NAME)
-        measurements = measure(mixed, song)
+        WavAudioFiles().write(mix_path, mixed)
+        mix_png = mix_dir / f"{MIX_NAME}{visualizer.suffix}"
+        visualizer.draw(mixed, mix_png, MIX_NAME)
+        measurements = measure(mixed, song, measurer)
         mix = MixReport(
             path=str(mix_path),
             peak_dbfs=measurements.peak_dbfs,

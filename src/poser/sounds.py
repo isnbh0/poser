@@ -11,7 +11,6 @@ file format.
 
 import argparse
 import base64
-import binascii
 import json
 import re
 import sys
@@ -20,6 +19,9 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, TypedDict, cast
 
+from poser.adapters.pedalboard import state as pedalboard_state
+from poser.adapters.pedalboard.formats import PresetError
+from poser.adapters.pedalboard.worker import capture_state, performance_messages, render_duration_s
 from poser.adapters.wav import WavAudioFiles
 from poser.cli.common import EXIT_ALL_PASS, EXIT_BAD_CONFIG, EXIT_SOME_FAILED, align_rows
 from poser.core.audio import (
@@ -32,7 +34,7 @@ from poser.core.audio import (
 )
 from poser.core.checks import CHECK_SAMPLES, check_pattern
 from poser.plugin_check import INITIALIZATION_TIMEOUT_S, ConfigError, PluginSpec, load_config
-from poser.presets import PresetError, preset_description, preset_files
+from poser.presets import preset_description, preset_files
 from poser.worker import (
     MalformedJobError,
     WorkerCrashedError,
@@ -40,8 +42,6 @@ from poser.worker import (
     job_fields,
     json_object,
     optional_str,
-    performance_messages,
-    render_duration_s,
     run_isolated,
 )
 from poser.workspace import WorkspaceError, fill_path_options
@@ -113,19 +113,15 @@ def sound_files(sounds_dir: Path) -> dict[str, Path]:
 
 
 def decode_state(state: object) -> bytes:
-    if not isinstance(state, str):
-        raise SoundError("state is not a string")
+    """Return a saved sound's state, raising SoundError with the reason it cannot be used."""
     try:
-        data = base64.b64decode(state, validate=True)
-    except (binascii.Error, ValueError) as error:
-        raise SoundError(f"state is not valid base64: {error}") from error
-    if not data:
-        raise SoundError("state is empty")
-    return data
+        return pedalboard_state.decode_state(state)
+    except ValueError as error:
+        raise SoundError(str(error)) from error
 
 
 def encode_state(data: bytes) -> str:
-    return base64.b64encode(data).decode("ascii")
+    return pedalboard_state.encode_state(data)
 
 
 def plugin_name_clash(name: str, specs: list[PluginSpec]) -> str | None:
@@ -388,20 +384,6 @@ def save_main(argv: list[str] | None = None) -> int:
             file=sys.stderr,
         )
     return EXIT_ALL_PASS
-
-
-SETTLE_S = 0.1
-
-
-def capture_state(plugin: "VST3Plugin | AudioUnitPlugin") -> bytes:
-    """Return a plugin's `raw_state` after a short render with no notes.
-
-    Serum's `raw_state`, read straight after a parameter change, restores the earlier sound. After
-    the plugin processes any audio, it restores the change. `reset=False` keeps the instance the
-    owner edited, because Pedalboard's reset recreates an instrument before rendering.
-    """
-    plugin([], duration=SETTLE_S, sample_rate=SAMPLE_RATE, num_channels=NUM_CHANNELS, reset=False)
-    return bytes(plugin.raw_state)
 
 
 def save_in_worker(job: SaveJob) -> SaveFailure | SaveSuccess:

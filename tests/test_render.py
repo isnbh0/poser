@@ -18,6 +18,7 @@ from helpers import fxp_bytes
 from pedalboard.io import ReadableAudioFile
 
 from poser import render
+from poser.adapters.pedalboard.state import build_state
 from poser.adapters.song_formats import SONG_FORMATS
 from poser.cli.common import EXIT_ALL_PASS, EXIT_BAD_CONFIG, EXIT_SOME_FAILED, EXIT_SONG_BUSY
 from poser.core.audio import NUM_CHANNELS, SAMPLE_RATE, expected_samples, stem_samples
@@ -27,7 +28,6 @@ from poser.core.performance import Control, performance_from_data
 from poser.core.song import ControlChange, Note, Song, Track, parse_song
 from poser.core.statuses import RenderFailureStatus, SoundFailureStatus, StemStatus
 from poser.plugin_check import PluginSpec
-from poser.presets import build_state
 from poser.render import Outcome, RenderJob, render_song, render_stem
 
 

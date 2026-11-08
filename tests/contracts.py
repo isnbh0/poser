@@ -12,6 +12,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from poser.adapters.pedalboard.formats import PresetError, PresetFormat
 from poser.core.audio import (
     NUM_CHANNELS,
     SAMPLE_RATE,
@@ -134,7 +135,8 @@ def check_instrument_contract(
     song = Song(bpm=120, tracks=(Track("contract", str(ref), notes),))
     performance = perform(song, song.tracks[0])
     path = tmp_path / "contract-render.npy"
-    assert instrument.render(RenderRequest(first, performance, path), timeout_s) is None
+    failure = instrument.render(RenderRequest(first, performance, path), timeout_s)
+    assert failure is None, failure
     audio = read_raw_audio(path, performance.samples)
     assert isinstance(audio, Audio), audio
 
@@ -228,6 +230,34 @@ def check_sound_capture_contract(
     race([instrument, instrument])
     directory = new_directory()
     race([build(directory), build(directory)])
+
+
+def check_preset_format_contract(fmt: object, sample_path: Path, tmp_path: Path) -> None:
+    """Check a Pedalboard PresetFormat: its suffix, a state from a sample, and its failures.
+
+    Every failure must be a PresetError, so a broken file never escapes as another exception.
+    """
+    assert isinstance(fmt, PresetFormat)
+    assert isinstance(fmt.suffix, Suffix)
+    state = fmt.read_state(sample_path)
+    assert isinstance(state, bytes), f"read_state returned a {type(state).__name__}"
+    assert state, "read_state returned an empty state"
+    description = fmt.describe(sample_path)
+    assert description is None or (isinstance(description, str) and description)
+
+    empty = tmp_path / f"empty{fmt.suffix}"
+    empty.write_bytes(b"")
+    garbage = tmp_path / f"garbage{fmt.suffix}"
+    garbage.write_bytes(b"\x00\xffnot a preset of any kind\n" * 4)
+    for path in (tmp_path / f"missing{fmt.suffix}", empty, garbage):
+        try:
+            fmt.read_state(path)
+        except PresetError:
+            continue
+        except Exception as error:
+            message = f"read_state of {path.name} raised {type(error).__name__}: {error}"
+            raise AssertionError(message) from error
+        raise AssertionError(f"read_state of {path.name} raised nothing")
 
 
 def check_record_writer_contract(writer: object, sample_song: Song) -> None:

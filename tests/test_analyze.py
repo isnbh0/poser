@@ -16,11 +16,11 @@ from poser import analyze, render
 from poser.adapters.song_formats import SONG_FORMATS
 from poser.analyze import analyze_song
 from poser.cli.common import EXIT_ALL_PASS, EXIT_BAD_CONFIG, EXIT_SOME_FAILED, EXIT_SONG_BUSY
-from poser.core.audio import SAMPLE_RATE, stem_samples
+from poser.core.audio import SAMPLE_RATE
 from poser.core.cache import track_key
 from poser.core.loading import load_song
 from poser.core.report import BANDS, AnalysisStatus, Defect, Report, TrackReport
-from poser.core.song import Note, Song, Track
+from poser.core.song import Song
 from poser.core.statuses import StemStatus
 from poser.plugin_check import PluginSpec
 
@@ -727,15 +727,6 @@ def sine(frequency: float, seconds: float, amplitude: float = 1.0) -> np.ndarray
     return np.stack([tone, tone])
 
 
-@pytest.mark.parametrize(("frequency", "band"), [(100.0, "bass"), (3000.0, "high_mid")])
-def test_sine_band_level_leads_every_other_band(frequency: float, band: str) -> None:
-    levels = analyze.bands_db(sine(frequency, 2.0, 0.5))
-
-    assert list(levels) == list(BANDS)
-    others = [level for name, level in levels.items() if name != band]
-    assert levels[band] >= max(others) + 20
-
-
 def test_bar_levels_follow_the_song_in_four_beat_spans(tmp_path: Path) -> None:
     # 120 bpm: a beat is 0.5 s, a bar 2 s, and the 8 beats of notes span two bars.
     audio = np.zeros((2, int((4.0 + 2.0) * RATE)), dtype=np.float32)
@@ -758,34 +749,9 @@ def test_bar_levels_follow_the_song_in_four_beat_spans(tmp_path: Path) -> None:
     assert all(round(level, 2) == level for level in lead.bands_db.values())
 
 
-def test_spectrogram_has_a_log_axis_from_20_hz_to_20_khz_and_a_db_scale() -> None:
-    figure = analyze.spectrogram_figure(sine(1000.0, 1.0), "lead")
-
-    axes, colorbar = figure.axes
-    assert axes.get_yscale() == "log"
-    assert axes.get_ylim() == (20.0, 20000.0)
-    assert axes.get_title() == "lead"
-    assert (axes.get_xlabel(), axes.get_ylabel()) == ("Time (s)", "Frequency (Hz)")
-    assert colorbar.get_ylabel() == "dB"
-    # Only the bins at or above 20 Hz are drawn.
-    (mesh,) = axes.collections
-    bins = np.fft.rfftfreq(analyze.SPECGRAM_NFFT, 1 / RATE)
-    assert np.asarray(mesh.get_array()).shape[0] == np.count_nonzero(bins >= 20.0)
-
-
 def test_record_number_follows_the_largest_existing_record(tmp_path: Path) -> None:
     song_path = make_song(tmp_path, {"lead": constant(0.1)})
     (history(song_path) / "7").mkdir(parents=True)
     (history(song_path) / "notes").mkdir()
 
     assert run(song_path).run == 8
-
-
-@pytest.mark.parametrize("bpm", [90, 100, 140])
-@pytest.mark.parametrize("bars", [1, 3, 8])
-def test_bar_count_ends_at_the_last_beat(bpm: float, bars: int) -> None:
-    note = Note(beat=0, pitch=60, length=4 * bars, velocity=100)
-    song = Song(bpm=bpm, tracks=(Track("lead", "Serum", (note,)),))
-    audio = np.full((2, stem_samples(song)), 0.5, dtype=np.float32)
-
-    assert len(analyze.measure(audio, song).bar_dbfs) == bars

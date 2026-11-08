@@ -4,7 +4,7 @@ import ast
 import json
 import subprocess
 import sys
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from pathlib import Path
 
 import pytest
@@ -24,6 +24,33 @@ USE_CASES = (
 )
 DYNAMIC_IMPORT_LOADERS = {"poser.adapters.loading", "poser.adapters.isolation"}
 ADAPTER_LIBRARIES = ("pedalboard", "mido", "yaml", "matplotlib", "scipy", "pyloudnorm")
+LEGACY_MODULES = (
+    "poser.render",
+    "poser.analyze",
+    "poser.plugin_check",
+    "poser.sounds",
+    "poser.worker",
+    "poser.workspace",
+    "poser.init_workspace",
+    "poser.presets",
+)
+# Phase 4 deletes the legacy commands, leaving the Pedalboard worker as the only plugin code.
+PLUGIN_LOADERS = {
+    "poser/adapters/pedalboard/worker.py",
+    "poser/render.py",
+    "poser/plugin_check.py",
+    "poser/sounds.py",
+}
+FCNTL_USERS = {
+    "poser/adapters/filestore.py",
+    "poser/adapters/pedalboard/instrument.py",
+    "poser/render.py",
+}
+LIBRARY_HOMES = {
+    "pyloudnorm": {"poser/adapters/measuring.py"},
+    "scipy": {"poser/adapters/measuring.py"},
+    "matplotlib": {"poser/adapters/spectrogram.py"},
+}
 
 
 def source_files(root: Path = POSER) -> list[Path]:
@@ -249,21 +276,86 @@ def test_boundary_check_can_fail(tmp_path: Path) -> None:
     named.write_text("from importlib import import_module\n")
     assert has_dynamic_import(named)
 
+    legacy = tmp_path / "legacy.py"
+    legacy.write_text("from poser.presets import preset_files\nfrom poser import sounds\n")
+    assert adapter_refuses("poser.presets")
+    assert {"poser.presets", "poser.sounds"} <= {
+        name for name in adapter_edges(legacy) if adapter_refuses(name)
+    }
+    assert not adapter_refuses("poser.adapters.isolation")
+
+    plugins = tmp_path / "plugins.py"
+    plugins.write_text("import mido\nfrom pedalboard import load_plugin\nimport pedalboard.io\n")
+    assert sorted(name for name in imports(plugins) if is_plugin_code(name)) == [
+        "mido",
+        "pedalboard",
+    ]
+
     relative = tmp_path / "relative.py"
     relative.write_text("from . import x\n")
     with pytest.raises(pytest.fail.Exception):
         imports(relative)
 
 
+def adapter_refuses(name: str) -> bool:
+    """Return whether an adapter may not import the module `name`: a command, the composition,
+    or a legacy module."""
+    if name in LEGACY_MODULES:
+        return True
+    return any(
+        name == banned or name.startswith(f"{banned}.") for banned in ("poser.cli", "poser.compose")
+    )
+
+
+def adapter_edges(path: Path) -> set[str]:
+    """Return every module the file imports, and every `poser` module it loads."""
+    return imports(path) | edges(path)
+
+
 def test_adapters_never_import_commands_or_composition() -> None:
     refused = [
         f"{module_name(path)} imports {name}"
         for path in source_files(ADAPTERS)
-        for name in sorted(imports(path))
-        for banned in ("poser.cli", "poser.compose")
-        if name == banned or name.startswith(f"{banned}.")
+        for name in sorted(adapter_edges(path))
+        if adapter_refuses(name)
     ]
     assert not refused
+
+
+def is_plugin_code(module: str) -> bool:
+    """Return whether importing `module` loads plugin code or `mido`: `pedalboard.io` reads audio
+    files and loads no plugin."""
+    top = module.split(".", 1)[0]
+    if top in {"mido", "pedalboard_native"}:
+        return True
+    return top == "pedalboard" and not (
+        module == "pedalboard.io" or module.startswith("pedalboard.io.")
+    )
+
+
+def files_importing(test: Callable[[str], bool]) -> set[str]:
+    return {
+        path.relative_to(SRC).as_posix()
+        for path in source_files()
+        if any(test(name) for name in imports(path))
+    }
+
+
+def test_only_plugin_workers_load_plugins() -> None:
+    loaders = files_importing(is_plugin_code)
+    assert loaders <= PLUGIN_LOADERS, sorted(loaders - PLUGIN_LOADERS)
+    assert "poser/adapters/pedalboard/worker.py" in loaders
+
+
+def test_analysis_libraries_stay_in_their_adapters() -> None:
+    for library, homes in LIBRARY_HOMES.items():
+        found = files_importing(lambda name, top=library: name.split(".", 1)[0] == top)
+        assert found == homes, f"{library} is imported in {sorted(found)}"
+
+
+def test_only_locking_modules_import_fcntl() -> None:
+    found = files_importing(lambda name: name.split(".", 1)[0] == "fcntl")
+    assert found <= FCNTL_USERS, sorted(found - FCNTL_USERS)
 
 
 def test_only_the_wav_adapter_reads_audio_files() -> None:

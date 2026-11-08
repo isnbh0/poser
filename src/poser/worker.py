@@ -7,11 +7,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import TypeGuard
 
-import mido
-
-from poser.core.audio import SAMPLE_RATE
 from poser.core.jsonvalue import json_object
-from poser.core.performance import Control, NoteOff, NoteOn, Performance
 
 
 class MalformedJobError(ValueError):
@@ -76,30 +72,3 @@ def run_isolated(command: list[str], timeout_s: float | None) -> object:
             return json.loads(result_path.read_text())
         except (OSError, ValueError) as error:
             raise WorkerCrashedError("worker wrote no readable result") from error
-
-
-def performance_messages(performance: Performance) -> list[mido.Message]:
-    """Return a performance as MIDI messages for Pedalboard, in the performance's order.
-
-    Pedalboard reads `time` as absolute seconds, not mido deltas, converts it to a 32-bit float,
-    and truncates `time * sample_rate` to a sample, so each time sits half a sample past its
-    sample. That lands exactly for the first 128 seconds; later, float32 rounding can move a
-    message by a sample or more, without reordering messages.
-    """
-    messages = []
-    for event in performance.events:
-        match event:
-            case NoteOff(sample, pitch):
-                message = mido.Message("note_off", note=pitch)
-            case Control(sample, control, value):
-                message = mido.Message("control_change", control=control, value=value)
-            case NoteOn(sample, pitch, velocity):
-                message = mido.Message("note_on", note=pitch, velocity=velocity)
-        messages.append(message.copy(time=(sample + 0.5) / SAMPLE_RATE))
-    return messages
-
-
-def render_duration_s(samples: int) -> float:
-    """Return the duration to ask Pedalboard for, which truncates `duration * sample_rate`, so
-    that it renders exactly `samples` frames."""
-    return (samples + 0.5) / SAMPLE_RATE
