@@ -5,6 +5,9 @@ description = "Compose multitrack music through VST instruments from code"
 authors = [
     { name = "John Choi", email = "5154439+isnbh0@users.noreply.github.com" }
 ]
+readme = "README.md"
+license = "GPL-3.0-or-later"
+license-files = ["LICENSE"]
 requires-python = ">=3.13"
 dependencies = [
     "matplotlib>=3.11.2",
@@ -15,6 +18,9 @@ dependencies = [
     "pyyaml>=6.0.3",
     "scipy>=1.18.1",
 ]
+
+[project.urls]
+Repository = "https://github.com/isnbh0/poser"
 
 [project.scripts]
 check-plugins = "poser.plugin_check:main"
