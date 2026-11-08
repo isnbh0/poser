@@ -157,8 +157,8 @@ analyzed:
 ## Judging a revision
 
 Analysis finds defects and measures; it does not say a song is good. Compare a revision against an
-earlier history record. Treat a band or
-bar difference under 1 dB as possible render noise.
+earlier history record. Treat a band or bar
+difference under 1 dB as possible render noise.
 
 Controllers do nothing in Serum here except CC 1, the mod wheel, in presets that route it. CC 1 on
 `Serum:Leads/LD A Bit of Luck [SD]` is confirmed. On another preset, compare history records with

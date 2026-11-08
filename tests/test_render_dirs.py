@@ -99,6 +99,21 @@ def test_song_outside_the_workspace_exits_2(
     assert not (tmp_path / "renders").exists()
 
 
+@pytest.mark.parametrize("main", [render.main, analyze.main], ids=["render", "analyze"])
+def test_script_outside_the_workspace_never_runs(tmp_path: Path, main: object) -> None:
+    assert callable(main)
+    make_workspace(tmp_path)
+    outside = tmp_path.parent / f"elsewhere-{tmp_path.name}"
+    sentinel = outside / "ran"
+    song = outside / "x.py"
+    outside.mkdir()
+    song.write_text(f"from pathlib import Path\nPath({str(sentinel)!r}).touch()\n")
+
+    assert main([str(song)]) == EXIT_BAD_CONFIG
+
+    assert not sentinel.exists()
+
+
 def test_every_path_option_given_makes_the_working_directory_the_base(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:

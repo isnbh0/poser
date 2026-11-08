@@ -6,7 +6,9 @@ for changing poser itself. The composer guide that every workspace receives as i
 
 ## Layout
 
-- `src/poser/`: the modules, one per command plus `song`, `music`, `workspace`, and `worker`.
+- `src/poser/`: the command modules (`init_workspace`, `plugin_check`, `render`, `analyze`, and
+  `sounds`, which holds `save-sound` and `list-sounds`) and the modules they share (`song`,
+  `music`, `presets`, `workspace`, and `worker`).
 - `src/poser/scaffold/`: package data that `uv run init-workspace` writes into a new workspace.
 - `tests/`: the tests. Tests marked `real_plugins` load real plugins.
 
@@ -25,5 +27,5 @@ for changing poser itself. The composer guide that every workspace receives as i
 - `make check` runs format, lint, types, and the tests that need no plugins.
 - `make test-real` loads the plugins listed in a root `plugins.toml`. To create one, copy
   `src/poser/scaffold/plugins.toml` and edit its paths.
-- To try the commands, run `uv run init-workspace` in a scratch directory outside the repo, then
-  run the commands there with `uv --project <this repo> run`.
+- To try the commands, run `uv --project <this repo> run init-workspace` in a scratch directory
+  outside the repo, then run the other commands there the same way.

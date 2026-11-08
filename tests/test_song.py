@@ -111,6 +111,7 @@ def set_note(song: dict[str, object], key: str, value: object) -> None:
         (lambda s: set_track(s, "name", "line\n"), "tracks[0].name"),
         (lambda s: set_track(s, "name", 7), "tracks[0].name"),
         (lambda s: set_track(s, "engine", "reaper"), "unknown engine 'reaper'"),
+        (lambda s: set_track(s, "engine", ["reaper"]), "unknown engine ['reaper']"),
         (lambda s: set_track(s, "sound", ""), "tracks[0].sound"),
         (lambda s: set_note(s, "pitch", -1), "notes[0].pitch"),
         (lambda s: set_note(s, "pitch", 128), "notes[0].pitch"),
@@ -826,6 +827,13 @@ def test_track_name_cannot_leave_the_render_directory() -> None:
     assert error.value.problems == [
         "Track.name: must contain only letters, digits, '_', and '-', got '../victim'"
     ]
+
+
+def test_unhashable_engine_is_a_song_error() -> None:
+    with pytest.raises(SongError) as error:
+        Track("lead", cast("str", {}), "x", (Note(0, 60, 1, 100),))
+
+    assert error.value.problems == ["Track.engine: unknown engine {}"]
 
 
 def test_song_without_tracks_is_a_song_error() -> None:

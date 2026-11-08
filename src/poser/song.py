@@ -224,7 +224,7 @@ def _track_field_problems(values: Mapping[str, object], where: str) -> list[str]
         problems.append(
             f"{where}.name: must contain only letters, digits, '_', and '-', got {name!r}"
         )
-    if "engine" in values and engine not in ENGINES:
+    if "engine" in values and not (isinstance(engine, str) and engine in ENGINES):
         problems.append(f"{where}.engine: unknown engine {engine!r}")
     if "sound" in values and not (isinstance(sound, str) and sound):
         problems.append(f"{where}.sound: must be a sound name, got {sound!r}")

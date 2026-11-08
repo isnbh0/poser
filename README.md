@@ -2,8 +2,7 @@
 
 You write a song as code, in Python or YAML. poser renders each track through a real VST3
 instrument via [pedalboard](https://github.com/spotify/pedalboard), mixes the stems, and writes a
-JSON report and spectrograms, so that an agent, or a person, can revise the
-song.
+JSON report and spectrograms, so that an agent, or a person, can revise the song.
 
 ## Requirements
 
@@ -28,9 +27,9 @@ uv run analyze-song songs/demo.yaml
 ```
 
 `init-workspace` writes `plugins.toml`, a demo song, and the composing guide as `AGENTS.md`, with
-a `CLAUDE.md` that points to it, so coding agents working in the workspace read the guide. Every
-command finds the workspace by walking up from the working directory to the nearest
-`plugins.toml`, and writes renders under its `renders/` directory.
+a `CLAUDE.md` that points to it, so coding agents working in the workspace read the guide. The other
+commands find the workspace by walking up from the working directory to the nearest
+`plugins.toml`. `render-song` and `analyze-song` write under its `renders/` directory.
 
 ## Commands
 

@@ -39,6 +39,15 @@ def merge_gitignore(path: Path) -> None:
     path.write_text(existing + "".join(f"{line}\n" for line in missing))
 
 
+def conflicts(directory: Path) -> list[str]:
+    """Describe each existing path that stops the scaffold from being written whole."""
+    targets = [directory / target for target in SCAFFOLD_FILES.values()]
+    folders = sorted({directory, *(target.parent for target in targets)})
+    problems = [f"{folder} is not a directory" for folder in folders if folder.is_file()]
+    problems += [f"{target} exists" for target in targets if target.exists()]
+    return problems
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="init-workspace",
@@ -55,10 +64,10 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     directory = Path(args.directory)
 
-    conflicts = [target for target in SCAFFOLD_FILES.values() if (directory / target).exists()]
-    if conflicts:
-        for target in conflicts:
-            print(f"init-workspace: {directory / target} exists", file=sys.stderr)
+    problems = conflicts(directory)
+    if problems:
+        for problem in problems:
+            print(f"init-workspace: {problem}", file=sys.stderr)
         return EXIT_CONFLICT
 
     for name, target in SCAFFOLD_FILES.items():

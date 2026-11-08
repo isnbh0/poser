@@ -79,3 +79,26 @@ def test_initialized_directory_is_a_workspace_with_a_loadable_demo(tmp_path: Pat
 
     assert find_workspace(tmp_path / "songs") == Workspace(tmp_path.resolve())
     assert load_song(tmp_path / "songs" / "demo.yaml").tracks
+
+
+def test_a_file_where_the_workspace_goes_refuses(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    target = tmp_path / "taken"
+    target.write_text("mine")
+
+    assert init_workspace.main([str(target)]) == init_workspace.EXIT_CONFLICT
+
+    assert capsys.readouterr().err == f"init-workspace: {target} is not a directory\n"
+    assert target.read_text() == "mine"
+
+
+def test_a_file_where_songs_goes_refuses_and_writes_nothing(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    (tmp_path / "songs").write_text("mine")
+
+    assert init_workspace.main([str(tmp_path)]) == init_workspace.EXIT_CONFLICT
+
+    assert capsys.readouterr().err == f"init-workspace: {tmp_path / 'songs'} is not a directory\n"
+    assert sorted(path.name for path in tmp_path.iterdir()) == ["songs"]
