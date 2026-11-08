@@ -164,6 +164,24 @@ def test_core_imports_only_stdlib_numpy_and_core() -> None:
     assert not refused
 
 
+def test_every_use_case_exists() -> None:
+    assert set(USE_CASES) <= MODULES
+
+
+def file_system_imports(path: Path) -> list[str]:
+    """Return the file's imports of fcntl and shutil, which only adapters may use."""
+    return [name for name in sorted(imports(path)) if name.split(".", 1)[0] in {"fcntl", "shutil"}]
+
+
+def test_core_never_imports_fcntl_or_shutil() -> None:
+    refused = [
+        f"{module} imports {name}"
+        for module, path in core_modules()
+        for name in file_system_imports(path)
+    ]
+    assert not refused
+
+
 def test_core_layers() -> None:
     refused = [
         f"{module} ({layer(module)}) imports {target} ({layer(target)})"
@@ -210,6 +228,10 @@ def test_boundary_check_can_fail(tmp_path: Path) -> None:
     assert not layer_allows(PORTS, "poser.core.loading")
     assert not layer_allows("poser.core.loading", "poser.core.rendering")
     assert layer_allows("poser.core.rendering", "poser.core.loading")
+
+    locking = tmp_path / "locking.py"
+    locking.write_text("import os\nimport shutil\nfrom fcntl import flock\n")
+    assert file_system_imports(locking) == ["fcntl", "shutil"]
 
     assert find_cycle({"a": {"b"}, "b": {"a"}}) == ["a", "b", "a"]
     assert find_cycle({"a": {"b"}, "b": set()}) is None

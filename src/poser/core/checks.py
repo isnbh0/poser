@@ -6,7 +6,7 @@ from typing import assert_never
 
 import numpy as np
 
-from poser.core.audio import SILENCE_DBFS, measure_peak_dbfs, to_dbfs
+from poser.core.audio import SILENCE_DBFS, Audio, measure_peak_dbfs, to_dbfs
 from poser.core.performance import NoteOff, NoteOn, Performance
 from poser.core.statuses import RenderFailureStatus, SoundFailureStatus
 
@@ -84,13 +84,14 @@ def _note_peaks_dbfs(render: np.ndarray) -> list[float]:
     return [measure_peak_dbfs(render[..., start:stop]) for start, stop in _note_windows()]
 
 
-def analyze_check(first: np.ndarray, second: np.ndarray) -> CheckAnalysis:
+def analyze_check(first: Audio | np.ndarray, second: Audio | np.ndarray) -> CheckAnalysis:
     """Measure two channels-first renders of the check pattern.
 
     Peaks report the quieter of the two renders, so a plugin that goes silent on reload is caught.
+    An `Audio` is always finite; an array may not be, and then the status is `non_finite`.
     """
-    first = np.asarray(first, dtype=np.float64)
-    second = np.asarray(second, dtype=np.float64)
+    first = np.asarray(first.samples if isinstance(first, Audio) else first, dtype=np.float64)
+    second = np.asarray(second.samples if isinstance(second, Audio) else second, dtype=np.float64)
 
     both_finite = np.isfinite(first) & np.isfinite(second)
     difference = np.abs(first[both_finite] - second[both_finite]).max(initial=0.0)

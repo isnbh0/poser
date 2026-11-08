@@ -9,8 +9,8 @@ for changing poser itself. The composer guide that every workspace receives as i
 - `src/poser/__init__.py`: the composer API that song scripts import, re-exported from the core.
 - `src/poser/core/`: the application. Model modules hold values and pure functions (`names`,
   `jsonvalue`, `song`, `music`, `sounds`, `audio`, `performance`, `statuses`, `cache`, `report`,
-  `checks`); `ports` declares the protocols adapters implement; use-case modules (`loading`) run
-  the model through ports.
+  `checks`); `ports` declares the protocols adapters implement; use-case modules (`loading`,
+  `rendering`, `checking`, `capturing`, and `analysis`) run the model through ports.
 - `src/poser/adapters/`: implementations of the ports, such as `song_formats` (YAML and script
   songs) and `wav` (stem files).
 - `src/poser/cli/`: what the commands share, such as exit codes and `align_rows`.
@@ -19,7 +19,8 @@ for changing poser itself. The composer guide that every workspace receives as i
   `workspace`, and `worker`).
 - `src/poser/scaffold/`: package data that `uv run init-workspace` writes into a new workspace.
 - `tests/`: the tests. Tests marked `real_plugins` load real plugins. `tests/contracts.py` holds
-  the checks every adapter of a port must pass.
+  the checks every adapter of a port must pass, and `tests/fakes.py` holds a pure-Python fake of
+  every port, which passes them.
 
 ## Rules
 

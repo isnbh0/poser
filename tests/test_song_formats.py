@@ -8,7 +8,7 @@ from typing import Self
 import numpy as np
 import pytest
 import yaml
-from contracts import check_song_format_contract
+from contracts import check_record_writer_contract, check_song_format_contract
 from helpers import SCAFFOLD_DIR
 from test_song import cc_track_song, gain_song, helper_song, valid_song
 
@@ -360,6 +360,11 @@ def test_both_formats_meet_the_song_format_contract(tmp_path: Path) -> None:
         directory = tmp_path / type(fmt).__name__
         directory.mkdir()
         check_song_format_contract(fmt, helper_song(), directory)
+
+
+def test_yaml_format_meets_the_record_writer_contract() -> None:
+    for song in (helper_song(), gain_song(), cc_track_song()):
+        check_record_writer_contract(YamlSongFormat(), song)
 
 
 def test_format_suffixes() -> None:
