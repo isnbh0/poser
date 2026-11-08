@@ -9,7 +9,13 @@ import yaml
 
 from poser import analyze, plugin_check, render, sounds
 from poser.sounds import SavedSound, write_sound
-from poser.workspace import Workspace, WorkspaceError, find_workspace
+from poser.workspace import (
+    SongOutsideWorkspaceError,
+    Workspace,
+    WorkspaceError,
+    find_workspace,
+    song_render_dir,
+)
 
 
 def make_workspace(root: Path) -> Path:
@@ -115,7 +121,7 @@ def test_render_from_a_subdirectory_writes_at_the_workspace_root(
 
     render.main([str(song)])
 
-    assert (tmp_path / "renders" / "tune").is_dir()
+    assert (tmp_path / "renders" / "songs" / "tune.yaml").is_dir()
     assert not (tmp_path / "songs" / "renders").exists()
 
 
@@ -129,3 +135,49 @@ def test_list_sounds_reads_the_workspace_sounds(
 
     names = [entry["name"] for entry in json.loads(capsys.readouterr().out)]
     assert "warm" in names
+
+
+@pytest.mark.parametrize("name", ["x.py", "x.yaml", "x.yml"])
+def test_render_dir_is_the_song_path_with_its_suffix(tmp_path: Path, name: str) -> None:
+    base, renders = tmp_path / "base", tmp_path / "r"
+
+    assert song_render_dir(renders, base, base / "songs" / name) == renders / "songs" / name
+
+
+def test_song_in_a_directory_named_like_a_song_gets_its_own_render_dir(tmp_path: Path) -> None:
+    base, renders = tmp_path / "base", tmp_path / "r"
+
+    nested = song_render_dir(renders, base, base / "songs" / "x" / "mix.py")
+
+    assert nested == renders / "songs" / "x" / "mix.py"
+    assert nested != song_render_dir(renders, base, base / "songs" / "x.py")
+
+
+def test_relative_song_path_resolves_from_the_working_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    base, renders = tmp_path / "base", tmp_path / "r"
+    (base / "songs").mkdir(parents=True)
+    monkeypatch.chdir(base / "songs")
+
+    assert song_render_dir(renders, base, Path("../drafts/x.py")) == renders / "drafts" / "x.py"
+
+
+def test_render_dir_does_not_need_the_song_file(tmp_path: Path) -> None:
+    song = tmp_path / "songs" / "missing.yaml"
+
+    assert (
+        song_render_dir(tmp_path / "r", tmp_path, song) == tmp_path / "r" / "songs" / "missing.yaml"
+    )
+    assert not song.exists()
+
+
+def test_song_outside_the_base_is_refused(tmp_path: Path) -> None:
+    base = tmp_path / "base"
+    song = tmp_path / "elsewhere" / "x.py"
+
+    with pytest.raises(SongOutsideWorkspaceError) as error:
+        song_render_dir(tmp_path / "r", base, song)
+
+    assert isinstance(error.value, WorkspaceError)
+    assert str(error.value) == f"{song.resolve()} is outside the workspace at {base.resolve()}"

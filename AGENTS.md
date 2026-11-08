@@ -15,8 +15,8 @@ loads them in this project's environment.
 
 ## Songs
 
-A song is `songs/<name>.py`, whose `build()` returns a `Song`, or `songs/<name>.yaml`. One name may
-not have both. `songs/demo.yaml` shows the YAML form; both forms use the same keys and checks.
+A song is `songs/<name>.py`, whose `build()` returns a `Song`, or `songs/<name>.yaml`.
+`songs/demo.yaml` shows the YAML form; both forms use the same keys and checks.
 Times are in beats from 0, and pitches are MIDI numbers, where middle C is 60.
 
 | Key | Where | Type | Range |
@@ -100,8 +100,9 @@ and Serum's default patch neither repeats between renders nor responds to contro
 
 ## Rendering
 
-`uv run render-song songs/<name>.py` writes one stem per track to `renders/<name>/`. Stems are
-cached by their inputs, so only changed tracks render, and a gain-only edit renders nothing.
+`uv run render-song songs/<name>.py` writes one stem per track to `renders/<song path>/`, such as
+`renders/songs/demo.yaml/` for `songs/demo.yaml`. Stems are cached by their inputs, so only
+changed tracks render, and a gain-only edit renders nothing.
 Every track's inputs include the song's tempo and total length, so lengthening the song re-renders
 every track. `--force` re-renders every track. Add `--json` for a machine-readable report.
 
@@ -145,7 +146,8 @@ rendering again fixes it.
 Defects fail the analysis: `silent`, for a track or the mix; `clipping`, for mix samples beyond
 full scale; and `headroom`, for a mix peak above -1 dBFS.
 
-Results live in `renders/<name>/`. `analysis/` and `mix/` exist only when every track analyzed:
+Results live in `renders/<song path>/`. `analysis/` and `mix/` exist only when every track
+analyzed:
 
 - `analysis/report.json` and `analysis/<track>.png`, one spectrogram per track.
 - `mix/mix.wav` and `mix/mix.png`. The PNGs are images you can view.

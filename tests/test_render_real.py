@@ -19,7 +19,7 @@ def test_demo_song_renders_aligned_audible_stems(tmp_path: Path) -> None:
     expected_samples = render.expected_samples(render.song_duration_s(song))
 
     results = render.render_song(
-        song, "demo", real_specs(), tmp_path, sounds_dir=tmp_path / "sounds"
+        song, tmp_path / "demo", real_specs(), sounds_dir=tmp_path / "sounds"
     )
 
     assert [result.track for result in results] == [track.name for track in song.tracks]
@@ -39,7 +39,7 @@ SOUND = "Serum:Leads/LD A Bit of Luck [SD]"
 def render_cc_song(tmp_path: Path, name: str, beats: float, *changes: ControlChange) -> np.ndarray:
     track = Track("lead", "pedalboard", SOUND, (Note(0, 60, beats, 100),), cc=changes)
     (result,) = render.render_song(
-        Song(120, (track,)), name, real_specs(), tmp_path, sounds_dir=tmp_path / "sounds"
+        Song(120, (track,)), tmp_path / name, real_specs(), sounds_dir=tmp_path / "sounds"
     )
     assert result.status is TrackStatus.RENDERED, result.detail
     assert result.stem is not None

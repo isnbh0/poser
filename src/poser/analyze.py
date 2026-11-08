@@ -52,7 +52,6 @@ from poser.render import (
     song_duration_s,
     song_last_beat,
     song_lock,
-    song_render_dir,
     sound_key,
     stamp_matches_stem,
     stamp_path,
@@ -60,7 +59,7 @@ from poser.render import (
     track_key,
 )
 from poser.song import Song, SongError, load_song, write_song
-from poser.workspace import WorkspaceError, fill_path_options
+from poser.workspace import WorkspaceError, fill_path_options, song_render_dir
 
 MIX_NAME = "mix"
 HISTORY_DIR = "history"
@@ -351,14 +350,14 @@ def analyze_song(
     song: Song,
     song_path: Path,
     specs: list[PluginSpec],
-    output_dir: Path,
+    song_dir: Path,
     sounds_dir: Path,
 ) -> Report:
     """Mix and measure a song's stems, and keep the analysis as the next history record.
 
     Raises SongBusyError when another render-song or analyze-song holds the song's lock.
     """
-    song_dir = song_render_dir(output_dir.resolve(), song_path.stem)
+    song_dir = song_dir.resolve()
     with song_lock(song_dir):
         return _analyze(song, song_path, song_dir, specs, sounds_dir)
 
@@ -520,7 +519,9 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     try:
-        fill_path_options(args)
+        base = fill_path_options(args)
+        # Before loading, so a refused song's script never runs.
+        song_dir = song_render_dir(args.output_dir, base, args.song)
     except WorkspaceError as error:
         print(f"analyze-song: {error}", file=sys.stderr)
         return EXIT_BAD_CONFIG
@@ -533,7 +534,7 @@ def main(argv: list[str] | None = None) -> int:
         return EXIT_BAD_CONFIG
 
     try:
-        report = analyze_song(song, args.song, specs, args.output_dir, args.sounds_dir)
+        report = analyze_song(song, args.song, specs, song_dir, args.sounds_dir)
     except SongBusyError as error:
         print(f"analyze-song: {error}", file=sys.stderr)
         return EXIT_SONG_BUSY

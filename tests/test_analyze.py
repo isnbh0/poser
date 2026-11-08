@@ -75,11 +75,11 @@ def make_song(
     song_path = tmp_path / "song.yaml"
     song_path.write_text(yaml.safe_dump({"bpm": 60, "tracks": tracks}))
 
-    song_dir = tmp_path / "renders" / "song"
-    song_dir.mkdir(parents=True, exist_ok=True)
+    directory = song_dir(song_path)
+    directory.mkdir(parents=True, exist_ok=True)
     for name, audio in stems.items():
         if audio is not None:
-            write_wav(song_dir / f"{name}.wav", audio)
+            write_wav(directory / f"{name}.wav", audio)
             stamp(song_path, name)
     return song_path
 
@@ -105,7 +105,7 @@ def run(song_path: Path) -> analyze.Report:
         load_song(song_path),
         song_path,
         SPECS,
-        song_path.parent / "renders",
+        song_dir(song_path),
         song_path.parent / "sounds",
     )
 
@@ -153,7 +153,9 @@ def items(data: object, *path: str | int) -> list[object]:
 
 
 def song_dir(song_path: Path) -> Path:
-    return song_path.parent / "renders" / "song"
+    """Return where `analyze-song`, given `cli_args`, puts the song: its path below the working
+    directory, under the `renders` directory beside it."""
+    return song_path.parent / "renders" / song_path.resolve().relative_to(Path.cwd().resolve())
 
 
 def tracks_by_name(report: analyze.Report) -> dict[str, analyze.TrackReport]:
@@ -531,7 +533,7 @@ def test_analysis_refuses_to_start_while_the_song_is_locked(
             run(song_path)
         assert analyze.main(cli_args(song_path)) == render.EXIT_SONG_BUSY
         assert capsys.readouterr().err == (
-            "analyze-song: another render-song or analyze-song is running on song\n"
+            "analyze-song: another render-song or analyze-song is running on song.yaml\n"
         )
     assert not (song_dir(song_path) / "history").exists()
 
@@ -575,9 +577,8 @@ def test_render_leaves_history_intact(tmp_path: Path, monkeypatch: pytest.Monkey
 
     render.render_song(
         load_song(song_path),
-        "song",
+        song_dir(song_path),
         SPECS,
-        song_path.parent / "renders",
         sounds_dir=song_path.parent / "sounds",
     )
 

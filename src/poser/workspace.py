@@ -19,6 +19,10 @@ class WorkspaceError(Exception):
     """No workspace was found."""
 
 
+class SongOutsideWorkspaceError(WorkspaceError):
+    """A song's path is not below the directory render directories are relative to."""
+
+
 @dataclass(frozen=True)
 class Workspace:
     root: Path
@@ -48,15 +52,32 @@ def find_workspace(start: Path | None = None) -> Workspace:
     )
 
 
-def fill_path_options(args: argparse.Namespace) -> None:
+def fill_path_options(args: argparse.Namespace) -> Path:
     """Set each path option the command has but was not given from the workspace.
 
     The search runs only when an option was omitted, so a command given every path needs no
-    workspace. Raises WorkspaceError when one is needed and none is found.
+    workspace. Returns the base that song render directories are relative to: the workspace root
+    when it searched, and the working directory otherwise. Raises WorkspaceError when a workspace
+    is needed and none is found.
     """
     omitted = [dest for dest in PATH_OPTIONS if dest in vars(args) and getattr(args, dest) is None]
     if not omitted:
-        return
+        return Path.cwd()
     workspace = find_workspace()
     for dest in omitted:
         setattr(args, dest, getattr(workspace, PATH_OPTIONS[dest]))
+    return workspace.root
+
+
+def song_render_dir(renders_dir: Path, base: Path, song_path: Path) -> Path:
+    """Return a song's render directory: its path below `base`, under `renders_dir`.
+
+    The song's suffix is kept, so `songs/x.py` renders into `renders/songs/x.py/`. No entry poser
+    writes inside a render directory ends in a song suffix, so one song's directory never
+    coincides with an entry of another's. The song path is resolved, so a symlinked song is placed
+    by its target. Raises SongOutsideWorkspaceError when the song is not below `base`.
+    """
+    base, song = base.resolve(), song_path.resolve()
+    if not song.is_relative_to(base):
+        raise SongOutsideWorkspaceError(f"{song} is outside the workspace at {base}")
+    return renders_dir / song.relative_to(base)

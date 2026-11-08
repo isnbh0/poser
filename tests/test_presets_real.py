@@ -34,7 +34,7 @@ def test_preset_chunk_reaches_the_render(tmp_path: Path) -> None:
     )
 
     [result] = render.render_song(
-        song, "preset", load_config(config), tmp_path / "renders", sounds_dir=tmp_path / "sounds"
+        song, tmp_path / "renders" / "preset", load_config(config), sounds_dir=tmp_path / "sounds"
     )
 
     assert result.status is render.TrackStatus.RENDERED, result.detail

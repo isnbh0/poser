@@ -193,10 +193,10 @@ def test_python_example_renders_without_defects(tmp_path: Path) -> None:
     specs = real_specs()
     (example,) = python_songs(tmp_path)
     song_path = tmp_path / "example0" / "example.py"
-    output_dir = tmp_path / "renders"
-    render.render_song(example, song_path.stem, specs, output_dir, sounds_dir=tmp_path / "sounds")
+    song_dir = tmp_path / "renders" / "example0" / "example.py"
+    render.render_song(example, song_dir, specs, sounds_dir=tmp_path / "sounds")
 
-    report = analyze.analyze_song(example, song_path, specs, output_dir, tmp_path / "sounds")
+    report = analyze.analyze_song(example, song_path, specs, song_dir, tmp_path / "sounds")
 
     for track in report.tracks:
         assert track.status is analyze.TrackStatus.ANALYZED, track.detail

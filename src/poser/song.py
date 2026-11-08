@@ -490,22 +490,10 @@ SCRIPT_SUFFIX = ".py"
 
 
 def load_song(path: Path) -> Song:
-    """Load a song from YAML, or from a script whose `build()` returns one.
-
-    A script's song passes the same checks as YAML. A script and a YAML file with the same stem
-    in one directory would share a render directory, so either one is refused.
-    """
+    """Load a song from YAML, or from a script whose `build()` returns one."""
     suffix = path.suffix
     if suffix not in (*YAML_SUFFIXES, SCRIPT_SUFFIX):
         raise SongError([f"cannot read {path}: a song is a .yaml, .yml, or .py file"])
-    siblings = [
-        path.with_suffix(other)
-        for other in (*YAML_SUFFIXES, SCRIPT_SUFFIX)
-        if (other == SCRIPT_SUFFIX) != (suffix == SCRIPT_SUFFIX)
-    ]
-    for sibling in siblings:
-        if sibling.exists():
-            raise SongError([f"{path} and {sibling} both define song {path.stem}"])
     if suffix == SCRIPT_SUFFIX:
         return _build_song(path)
     try:

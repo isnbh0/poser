@@ -29,8 +29,10 @@ def test_saved_sound_state_reaches_the_render(tmp_path: Path) -> None:
         return Song(bpm=60, tracks=(Track("lead", "pedalboard", sound, (Note(0, 60, 1.5, 100),)),))
 
     out = tmp_path / "renders"
-    [default] = render.render_song(note_song("Serum"), "default", specs, out, sounds_dir=sounds_dir)
-    [saved] = render.render_song(note_song("low"), "saved", specs, out, sounds_dir=sounds_dir)
+    [default] = render.render_song(
+        note_song("Serum"), out / "default", specs, sounds_dir=sounds_dir
+    )
+    [saved] = render.render_song(note_song("low"), out / "saved", specs, sounds_dir=sounds_dir)
 
     assert default.status is render.TrackStatus.RENDERED, default.detail
     assert saved.status is render.TrackStatus.RENDERED, saved.detail

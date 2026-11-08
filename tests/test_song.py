@@ -682,19 +682,16 @@ def build():
     ]
 
 
-@pytest.mark.parametrize(("loaded", "sibling"), [("x.py", "x.yaml"), ("x.yaml", "x.py")])
-def test_script_and_yaml_with_one_stem_are_a_song_error(
-    tmp_path: Path, loaded: str, sibling: str
-) -> None:
-    write_script(tmp_path, "def build():\n    return None\n", "x.py")
+def test_script_and_yaml_with_one_stem_both_load(tmp_path: Path) -> None:
+    write_script(
+        tmp_path,
+        "def build():\n    return Song(90, (Track('lead', 'pedalboard', 'Serum', (Note(0, 60, 1, 100),)),))\n",
+        "x.py",
+    )
     (tmp_path / "x.yaml").write_text(yaml.safe_dump(valid_song()))
 
-    with pytest.raises(SongError) as error:
-        load_song(tmp_path / loaded)
-
-    assert error.value.problems == [
-        f"{tmp_path / loaded} and {tmp_path / sibling} both define song x"
-    ]
+    assert load_song(tmp_path / "x.py").bpm == 90
+    assert load_song(tmp_path / "x.yaml").bpm == 120
 
 
 @pytest.mark.parametrize("where", ["import", "build"])

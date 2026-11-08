@@ -20,10 +20,10 @@ SONGS = sorted(
 def test_song_renders_without_defects(path: Path, tmp_path: Path) -> None:
     specs = real_specs()
     song = load_song(path)
-    output_dir = tmp_path / "renders"
-    render.render_song(song, path.stem, specs, output_dir, sounds_dir=tmp_path / "sounds")
+    song_dir = tmp_path / "renders" / path.name
+    render.render_song(song, song_dir, specs, sounds_dir=tmp_path / "sounds")
 
-    report = analyze.analyze_song(song, path, specs, output_dir, tmp_path / "sounds")
+    report = analyze.analyze_song(song, path, specs, song_dir, tmp_path / "sounds")
 
     for track in report.tracks:
         assert track.status is analyze.TrackStatus.ANALYZED, f"{track.name}: {track.detail}"

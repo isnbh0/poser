@@ -58,7 +58,7 @@ from poser.worker import (
     json_object,
     run_isolated,
 )
-from poser.workspace import WorkspaceError, fill_path_options
+from poser.workspace import WorkspaceError, fill_path_options, song_render_dir
 
 if TYPE_CHECKING:
     from pedalboard_native import MIDIMessageLike
@@ -259,11 +259,6 @@ def track_messages(song: Song, track: Track) -> list[mido.Message]:
         events.append((sample, 1, mido.Message("control_change", control=control, value=value)))
     events.sort(key=lambda event: event[:2])
     return [message.copy(time=(sample + 0.5) / SAMPLE_RATE) for sample, _, message in events]
-
-
-def song_render_dir(output_dir: Path, song_name: str) -> Path:
-    """Return the directory that holds one song's stems."""
-    return output_dir / song_name
 
 
 def stem_path(song_dir: Path, track_name: str) -> Path:
@@ -509,9 +504,8 @@ def resolve_sound(
 
 def render_song(
     song: Song,
-    song_name: str,
+    song_dir: Path,
     specs: list[PluginSpec],
-    output_dir: Path,
     *,
     sounds_dir: Path,
     timeout_s: float = WORKER_TIMEOUT_S,
@@ -521,7 +515,6 @@ def render_song(
 
     A stem is reused when its stamp matches the file and both the track's and the sound's keys.
     """
-    song_dir = song_render_dir(output_dir, song_name)
     with song_lock(song_dir):
         return _render_tracks(song, song_dir, specs, timeout_s, sounds_dir, force)
 
@@ -616,7 +609,9 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     try:
-        fill_path_options(args)
+        base = fill_path_options(args)
+        # Before loading, so a refused song's script never runs.
+        song_dir = song_render_dir(args.output_dir, base, args.song)
     except WorkspaceError as error:
         print(f"render-song: {error}", file=sys.stderr)
         return EXIT_BAD_CONFIG
@@ -631,9 +626,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         results = render_song(
             song,
-            args.song.stem,
+            song_dir,
             specs,
-            args.output_dir,
             sounds_dir=args.sounds_dir,
             force=args.force,
         )

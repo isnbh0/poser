@@ -17,9 +17,9 @@ def test_demo_song_mixes_and_analyzes(tmp_path: Path) -> None:
     song_path = REPO_DIR / "songs" / "demo.yaml"
     song = load_song(song_path)
     specs = real_specs()
-    render.render_song(song, "demo", specs, tmp_path, sounds_dir=tmp_path / "sounds")
+    render.render_song(song, tmp_path / "demo", specs, sounds_dir=tmp_path / "sounds")
 
-    report = analyze_song(song, song_path, specs, tmp_path, tmp_path / "sounds")
+    report = analyze_song(song, song_path, specs, tmp_path / "demo", tmp_path / "sounds")
 
     for track in report.tracks:
         assert track.status is TrackStatus.ANALYZED, track.detail
