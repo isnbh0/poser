@@ -48,7 +48,7 @@ def test_juce_base64_handles_a_two_megabyte_preset_quickly() -> None:
 
 @pytest.mark.parametrize("text", ["abc", "x.AB", "2.A", "1.!!"])
 def test_juce_base64_decode_rejects_bad_text(text: str) -> None:
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match=r"JUCE base64|cannot hold"):
         juce_base64_decode(text)
 
 
@@ -72,7 +72,7 @@ def test_build_state_frames_the_component_as_juce_binary_xml() -> None:
     ids=["magic", "length", "zero byte"],
 )
 def test_component_state_rejects_broken_framing(broken: bytes) -> None:
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match=r"^raw_state "):
         component_state(broken)
 
 

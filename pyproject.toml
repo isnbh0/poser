@@ -45,7 +45,18 @@ default-groups = ["dev", "lint"]
 line-length = 100
 
 [tool.ruff.lint]
-extend-select = ["TID251"]
+select = [
+    "E", "W", "F", "I", "B", "UP", "SIM", "C4", "RUF", "PT", "PL", "ANN", "PIE", "RET", "TC",
+    "A", "N", "DTZ", "PGH", "PERF", "FURB", "PTH", "ARG", "S", "BLE", "LOG", "G", "ISC", "T10",
+    "RSE", "FLY", "TRY", "TID", "FBT", "ERA",
+]
+ignore = [
+    "PLR0911", "PLR0912", "PLR0913", "PLR0915", "PLR0917", "PLR2004",
+    "PLC0415", "TRY003", "S603", "S311",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101", "ARG", "FBT", "SLF001", "PLR2004"]
 
 [tool.ruff.lint.flake8-tidy-imports.banned-api]
 "typing.Any".msg = "Use object, a TypedDict, a Protocol, or a concrete type."
@@ -53,7 +64,21 @@ extend-select = ["TID251"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-m 'not real_plugins'"
+addopts = ["-m", "not real_plugins", "--strict-markers", "--strict-config", "-ra"]
+xfail_strict = true
+filterwarnings = ["error"]
 markers = [
     "real_plugins: loads the plugins installed on this machine",
 ]
+
+[tool.ty.terminal]
+error-on-warning = true
+
+[tool.ty.rules]
+possibly-unresolved-reference = "error"
+possibly-missing-attribute = "error"
+possibly-missing-import = "error"
+missing-type-argument = "error"
+blanket-ignore-comment = "error"
+missing-override-decorator = "error"
+unsound-assignment = "error"

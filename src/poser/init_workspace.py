@@ -49,11 +49,11 @@ def main(argv: list[str] | None = None) -> int:
         "directory",
         nargs="?",
         type=Path,
-        default=Path("."),
+        default=Path(),
         help="workspace directory, created if missing (default: the working directory)",
     )
     args = parser.parse_args(argv)
-    directory: Path = args.directory
+    directory = Path(args.directory)
 
     conflicts = [target for target in SCAFFOLD_FILES.values() if (directory / target).exists()]
     if conflicts:

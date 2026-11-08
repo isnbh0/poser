@@ -5,6 +5,7 @@ import subprocess
 import tempfile
 from collections.abc import Mapping
 from pathlib import Path
+from typing import TypeGuard
 
 
 def json_object(value: object) -> Mapping[str, object] | None:
@@ -15,6 +16,26 @@ def json_object(value: object) -> Mapping[str, object] | None:
     if isinstance(value, dict) and all(isinstance(key, str) for key in value):
         return value
     return None
+
+
+class MalformedJobError(ValueError):
+    """A worker's job file does not hold the job the parent writes. The parent writes every job
+    itself, so this is a bug, and the worker fails loudly."""
+
+    def __init__(self, what: str, value: object) -> None:
+        super().__init__(f"malformed {what}: {value!r}")
+
+
+def job_fields(value: object, keys: set[str], what: str) -> Mapping[str, object]:
+    """Return a job's JSON object, raising MalformedJobError unless it has exactly `keys`."""
+    fields = json_object(value)
+    if fields is None or set(fields) != keys:
+        raise MalformedJobError(what, value)
+    return fields
+
+
+def optional_str(value: object) -> TypeGuard[str | None]:
+    return value is None or isinstance(value, str)
 
 
 class WorkerTimedOutError(Exception):

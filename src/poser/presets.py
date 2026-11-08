@@ -142,7 +142,8 @@ def build_state(component: bytes) -> bytes:
 
 
 def component_state(raw_state: bytes) -> bytes:
-    """Return the component state inside a `raw_state` in exactly the framing `build_state` writes."""
+    """Return the component state inside a `raw_state`, in exactly the framing `build_state`
+    writes."""
     if raw_state[:4] != STATE_MAGIC:
         raise ValueError("raw_state does not start with VC2!")
     length = int.from_bytes(raw_state[4:8], "little")

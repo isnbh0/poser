@@ -8,6 +8,7 @@ import sys
 from collections.abc import Callable, Mapping
 from dataclasses import replace
 from pathlib import Path
+from typing import override
 
 import numpy as np
 import pytest
@@ -256,6 +257,7 @@ def result_script(tmp_path: Path, action: str) -> list[str]:
         f"""
 import json, sys, time
 from pathlib import Path
+from typing import override
 job = json.loads(Path(sys.argv[-2]).read_text())
 with open({str(tmp_path / "jobs.log")!r}, "a") as log:
     log.write(json.dumps(job) + "\\n")
@@ -602,6 +604,7 @@ class StatefulFakePlugin(FakePlugin):
     def raw_state(self, value: bytes) -> None:
         self.events.append(("raw_state", value))
 
+    @override
     def __call__(self, messages: list[object], **kwargs: object) -> np.ndarray:
         self.events.append(("render", None))
         return super().__call__(messages, **kwargs)
@@ -1034,7 +1037,7 @@ def test_failed_stamp_write_leaves_no_temporary_file(
     def refuse(source: object, target: object) -> None:
         raise OSError("disk full")
 
-    monkeypatch.setattr(render.os, "replace", refuse)
+    monkeypatch.setattr(Path, "replace", refuse)
     with pytest.raises(OSError, match="disk full"):
         render.write_stamp(tmp_path / "lead.json", stem, "a", "b", TrackStatus.RENDERED, -6.0)
 
@@ -1304,6 +1307,7 @@ def test_render_refuses_to_start_while_the_song_is_locked(
 LOCK_HOLDER = """
 import sys, time
 from pathlib import Path
+from typing import override
 from poser.render import song_lock
 
 with song_lock(Path(sys.argv[1])):
@@ -1318,18 +1322,62 @@ def test_lock_of_a_killed_run_does_not_block(
     use_worker(tmp_path, monkeypatch, "pass")
     song = load_song(write_song(tmp_path, "tune.yaml"))
     song_dir = (tmp_path / "out" / "tune.yaml").resolve()
-    holder = subprocess.Popen(
+    with subprocess.Popen(
         [sys.executable, "-c", LOCK_HOLDER, str(song_dir)], stdout=subprocess.PIPE, text=True
-    )
-    try:
-        assert holder.stdout is not None
-        assert holder.stdout.readline() == "locked\n"
-        with pytest.raises(render.SongBusyError), render.song_lock(song_dir):
-            pass
-    finally:
-        holder.kill()
-        holder.wait()
+    ) as holder:
+        try:
+            assert holder.stdout is not None
+            assert holder.stdout.readline() == "locked\n"
+            with pytest.raises(render.SongBusyError), render.song_lock(song_dir):
+                pass
+        finally:
+            holder.kill()
+            holder.wait()
 
     assert statuses(render_song(song, song_dir, SPECS, sounds_dir=tmp_path / "sounds")) == [
         ("lead", TrackStatus.RENDERED)
     ]
+
+
+def round_trip_job() -> render.RenderJob:
+    track = Track(
+        "lead",
+        "pedalboard",
+        "Serum",
+        (Note(0, 60, 1, 100), Note(1.5, 62, 0.5, 90)),
+        cc=(
+            ControlChange(beat=0, control=1, value=0, shape="linear"),
+            ControlChange(beat=2, control=1, value=127),
+        ),
+    )
+    song = make_song(track)
+    return render.render_job(song, track, SPECS[0], "c3RhdGU=", Path("renders/lead.wav"), 4.0)
+
+
+def test_render_job_round_trips_through_json() -> None:
+    job = round_trip_job()
+
+    assert render.parse_render_job(json.loads(json.dumps(job))) == job
+
+
+@pytest.mark.parametrize(
+    "break_job",
+    [
+        lambda job: job.pop("stem_path"),
+        lambda job: job.update(bpm="fast"),
+        lambda job: job.update(extra=1),
+        lambda job: job["track"].pop("notes"),
+        lambda job: job["track"]["notes"][0].update(pitch=60.5),
+        lambda job: job["track"]["cc"][0].update(shape="curve"),
+        lambda job: job.update(track=[]),
+    ],
+    ids=["missing key", "bpm", "extra key", "track key", "note", "change", "track type"],
+)
+def test_malformed_render_job_raises_value_error(
+    break_job: Callable[[dict[str, object]], object],
+) -> None:
+    data = json.loads(json.dumps(round_trip_job()))
+    break_job(data)
+
+    with pytest.raises(ValueError, match=r"^malformed "):
+        render.parse_render_job(data)

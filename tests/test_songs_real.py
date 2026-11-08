@@ -1,4 +1,5 @@
-"""Every one of the scaffold's songs renders and analyzes on this machine's plugins with no defects."""
+"""Every one of the scaffold's songs renders and analyzes with no defects on this machine's
+plugins."""
 
 from pathlib import Path
 

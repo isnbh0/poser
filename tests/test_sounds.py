@@ -548,7 +548,7 @@ def test_failed_sound_write_leaves_no_temporary_file(
     def fail(*args: object) -> None:
         raise OSError("disk full")
 
-    monkeypatch.setattr(sounds.os, "replace", fail)
+    monkeypatch.setattr(Path, "replace", fail)
     sound = sounds.SavedSound("pad", "Serum", "pad", encode(b"s"))
 
     with pytest.raises(OSError, match="disk full"):
@@ -560,3 +560,33 @@ def test_failed_sound_write_leaves_no_temporary_file(
 def test_previews_are_apart_from_song_stem_directories() -> None:
     assert not sounds.NAME_PATTERN.fullmatch(sounds.PREVIEWS_DIR)
     assert sounds.PREVIEWS_DIR.startswith(".")
+
+
+SAVE_JOB: sounds.SaveJob = {
+    "plugin_path": "/serum.vst3",
+    "plugin_name": None,
+    "state": None,
+    "preview_path": "renders/.pad.preview.wav",
+}
+
+
+def test_save_job_round_trips_through_json() -> None:
+    assert sounds.parse_save_job(json.loads(json.dumps(SAVE_JOB))) == SAVE_JOB
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [{"preview_path": None}, {"plugin_name": 3}, {"extra": 1}],
+    ids=["preview path", "plugin name", "extra key"],
+)
+def test_malformed_save_job_raises_value_error(changes: dict[str, object]) -> None:
+    with pytest.raises(ValueError, match=r"^malformed save job"):
+        sounds.parse_save_job({**SAVE_JOB, **changes})
+
+
+def test_save_job_missing_a_key_raises_value_error() -> None:
+    data = dict(SAVE_JOB)
+    del data["state"]
+
+    with pytest.raises(ValueError, match=r"^malformed save job"):
+        sounds.parse_save_job(data)

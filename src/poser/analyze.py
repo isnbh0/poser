@@ -10,7 +10,6 @@ import argparse
 import hashlib
 import json
 import math
-import os
 import shutil
 import sys
 from dataclasses import asdict, dataclass, field, replace
@@ -294,7 +293,7 @@ def write_wav(audio: np.ndarray, path: Path) -> None:
             str(temp), samplerate=SAMPLE_RATE, num_channels=NUM_CHANNELS, bit_depth=WAV_BIT_DEPTH
         ) as output:
             output.write(audio)
-        os.replace(temp, path)
+        temp.replace(path)
     finally:
         temp.unlink(missing_ok=True)
 

@@ -194,7 +194,7 @@ def _note_problems(values: Mapping[str, object], where: str) -> list[str]:
     return problems
 
 
-def _is_shape(value: object) -> TypeGuard[Shape]:
+def is_shape(value: object) -> TypeGuard[Shape]:
     return value in SHAPES
 
 
@@ -210,7 +210,7 @@ def _control_change_problems(values: Mapping[str, object], where: str) -> list[s
         )
     if "value" in values and not _is_int_in_range(cc_value, 0, 127):
         problems.append(f"{where}.value: must be an integer from 0 to 127, got {cc_value!r}")
-    if "shape" in values and not _is_shape(shape):
+    if "shape" in values and not is_shape(shape):
         problems.append(f"{where}.shape: must be step or linear, got {shape!r}")
     return problems
 
@@ -358,11 +358,12 @@ def _check_keys(
     optional: frozenset[str] | set[str] = frozenset(),
 ) -> None:
     prefix = f"{where}: " if where else ""
-    for key in data:
-        if key not in required and key not in optional:
-            problems.append(f"{prefix}unknown key {key!r}")
-    for key in sorted(required - set(data)):
-        problems.append(f"{prefix}missing key {key!r}")
+    problems.extend(
+        f"{prefix}unknown key {key!r}"
+        for key in data
+        if key not in required and key not in optional
+    )
+    problems.extend(f"{prefix}missing key {key!r}" for key in sorted(required - set(data)))
 
 
 def _parse_note(value: object, where: str, problems: list[str]) -> Note | None:
@@ -397,7 +398,7 @@ def _parse_control_change(value: object, where: str, problems: list[str]) -> Con
     shape = data.get("shape", "step")
     # These fail only when a problem was reported. A missing key reads as None.
     if field_problems or not (
-        is_number(beat) and is_int(control) and is_int(cc_value) and _is_shape(shape)
+        is_number(beat) and is_int(control) and is_int(cc_value) and is_shape(shape)
     ):
         return None
     return ControlChange(beat=beat, control=control, value=cc_value, shape=shape)
@@ -613,8 +614,8 @@ def write_song(song: Song, path: Path) -> None:
     try:
         with os.fdopen(fd, "w") as handle:
             handle.write(text)
-        os.chmod(temp, mode)
-        os.replace(temp, target)
+        temp.chmod(mode)
+        temp.replace(target)
     except BaseException as error:
         temp.unlink(missing_ok=True)
         if isinstance(error, OSError):

@@ -33,7 +33,7 @@ def test_pitch_reads_note_names(name: str, value: int) -> None:
 
 @pytest.mark.parametrize("name", ["H4", "C", "C10", "G#9", "Cb-1", "", "C#-2", " C4"])
 def test_pitch_rejects_bad_names(name: str) -> None:
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match=r"^note name "):
         pitch(name)
 
 
@@ -64,7 +64,7 @@ def test_scale_aliases_match() -> None:
 
 @pytest.mark.parametrize(("root", "mode"), [(60, "blues"), (120, "major")])
 def test_scale_rejects_unknown_mode_and_out_of_range(root: int, mode: str) -> None:
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match=r"unknown mode|outside 0 to 127"):
         scale(root, mode)
 
 
@@ -79,9 +79,9 @@ def test_degree_works_with_five_note_scales() -> None:
 
 
 def test_degree_rejects_empty_scale_and_out_of_range() -> None:
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="scale is empty"):
         degree((), 0)
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="degree 70 reaches pitch 180, outside 0 to 127"):
         degree(scale(60, "major"), 70)
 
 
@@ -113,7 +113,7 @@ def test_chord_inversions() -> None:
 
 @pytest.mark.parametrize(("quality", "inversion"), [("maj", 3), ("maj", -1), ("maj9", 0)], ids=str)
 def test_chord_rejects_bad_inversion_and_quality(quality: str, inversion: int) -> None:
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match=r"must be from 0 to 2 for|unknown chord quality"):
         chord(60, quality, inversion)
 
 
@@ -140,12 +140,12 @@ def test_swing_half_is_straight() -> None:
 
 @pytest.mark.parametrize("ratio", [0.4, 1.0])
 def test_swing_rejects_ratio_out_of_range(ratio: float) -> None:
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match=r"must be at least 0.5 and below 1"):
         swing(at(0.5), ratio)
 
 
 def test_swing_rejects_non_positive_grid() -> None:
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="swing grid 0 must be a positive number of beats"):
         swing(at(0.5), 0.6, grid=0)
 
 
@@ -190,7 +190,7 @@ def test_humanize_zero_spread_changes_nothing() -> None:
 
 @pytest.mark.parametrize(("velocity", "timing"), [(-1, 0.0), (0, -0.1)])
 def test_humanize_rejects_negative_spread(velocity: int, timing: float) -> None:
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match=r"spread .* must not be negative"):
         humanize(SIXTEEN, 1, velocity=velocity, timing=timing)
 
 
@@ -220,7 +220,10 @@ def test_notes_with_step_is_a_line() -> None:
 def test_notes_rejects_bad_values(
     pitches: list[int], beat: float, length: float, velocity: int, step: float | None
 ) -> None:
-    with pytest.raises(ValueError):
+    with pytest.raises(
+        ValueError,
+        match=r"outside 0 to 127|must not be negative|must be positive|must be from 1 to 127",
+    ):
         notes(pitches, beat, length, velocity, step)
 
 
@@ -264,7 +267,10 @@ def untyped(function: Callable[..., object]) -> Callable[..., object]:
     ],
 )
 def test_helpers_reject_wrong_types_with_value_error(call: Callable[[], object]) -> None:
-    with pytest.raises(ValueError):
+    with pytest.raises(
+        ValueError,
+        match=r"not an integer|must be an integer|must be a finite number|^note name 60 is not",
+    ):
         call()
 
 

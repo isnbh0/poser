@@ -9,6 +9,7 @@ import argparse
 import json
 import sys
 import tomllib
+from collections.abc import Sequence
 from dataclasses import asdict, dataclass, field, fields
 from enum import StrEnum
 from pathlib import Path
@@ -57,7 +58,7 @@ class Status(StrEnum):
     NON_FINITE = "non_finite"
     SILENT = "silent"
     MISSING_NOTES = "missing_notes"
-    PASS = "pass"
+    PASS = "pass"  # noqa: S105 -- a check status, not a password.
 
 
 class ConfigError(Exception):
@@ -283,7 +284,7 @@ def exit_code(results: list[PluginResult]) -> int:
     return EXIT_ALL_PASS if all_pass else EXIT_SOME_FAILED
 
 
-def align_rows(rows: list[tuple[str, ...]]) -> list[str]:
+def align_rows(rows: Sequence[Sequence[str]]) -> list[str]:
     widths = [max(len(row[column]) for row in rows) for column in range(len(rows[0]))]
     return [
         "  ".join(cell.ljust(w) for cell, w in zip(row, widths, strict=True)).rstrip()
@@ -291,10 +292,10 @@ def align_rows(rows: list[tuple[str, ...]]) -> list[str]:
     ]
 
 
-def format_table(results: list[PluginResult]) -> str:
-    def yes_no(value: bool | None) -> str:
-        return "-" if value is None else ("yes" if value else "no")
+YES_NO = {None: "-", True: "yes", False: "no"}
 
+
+def format_table(results: list[PluginResult]) -> str:
     rows = [("PLUGIN", "STATUS", "INSTRUMENT", "PEAK DBFS", "REPEATABLE")]
     details = []
     for result in results:
@@ -303,9 +304,9 @@ def format_table(results: list[PluginResult]) -> str:
             (
                 result.name,
                 str(result.status),
-                yes_no(result.is_instrument),
+                YES_NO[result.is_instrument],
                 peak,
-                yes_no(result.repeatable),
+                YES_NO[result.repeatable],
             )
         )
         if result.detail:
@@ -347,7 +348,7 @@ def _worker_result(path: str, plugin_name: str | None) -> WorkerResult:
     def load() -> VST3Plugin | AudioUnitPlugin:
         # `load_plugin` is annotated as returning `ExternalPlugin`, but it returns one of these.
         return cast(
-            VST3Plugin | AudioUnitPlugin,
+            "VST3Plugin | AudioUnitPlugin",
             load_plugin(
                 path, plugin_name=plugin_name, initialization_timeout=INITIALIZATION_TIMEOUT_S
             ),

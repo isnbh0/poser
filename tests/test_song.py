@@ -225,7 +225,7 @@ def test_failed_replace_keeps_the_old_file_and_leaves_no_temp_file(
     def fail(*args: object) -> None:
         raise OSError("disk full")
 
-    monkeypatch.setattr(song_module.os, "replace", fail)
+    monkeypatch.setattr(Path, "replace", fail)
     with pytest.raises(SongError, match="disk full"):
         write_song(helper_song(), path)
 
@@ -685,7 +685,8 @@ def build():
 def test_script_and_yaml_with_one_stem_both_load(tmp_path: Path) -> None:
     write_script(
         tmp_path,
-        "def build():\n    return Song(90, (Track('lead', 'pedalboard', 'Serum', (Note(0, 60, 1, 100),)),))\n",
+        "def build():\n"
+        "    return Song(90, (Track('lead', 'pedalboard', 'Serum', (Note(0, 60, 1, 100),)),))\n",
         "x.py",
     )
     (tmp_path / "x.yaml").write_text(yaml.safe_dump(valid_song()))

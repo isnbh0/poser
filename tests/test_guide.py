@@ -104,7 +104,8 @@ def test_report_fields_exist() -> None:
 def test_bands_are_named_with_their_ranges() -> None:
     text = " ".join(GUIDE.split())
     for name, (low, high) in analyze.BANDS.items():
-        assert f"`{name}` {low:g}–{high:g} Hz" in text
+        # The guide writes ranges with an en dash.
+        assert f"`{name}` {low:g}–{high:g} Hz" in text  # noqa: RUF001
 
 
 def test_song_keys_match_the_code() -> None:

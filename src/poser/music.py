@@ -135,9 +135,8 @@ def swing(notes: Iterable[Note], ratio: float, grid: float = 0.5) -> tuple[Note,
     swung = []
     for note in notes:
         start = math.floor(note.beat / pair) * pair
-        if abs(note.beat - start - grid) < SWING_TOLERANCE:
-            note = replace(note, beat=start + ratio * pair)
-        swung.append(note)
+        off_beat = abs(note.beat - start - grid) < SWING_TOLERANCE
+        swung.append(replace(note, beat=start + ratio * pair) if off_beat else note)
     return tuple(swung)
 
 

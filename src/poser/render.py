@@ -49,13 +49,17 @@ from poser.song import (
     Track,
     is_int,
     is_number,
+    is_shape,
     load_song,
 )
 from poser.sounds import SoundError, read_sound, sound_files
 from poser.worker import (
+    MalformedJobError,
     WorkerCrashedError,
     WorkerTimedOutError,
+    job_fields,
     json_object,
+    optional_str,
     run_isolated,
 )
 from poser.workspace import WorkspaceError, fill_path_options, song_render_dir
@@ -333,7 +337,7 @@ def write_stamp(
     try:
         with os.fdopen(fd, "w") as output:
             output.write(json.dumps(data, allow_nan=False))
-        os.replace(temp, path)
+        Path(temp).replace(path)
     except BaseException:
         Path(temp).unlink(missing_ok=True)
         raise
@@ -434,6 +438,63 @@ def render_job(
     }
 
 
+def _parse_note_job(value: object) -> NoteJob:
+    fields = job_fields(value, {"beat", "pitch", "length", "velocity"}, "note")
+    beat, pitch, length, velocity = (fields[k] for k in ("beat", "pitch", "length", "velocity"))
+    if not (is_number(beat) and is_int(pitch) and is_number(length) and is_int(velocity)):
+        raise MalformedJobError("note", value)
+    return {"beat": beat, "pitch": pitch, "length": length, "velocity": velocity}
+
+
+def _parse_change_job(value: object) -> ControlData:
+    fields = job_fields(value, {"beat", "control", "value", "shape"}, "controller change")
+    beat, control, level, shape = (fields[k] for k in ("beat", "control", "value", "shape"))
+    if not (is_number(beat) and is_int(control) and is_int(level) and is_shape(shape)):
+        raise MalformedJobError("controller change", value)
+    return {"beat": beat, "control": control, "value": level, "shape": shape}
+
+
+def _parse_track_job(value: object) -> TrackJob:
+    fields = job_fields(value, {"name", "engine", "sound", "notes", "cc"}, "track")
+    name, engine, sound = fields["name"], fields["engine"], fields["sound"]
+    notes, cc = fields["notes"], fields["cc"]
+    if not (isinstance(name, str) and isinstance(engine, str) and isinstance(sound, str)):
+        raise MalformedJobError("track", value)
+    if not (isinstance(notes, list) and isinstance(cc, list)):
+        raise MalformedJobError("track", value)
+    return {
+        "name": name,
+        "engine": engine,
+        "sound": sound,
+        "notes": [_parse_note_job(note) for note in notes],
+        "cc": [_parse_change_job(change) for change in cc],
+    }
+
+
+def parse_render_job(value: object) -> RenderJob:
+    """Return a render job read back from JSON, raising MalformedJobError if it is malformed.
+
+    The parent writes every job with `render_job`, so a malformed one is a bug.
+    """
+    keys = set(RenderJob.__annotations__)
+    fields = job_fields(value, keys, "render job")
+    plugin_path, plugin_name, state = fields["plugin_path"], fields["plugin_name"], fields["state"]
+    bpm, duration_s, stem = fields["bpm"], fields["duration_s"], fields["stem_path"]
+    if not (isinstance(plugin_path, str) and optional_str(plugin_name) and optional_str(state)):
+        raise MalformedJobError("render job", value)
+    if not (is_number(bpm) and is_number(duration_s) and isinstance(stem, str)):
+        raise MalformedJobError("render job", value)
+    return {
+        "plugin_path": plugin_path,
+        "plugin_name": plugin_name,
+        "state": state,
+        "bpm": bpm,
+        "track": _parse_track_job(fields["track"]),
+        "duration_s": duration_s,
+        "stem_path": stem,
+    }
+
+
 def parse_worker_result(payload: object, stem: Path) -> Outcome:
     """Turn the worker's JSON result into an outcome, reporting anything malformed as a crash."""
     malformed = Outcome(TrackStatus.CRASHED, detail="worker wrote a malformed result")
@@ -516,13 +577,16 @@ def render_song(
     A stem is reused when its stamp matches the file and both the track's and the sound's keys.
     """
     with song_lock(song_dir):
-        return _render_tracks(song, song_dir, specs, timeout_s, sounds_dir, force)
+        return _render_tracks(
+            song, song_dir, specs, timeout_s=timeout_s, sounds_dir=sounds_dir, force=force
+        )
 
 
 def _render_tracks(
     song: Song,
     song_dir: Path,
     specs: list[PluginSpec],
+    *,
     timeout_s: float,
     sounds_dir: Path,
     force: bool,
@@ -651,7 +715,7 @@ def write_stem(path: Path, audio: np.ndarray) -> None:
         str(temp), samplerate=SAMPLE_RATE, num_channels=NUM_CHANNELS, bit_depth=WAV_BIT_DEPTH
     ) as output:
         output.write(audio)
-    os.replace(temp, path)
+    temp.replace(path)
 
 
 def render_stem(job: RenderJob) -> Outcome:
@@ -672,7 +736,7 @@ def render_stem(job: RenderJob) -> Outcome:
         # `load_plugin` is annotated as returning `ExternalPlugin`, which lacks `raw_state`, but it
         # returns one of these two classes.
         plugin = cast(
-            VST3Plugin | AudioUnitPlugin,
+            "VST3Plugin | AudioUnitPlugin",
             load_plugin(
                 job["plugin_path"],
                 plugin_name=job["plugin_name"],
@@ -716,7 +780,7 @@ def worker_main(argv: list[str]) -> int:
     args = parser.parse_args(argv)
 
     # The result goes to a file because plugins may print to stdout.
-    job: RenderJob = json.loads(args.job_path.read_text())  # Written by `_run_track_worker`.
+    job = parse_render_job(json.loads(args.job_path.read_text()))  # From `_run_track_worker`.
     args.result_path.write_text(json.dumps(asdict(render_stem(job))))
     return 0
 

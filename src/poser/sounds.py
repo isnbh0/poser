@@ -13,7 +13,6 @@ import argparse
 import base64
 import binascii
 import json
-import os
 import re
 import sys
 import tempfile
@@ -41,9 +40,12 @@ from poser.plugin_check import (
 )
 from poser.presets import PresetError, preset_description, preset_files
 from poser.worker import (
+    MalformedJobError,
     WorkerCrashedError,
     WorkerTimedOutError,
+    job_fields,
     json_object,
+    optional_str,
     run_isolated,
 )
 from poser.workspace import WorkspaceError, fill_path_options
@@ -167,7 +169,7 @@ def write_sound(sounds_dir: Path, sound: SavedSound) -> Path:
     fields = {"plugin": sound.plugin, "description": sound.description, "state": sound.state}
     try:
         temp.write_text(json.dumps(fields) + "\n")
-        os.replace(temp, target)
+        temp.replace(target)
     finally:
         temp.unlink(missing_ok=True)
     return target
@@ -272,6 +274,21 @@ def plan_save(args: argparse.Namespace, specs: list[PluginSpec]) -> tuple[Plugin
     return specs_by_name[source.plugin], source.state
 
 
+def parse_save_job(value: object) -> SaveJob:
+    """Return a save job read back from JSON, raising MalformedJobError if it is malformed.
+
+    The parent writes every job in `save_main`, so a malformed one is a bug.
+    """
+    fields = job_fields(value, set(SaveJob.__annotations__), "save job")
+    path, name, state = fields["plugin_path"], fields["plugin_name"], fields["state"]
+    preview = fields["preview_path"]
+    if not (isinstance(path, str) and optional_str(name) and optional_str(state)):
+        raise MalformedJobError("save job", value)
+    if not isinstance(preview, str):
+        raise MalformedJobError("save job", value)
+    return {"plugin_path": path, "plugin_name": name, "state": state, "preview_path": preview}
+
+
 def save_worker_command(job_path: Path) -> list[str]:
     return [sys.executable, "-m", "poser.sounds", str(job_path)]
 
@@ -279,7 +296,7 @@ def save_worker_command(job_path: Path) -> list[str]:
 def run_save_worker(job: SaveJob) -> tuple[str, float]:
     """Run the save worker with no timeout and return the base64 state and preview peak.
 
-    Raises WorkerCrashedError for any failure, including a malformed result.
+    Raises WorkerCrashedError for any failure, including a malformed result or no preview.
     """
     with tempfile.TemporaryDirectory() as directory:
         job_path = Path(directory) / "job.json"
@@ -297,6 +314,8 @@ def run_save_worker(job: SaveJob) -> tuple[str, float]:
                 decode_state(state)
             except SoundError as error:
                 raise WorkerCrashedError(f"worker returned an unusable state: {error}") from error
+            if not Path(job["preview_path"]).is_file():
+                raise WorkerCrashedError("worker wrote no preview")
             return state, float(peak)
         case _:
             raise WorkerCrashedError("worker wrote a malformed result")
@@ -305,7 +324,9 @@ def run_save_worker(job: SaveJob) -> tuple[str, float]:
 def save_main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="save-sound",
-        description="Open a plugin's window and save its state, when the window closes, as a sound.",
+        description=(
+            "Open a plugin's window and save its state, when the window closes, as a sound."
+        ),
     )
     parser.add_argument("name", help="sound name, used as a track's `sound`")
     start = parser.add_mutually_exclusive_group(required=True)
@@ -347,11 +368,9 @@ def save_main(argv: list[str] | None = None) -> int:
         # A preview left by a killed run must not pass for this run's.
         pending_preview.unlink(missing_ok=True)
         state, peak_dbfs = run_save_worker(job)
-        if not pending_preview.is_file():
-            raise WorkerCrashedError("worker wrote no preview")
         # The preview is disposable, so it moves first. Writing the sound is the last step that
         # can fail, so a failed or interrupted run leaves the sound file unchanged.
-        os.replace(pending_preview, preview)
+        pending_preview.replace(preview)
         path = write_sound(
             args.sounds_dir, SavedSound(args.name, spec.name, args.description, state)
         )
@@ -399,7 +418,7 @@ def save_in_worker(job: SaveJob) -> SaveFailure | SaveSuccess:
     def load(state: bytes | None) -> VST3Plugin | AudioUnitPlugin:
         # `load_plugin` is annotated as returning `ExternalPlugin`, but it returns one of these.
         plugin = cast(
-            VST3Plugin | AudioUnitPlugin,
+            "VST3Plugin | AudioUnitPlugin",
             load_plugin(
                 job["plugin_path"],
                 plugin_name=job["plugin_name"],
@@ -448,7 +467,7 @@ def worker_main(argv: list[str]) -> int:
     args = parser.parse_args(argv)
 
     # The result goes to a file because plugins may print to stdout.
-    job: SaveJob = json.loads(args.job_path.read_text())  # Written by `run_save_worker`.
+    job = parse_save_job(json.loads(args.job_path.read_text()))  # From `run_save_worker`.
     result = save_in_worker(job)
     args.result_path.write_text(json.dumps(result))
     return 0
