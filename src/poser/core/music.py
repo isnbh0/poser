@@ -11,7 +11,7 @@ import re
 from collections.abc import Iterable, Sequence
 from dataclasses import replace
 
-from poser.song import Note, is_int, is_number
+from poser.core.song import Note, is_int, is_number
 
 NOTE_NAME = re.compile(r"([A-Ga-g])([#b]*)(-1|[0-9])")
 LETTER_SEMITONES = {"C": 0, "D": 2, "E": 4, "F": 5, "G": 7, "A": 9, "B": 11}

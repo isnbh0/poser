@@ -12,8 +12,7 @@ import json
 import math
 import shutil
 import sys
-from dataclasses import asdict, dataclass, field, replace
-from enum import StrEnum
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -21,148 +20,68 @@ import pyloudnorm
 from matplotlib import mlab
 from matplotlib.backends.backend_agg import FigureCanvasAgg
 from matplotlib.figure import Figure
-from pedalboard.io import ReadableAudioFile, WriteableAudioFile
 from scipy import signal
 
-from poser.plugin_check import (
+from poser.adapters.song_formats import SONG_FORMATS, YamlSongFormat
+from poser.adapters.wav import WavAudioFiles
+from poser.cli.common import (
     EXIT_ALL_PASS,
     EXIT_BAD_CONFIG,
     EXIT_SOME_FAILED,
-    NUM_CHANNELS,
-    SAMPLE_RATE,
-    SILENCE_DBFS,
-    ConfigError,
-    PluginSpec,
+    EXIT_SONG_BUSY,
     align_rows,
-    load_config,
-    measure_peak_dbfs,
 )
+from poser.core.audio import NUM_CHANNELS, SAMPLE_RATE, Audio, measure_peak_dbfs, stem_samples
+from poser.core.cache import StampProblem, track_key
+from poser.core.loading import load_song
+from poser.core.ports import AudioFileError
+from poser.core.report import (
+    BANDS,
+    BAR_BEATS,
+    MIX_NAME,
+    AnalysisStatus,
+    Measurements,
+    MixReport,
+    Report,
+    TrackReport,
+    bar_dbfs,
+    mix_defects,
+    report_failed,
+    report_to_data,
+    silent_defects,
+)
+from poser.core.song import Song, SongError, song_last_beat
+from poser.plugin_check import ConfigError, PluginSpec, load_config
 from poser.render import (
     ANALYSIS_DIR,
-    EXIT_SONG_BUSY,
     MIX_DIR,
-    WAV_BIT_DEPTH,
     Outcome,
     SongBusyError,
     clear_results,
-    expected_samples,
     read_stamp,
     resolve_sound,
-    song_duration_s,
-    song_last_beat,
     song_lock,
     sound_key,
     stamp_matches_stem,
     stamp_path,
     stem_path,
-    track_key,
 )
-from poser.song import Song, SongError, load_song, write_song
 from poser.workspace import WorkspaceError, fill_path_options, song_render_dir
 
-MIX_NAME = "mix"
 HISTORY_DIR = "history"
 
 SPECGRAM_NFFT = 2048
 SPECGRAM_NOVERLAP = 1536
 POWER_FLOOR = 1e-12  # -120 dB, which keeps the spectrogram's logarithm finite for silence.
 SPECTROGRAM_MIN_HZ, SPECTROGRAM_MAX_HZ = 20.0, 20000.0
-
-# Mixing's usual frequency bands, in Hz, for comparing a track's balance between versions.
-BANDS: dict[str, tuple[float, float]] = {
-    "sub": (20.0, 60.0),
-    "bass": (60.0, 250.0),
-    "low_mid": (250.0, 500.0),
-    "mid": (500.0, 2000.0),
-    "high_mid": (2000.0, 6000.0),
-    "high": (6000.0, 20000.0),
-}
 WELCH_NPERSEG = 8192
-# Songs have no meter, so a bar is always this many beats.
-BAR_BEATS = 4
-LEVEL_FLOOR_DBFS = -120.0
-# Streaming platforms and EBU R128 cap true peak at -1 dBTP. Analysis measures sample peak, which
-# can sit below true peak, so this ceiling is necessary for that headroom but not sufficient.
-MIX_CEILING_DBFS = -1.0
-
-
-class TrackStatus(StrEnum):
-    ANALYZED = "analyzed"
-    MISSING_STEM = "missing_stem"
-    STALE_STEM = "stale_stem"
-
-
-class Defect(StrEnum):
-    """A problem that fails the analysis.
-
-    `headroom` means the mix's sample peak is above MIX_CEILING_DBFS. Sample peak stands in for
-    true peak, which analysis does not measure.
-    """
-
-    SILENT = "silent"
-    CLIPPING = "clipping"
-    HEADROOM = "headroom"
-
-
-@dataclass(frozen=True)
-class Measurements:
-    peak_dbfs: float
-    integrated_lufs: float | None
-    clipped_samples: int
-    bands_db: dict[str, float]
-    bar_dbfs: list[float]
-
-
-@dataclass(frozen=True)
-class TrackReport:
-    """One track's analysis. The keys are the ones a fresh stem of the track would carry, so two
-    reports show which tracks changed between song versions. `sound_key` is None when the sound
-    no longer resolves."""
-
-    name: str
-    status: TrackStatus
-    track_key: str
-    sound_key: str | None
-    gain_db: float = 0.0
-    peak_dbfs: float | None = None
-    integrated_lufs: float | None = None
-    clipped_samples: int | None = None
-    bands_db: dict[str, float] | None = None
-    bar_dbfs: list[float] | None = None
-    spectrogram: str | None = None
-    defects: list[Defect] = field(default_factory=list)
-    detail: str | None = None
-
-
-@dataclass(frozen=True)
-class MixReport:
-    path: str
-    peak_dbfs: float
-    integrated_lufs: float | None
-    clipped_samples: int
-    bands_db: dict[str, float]
-    bar_dbfs: list[float]
-    spectrogram: str
-    defects: list[Defect]
-
-
-@dataclass(frozen=True)
-class Report:
-    """An analysis. `run` numbers its record under `history/`, and `song_sha256` digests the song
-    text that record holds, so one song version always has one digest."""
-
-    song: str
-    run: int
-    song_sha256: str
-    tracks: list[TrackReport]
-    mix: MixReport | None
 
 
 class StaleStemError(Exception):
     """A stem exists but does not match the song as it is now."""
 
 
-def read_stem(path: Path, stamp_file: Path, key: str, sound: str, samples: int) -> np.ndarray:
+def read_stem(path: Path, stamp_file: Path, key: str, sound: str, samples: int) -> Audio:
     """Read a stem and confirm it matches the song. Raises StaleStemError when it does not.
 
     `key` and `sound` are the track's current `track_key` and `sound_key`. Its render stamp must
@@ -170,36 +89,17 @@ def read_stem(path: Path, stamp_file: Path, key: str, sound: str, samples: int) 
     """
     stamp = read_stamp(stamp_file)
     if stamp is None:
-        raise StaleStemError("stem has no render stamp")
+        raise StaleStemError(StampProblem.MISSING)
     if not stamp_matches_stem(stamp, path):
-        raise StaleStemError("stem changed after it was rendered")
+        raise StaleStemError(StampProblem.CHANGED)
     if stamp.track_key != key:
         raise StaleStemError("song changed since this stem was rendered")
     if stamp.sound_key != sound:
         raise StaleStemError("sound changed since this stem was rendered")
-    # The reader takes the frame count from the header and pads missing data with zeros, so a
-    # truncated file would otherwise pass as quieter audio.
-    if path.stat().st_size < samples * NUM_CHANNELS * WAV_BIT_DEPTH // 8:
-        raise StaleStemError("stem file is shorter than its audio data")
     try:
-        # Pedalboard's stubs mark `__new__` as a classmethod, which ty cannot match to any call.
-        with ReadableAudioFile(str(path)) as stem:  # ty: ignore[no-matching-overload]
-            rate, channels, frames = stem.samplerate, stem.num_channels, stem.frames
-            if rate != SAMPLE_RATE:
-                raise StaleStemError(f"sample rate {rate:g} Hz, expected {SAMPLE_RATE}")
-            if channels != NUM_CHANNELS:
-                raise StaleStemError(f"{channels} channels, expected {NUM_CHANNELS}")
-            if frames != samples:
-                raise StaleStemError(f"{frames} samples, expected {samples}")
-            audio = stem.read(frames)
-    except (OSError, ValueError, RuntimeError) as error:
-        raise StaleStemError(f"cannot read stem: {error}") from error
-    if audio.shape != (NUM_CHANNELS, samples):
-        raise StaleStemError(f"read {audio.shape}, expected {(NUM_CHANNELS, samples)}")
-    # Peak and clipping checks skip NaN, so a stem holding it would otherwise report clean.
-    if not np.isfinite(audio).all():
-        raise StaleStemError("stem contains NaN or infinity")
-    return audio
+        return WavAudioFiles().read(path, samples)
+    except AudioFileError as error:
+        raise StaleStemError(str(error)) from error
 
 
 def integrated_lufs(audio: np.ndarray) -> float | None:
@@ -224,20 +124,6 @@ def bands_db(audio: np.ndarray) -> dict[str, float]:
     return levels
 
 
-def bar_dbfs(audio: np.ndarray, bar_s: float, bars: int) -> list[float]:
-    """Return the RMS level in dBFS of each of the first `bars` bars."""
-    mono = audio.mean(axis=0, dtype=np.float64)
-    levels = []
-    for index in range(bars):
-        start = int(index * bar_s * SAMPLE_RATE)
-        stop = min(int((index + 1) * bar_s * SAMPLE_RATE), mono.size)
-        span = mono[start:stop]
-        rms = math.sqrt(float(np.mean(span**2))) if span.size else 0.0
-        level = 20.0 * math.log10(rms) if rms > 0 else LEVEL_FLOOR_DBFS
-        levels.append(round(max(level, LEVEL_FLOOR_DBFS), 2))
-    return levels
-
-
 def measure(audio: np.ndarray, song: Song) -> Measurements:
     # Counted in beats, so a bar starting exactly at the last beat is never included.
     bars = math.ceil(song_last_beat(song) / BAR_BEATS)
@@ -246,7 +132,7 @@ def measure(audio: np.ndarray, song: Song) -> Measurements:
         integrated_lufs=integrated_lufs(audio),
         clipped_samples=int(np.count_nonzero(np.abs(audio) > 1.0)),
         bands_db=bands_db(audio),
-        bar_dbfs=bar_dbfs(audio, song.seconds(BAR_BEATS), bars),
+        bar_dbfs=tuple(bar_dbfs(audio, song.seconds(BAR_BEATS), bars)),
     )
 
 
@@ -284,33 +170,6 @@ def write_spectrogram(audio: np.ndarray, path: Path, title: str) -> None:
     spectrogram_figure(audio, title).savefig(path, format="png")
 
 
-def write_wav(audio: np.ndarray, path: Path) -> None:
-    """Write in the stem format through a temporary file, so a crash leaves no partial file."""
-    # Pedalboard picks the file format from the extension, so the name must end in .wav.
-    temp = path.with_name(f".{path.stem}.tmp.wav")
-    try:
-        with WriteableAudioFile(  # ty: ignore[no-matching-overload]
-            str(temp), samplerate=SAMPLE_RATE, num_channels=NUM_CHANNELS, bit_depth=WAV_BIT_DEPTH
-        ) as output:
-            output.write(audio)
-        temp.replace(path)
-    finally:
-        temp.unlink(missing_ok=True)
-
-
-def silent_defects(measurements: Measurements) -> list[Defect]:
-    return [Defect.SILENT] if measurements.peak_dbfs < SILENCE_DBFS else []
-
-
-def mix_defects(measurements: Measurements) -> list[Defect]:
-    defects = silent_defects(measurements)
-    if measurements.clipped_samples > 0:
-        defects.append(Defect.CLIPPING)
-    if measurements.peak_dbfs > MIX_CEILING_DBFS:
-        defects.append(Defect.HEADROOM)
-    return defects
-
-
 def start_record(song_dir: Path, song: Song) -> tuple[Path, int, str]:
     """Create the next numbered history record holding the song, and return it, its number, and
     the song text's digest."""
@@ -320,8 +179,11 @@ def start_record(song_dir: Path, song: Song) -> tuple[Path, int, str]:
     run = max(taken, default=0) + 1
     record = history / str(run)
     record.mkdir()
-    song_file = record / "song.yaml"
-    write_song(song, song_file)
+    writer = YamlSongFormat()
+    song_file = record / f"song{writer.suffix}"
+    temp = record / f".song{writer.suffix}.tmp"
+    temp.write_text(writer.dump(song))
+    temp.replace(song_file)
     return record, run, hashlib.sha256(song_file.read_bytes()).hexdigest()
 
 
@@ -335,7 +197,7 @@ def finish_record(record: Path, report: Report) -> None:
         shutil.copyfile(image, target)
         return str(target)
 
-    tracks = [replace(track, spectrogram=copy(track.spectrogram)) for track in report.tracks]
+    tracks = tuple(replace(track, spectrogram=copy(track.spectrogram)) for track in report.tracks)
     mix = report.mix
     if mix is not None:
         # The mix image is copied under its own name, which no track name can take.
@@ -365,10 +227,10 @@ def _analyze(
     song: Song, song_path: Path, song_dir: Path, specs: list[PluginSpec], sounds_dir: Path
 ) -> Report:
     mix_dir, analysis_dir = song_dir / MIX_DIR, song_dir / ANALYSIS_DIR
-    samples = expected_samples(song_duration_s(song))
+    samples = stem_samples(song)
 
     keys: dict[str, tuple[str, str | None]] = {}
-    stems: dict[str, np.ndarray] = {}
+    stems: dict[str, Audio] = {}
     failures: dict[str, TrackReport] = {}
     for track in song.tracks:
         key = track_key(song, track)
@@ -376,7 +238,7 @@ def _analyze(
         if not path.is_file():
             keys[track.name] = (key, None)
             failures[track.name] = TrackReport(
-                track.name, TrackStatus.MISSING_STEM, key, None, gain_db=track.gain
+                track.name, AnalysisStatus.MISSING_STEM, key, None, gain_db=track.gain
             )
             continue
         resolved = resolve_sound(track.sound, specs, sounds_dir)
@@ -384,7 +246,7 @@ def _analyze(
             keys[track.name] = (key, None)
             failures[track.name] = TrackReport(
                 track.name,
-                TrackStatus.STALE_STEM,
+                AnalysisStatus.STALE_STEM,
                 key,
                 None,
                 gain_db=track.gain,
@@ -399,7 +261,7 @@ def _analyze(
         except StaleStemError as error:
             failures[track.name] = TrackReport(
                 track.name,
-                TrackStatus.STALE_STEM,
+                AnalysisStatus.STALE_STEM,
                 key,
                 sound,
                 gain_db=track.gain,
@@ -419,7 +281,7 @@ def _analyze(
         if track.name in failures:
             tracks.append(failures[track.name])
             continue
-        audio = stems[track.name]
+        audio = stems[track.name].samples
         measurements = measure(audio, song)
         spectrogram = None
         if complete:
@@ -428,12 +290,16 @@ def _analyze(
         tracks.append(
             TrackReport(
                 track.name,
-                TrackStatus.ANALYZED,
+                AnalysisStatus.ANALYZED,
                 *keys[track.name],
                 gain_db=track.gain,
-                **asdict(measurements),
+                peak_dbfs=measurements.peak_dbfs,
+                integrated_lufs=measurements.integrated_lufs,
+                clipped_samples=measurements.clipped_samples,
+                bands_db=measurements.bands_db,
+                bar_dbfs=measurements.bar_dbfs,
                 spectrogram=None if spectrogram is None else str(spectrogram),
-                defects=silent_defects(measurements),
+                defects=tuple(silent_defects(measurements)),
             )
         )
 
@@ -443,21 +309,27 @@ def _analyze(
         # Accumulating in place keeps one float64 buffer, not a float64 copy of every stem.
         total = np.zeros((NUM_CHANNELS, samples), dtype=np.float64)
         for track in song.tracks:
-            total += stems[track.name].astype(np.float64) * 10 ** (track.gain / 20)
+            total += stems[track.name].samples.astype(np.float64) * 10 ** (track.gain / 20)
         mixed = total.astype(np.float32)
-        mix_path = mix_dir / f"{MIX_NAME}.wav"
-        write_wav(mixed, mix_path)
+        mix_path = mix_dir / f"{MIX_NAME}{WavAudioFiles().suffix}"
+        WavAudioFiles().write(mix_path, Audio(mixed))
         mix_png = mix_dir / f"{MIX_NAME}.png"
         write_spectrogram(mixed, mix_png, MIX_NAME)
         measurements = measure(mixed, song)
         mix = MixReport(
             path=str(mix_path),
-            **asdict(measurements),
+            peak_dbfs=measurements.peak_dbfs,
+            integrated_lufs=measurements.integrated_lufs,
+            clipped_samples=measurements.clipped_samples,
+            bands_db=measurements.bands_db,
+            bar_dbfs=measurements.bar_dbfs,
             spectrogram=str(mix_png),
-            defects=mix_defects(measurements),
+            defects=tuple(mix_defects(measurements)),
         )
 
-    report = Report(song=song_path.stem, run=run, song_sha256=song_sha256, tracks=tracks, mix=mix)
+    report = Report(
+        song=song_path.stem, run=run, song_sha256=song_sha256, tracks=tuple(tracks), mix=mix
+    )
     if complete:
         (analysis_dir / "report.json").write_text(report_json(report) + "\n")
     finish_record(record, report)
@@ -466,15 +338,11 @@ def _analyze(
 
 def report_json(report: Report) -> str:
     # allow_nan=False makes a non-finite number an error instead of invalid JSON.
-    return json.dumps(asdict(report), indent=2, allow_nan=False)
+    return json.dumps(report_to_data(report), indent=2, allow_nan=False)
 
 
 def exit_code(report: Report) -> int:
-    clean = report.mix is not None and not report.mix.defects
-    clean = clean and all(
-        track.status is TrackStatus.ANALYZED and not track.defects for track in report.tracks
-    )
-    return EXIT_ALL_PASS if clean else EXIT_SOME_FAILED
+    return EXIT_SOME_FAILED if report_failed(report) else EXIT_ALL_PASS
 
 
 def format_table(report: Report) -> str:
@@ -526,7 +394,7 @@ def main(argv: list[str] | None = None) -> int:
         return EXIT_BAD_CONFIG
 
     try:
-        song = load_song(args.song)
+        song = load_song(args.song, SONG_FORMATS)
         specs = load_config(args.config)
     except (SongError, ConfigError) as error:
         print(f"analyze-song: {error}", file=sys.stderr)

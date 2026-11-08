@@ -8,15 +8,23 @@ from helpers import SCAFFOLD_DIR, band_spectrum_db, change_time_s, read_stem, re
 from pedalboard.io import ReadableAudioFile
 
 from poser import render
-from poser.plugin_check import measure_peak_dbfs
-from poser.render import TrackStatus
-from poser.song import ControlChange, Note, Song, Track, load_song
+from poser.adapters.song_formats import SONG_FORMATS
+from poser.core.audio import (
+    NUM_CHANNELS,
+    SAMPLE_RATE,
+    SILENCE_DBFS,
+    measure_peak_dbfs,
+    stem_samples,
+)
+from poser.core.loading import load_song
+from poser.core.song import ControlChange, Note, Song, Track
+from poser.core.statuses import StemStatus
 
 
 @pytest.mark.real_plugins
 def test_demo_song_renders_aligned_audible_stems(tmp_path: Path) -> None:
-    song = load_song(SCAFFOLD_DIR / "demo.yaml")
-    expected_samples = render.expected_samples(render.song_duration_s(song))
+    song = load_song(SCAFFOLD_DIR / "demo.yaml", SONG_FORMATS)
+    expected_samples = stem_samples(song)
 
     results = render.render_song(
         song, tmp_path / "demo", real_specs(), sounds_dir=tmp_path / "sounds"
@@ -24,24 +32,24 @@ def test_demo_song_renders_aligned_audible_stems(tmp_path: Path) -> None:
 
     assert [result.track for result in results] == [track.name for track in song.tracks]
     for result in results:
-        assert result.status is TrackStatus.RENDERED, result.detail
+        assert result.status is StemStatus.RENDERED, result.detail
         assert result.stem is not None
         with ReadableAudioFile(result.stem) as stem:  # ty: ignore[no-matching-overload]
-            assert stem.samplerate == render.SAMPLE_RATE
+            assert stem.samplerate == SAMPLE_RATE
             audio = stem.read(stem.frames)
-        assert audio.shape == (render.NUM_CHANNELS, expected_samples)
-        assert measure_peak_dbfs(audio) > render.SILENCE_DBFS
+        assert audio.shape == (NUM_CHANNELS, expected_samples)
+        assert measure_peak_dbfs(audio) > SILENCE_DBFS
 
 
 SOUND = "Serum:Leads/LD A Bit of Luck [SD]"
 
 
 def render_cc_song(tmp_path: Path, name: str, beats: float, *changes: ControlChange) -> np.ndarray:
-    track = Track("lead", "pedalboard", SOUND, (Note(0, 60, beats, 100),), cc=changes)
+    track = Track("lead", SOUND, (Note(0, 60, beats, 100),), cc=changes)
     (result,) = render.render_song(
         Song(120, (track,)), tmp_path / name, real_specs(), sounds_dir=tmp_path / "sounds"
     )
-    assert result.status is TrackStatus.RENDERED, result.detail
+    assert result.status is StemStatus.RENDERED, result.detail
     assert result.stem is not None
     return read_stem(str(result.stem))
 

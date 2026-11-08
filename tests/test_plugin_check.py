@@ -9,16 +9,19 @@ import numpy as np
 import pytest
 
 from poser import plugin_check
+from poser.cli.common import EXIT_ALL_PASS, EXIT_BAD_CONFIG, EXIT_SOME_FAILED
+from poser.core.audio import NUM_CHANNELS, SAMPLE_RATE
+from poser.core.checks import CHECK_NOTES, CHECK_SAMPLES, CheckStatus
 from poser.plugin_check import (
+    ConfigError,
     PluginResult,
     PluginSpec,
-    Status,
-    analyze,
+    load_config,
     parse_worker_result,
     run_worker,
 )
+from poser.worker import render_duration_s
 
-NUM_SAMPLES = round(plugin_check.DURATION_S * plugin_check.SAMPLE_RATE)
 PASS_RESULT: dict[str, object] = {
     "status": "pass",
     "is_instrument": True,
@@ -30,18 +33,11 @@ PASS_RESULT: dict[str, object] = {
 }
 
 
-def note_window(index: int) -> slice:
-    start_s = plugin_check.FIRST_NOTE_S + index * plugin_check.NOTE_SPACING_S
-    start = round(start_s * plugin_check.SAMPLE_RATE)
-    stop = round((start_s + plugin_check.NOTE_LENGTH_S) * plugin_check.SAMPLE_RATE)
-    return slice(start, stop)
-
-
-def tone_render(level: float = 0.5, skip_note: int | None = None) -> np.ndarray:
-    render = np.zeros((plugin_check.NUM_CHANNELS, NUM_SAMPLES), dtype=np.float32)
-    for index in range(len(plugin_check.NOTES)):
-        if index != skip_note:
-            render[..., note_window(index)] = level
+def tone_render(level: float = 0.5) -> np.ndarray:
+    render = np.zeros((NUM_CHANNELS, CHECK_SAMPLES), dtype=np.float32)
+    for index in range(len(CHECK_NOTES)):
+        start = 24000 + index * 48000
+        render[..., start : start + 24000] = level
     return render
 
 
@@ -58,86 +54,15 @@ def write_result_script(tmp_path: Path, result: Mapping[str, object] = PASS_RESU
     )
 
 
-def test_tone_in_all_note_windows_passes() -> None:
-    result = analyze(tone_render(), tone_render())
-    assert result.status is Status.PASS
-    assert result.peak_dbfs == pytest.approx(-6.02, abs=0.01)
-    assert result.note_peaks_dbfs == pytest.approx([-6.02] * 4, abs=0.01)
-
-
-def test_all_zero_render_is_silent() -> None:
-    silence = np.zeros((plugin_check.NUM_CHANNELS, NUM_SAMPLES), dtype=np.float32)
-    result = analyze(silence, silence)
-    assert result.status is Status.SILENT
-    assert result.peak_dbfs == plugin_check.FLOOR_DBFS
-
-
-def test_silent_second_render_is_silent() -> None:
-    silence = np.zeros((plugin_check.NUM_CHANNELS, NUM_SAMPLES), dtype=np.float32)
-    assert analyze(tone_render(), silence).status is Status.SILENT
-
-
-def test_empty_note_window_is_missing_notes() -> None:
-    render = tone_render(skip_note=2)
-    result = analyze(render, render)
-    assert result.status is Status.MISSING_NOTES
-    assert result.note_peaks_dbfs[2] == plugin_check.FLOOR_DBFS
-    assert result.note_peaks_dbfs[1] == pytest.approx(-6.02, abs=0.01)
-
-
-def test_nan_render_is_non_finite() -> None:
-    render = tone_render()
-    render[0, 100] = np.nan
-    result = analyze(render, render)
-    assert result.status is Status.NON_FINITE
-    assert np.isfinite(result.peak_dbfs)
-    assert np.isfinite(result.max_difference_dbfs)
-
-
-def test_infinity_in_second_render_is_non_finite() -> None:
-    second = tone_render()
-    second[1, 200] = np.inf
-    result = analyze(tone_render(), second)
-    assert result.status is Status.NON_FINITE
-    assert np.isfinite(result.peak_dbfs)
-
-
-def test_identical_renders_are_repeatable() -> None:
-    result = analyze(tone_render(), tone_render())
-    assert result.repeatable is True
-    assert result.max_difference_dbfs == plugin_check.FLOOR_DBFS
-
-
-def test_differing_renders_are_reported_without_failing() -> None:
-    second = tone_render()
-    second[0, note_window(0).start] += 0.1
-    result = analyze(tone_render(), second)
-    assert result.repeatable is False
-    assert result.max_difference_dbfs == pytest.approx(-20.0, abs=0.01)
-    assert result.status is Status.PASS
-
-
-def test_full_scale_sample_is_clipped_without_failing() -> None:
-    render = tone_render()
-    render[0, note_window(1).start] = 1.0
-    result = analyze(render, render)
-    assert result.clipped is True
-    assert result.status is Status.PASS
-
-
-def test_clean_render_is_not_clipped() -> None:
-    assert analyze(tone_render(), tone_render()).clipped is False
-
-
 def test_worker_past_timeout_is_timed_out(tmp_path: Path) -> None:
     command = write_script(tmp_path, "import time\ntime.sleep(30)\n")
-    assert run_worker(command, timeout_s=0.5)["status"] is Status.TIMED_OUT
+    assert run_worker(command, timeout_s=0.5)["status"] is CheckStatus.TIMED_OUT
 
 
 def test_worker_exiting_nonzero_is_crashed(tmp_path: Path) -> None:
     command = write_script(tmp_path, "import sys\nprint('boom', file=sys.stderr)\nsys.exit(3)\n")
     result = run_worker(command, timeout_s=30)
-    assert result["status"] is Status.CRASHED
+    assert result["status"] is CheckStatus.CRASHED
     detail = result.get("detail")
     assert detail is not None
     assert "exit code 3" in detail
@@ -146,7 +71,7 @@ def test_worker_exiting_nonzero_is_crashed(tmp_path: Path) -> None:
 
 def test_worker_exiting_zero_without_result_is_crashed(tmp_path: Path) -> None:
     command = write_script(tmp_path, "pass\n")
-    assert run_worker(command, timeout_s=30)["status"] is Status.CRASHED
+    assert run_worker(command, timeout_s=30)["status"] is CheckStatus.CRASHED
 
 
 @pytest.mark.parametrize(
@@ -160,11 +85,11 @@ def test_worker_exiting_zero_without_result_is_crashed(tmp_path: Path) -> None:
 )
 def test_worker_writing_bad_result_is_crashed(tmp_path: Path, written: str) -> None:
     command = write_script(tmp_path, f"import sys\nopen(sys.argv[-1], 'w').write({written!r})\n")
-    assert run_worker(command, timeout_s=30)["status"] is Status.CRASHED
+    assert run_worker(command, timeout_s=30)["status"] is CheckStatus.CRASHED
 
 
-MALFORMED = {"status": Status.CRASHED, "detail": "worker wrote a malformed result"}
-UNKNOWN_STATUS = {"status": Status.CRASHED, "detail": "worker wrote an unknown status"}
+MALFORMED = {"status": CheckStatus.CRASHED, "detail": "worker wrote a malformed result"}
+UNKNOWN_STATUS = {"status": CheckStatus.CRASHED, "detail": "worker wrote an unknown status"}
 
 
 @pytest.mark.parametrize(
@@ -188,16 +113,16 @@ def test_worker_result_parser_reports_bad_results_as_crashed(
 
 
 def test_worker_result_parser_keeps_a_valid_result() -> None:
-    assert parse_worker_result(PASS_RESULT) == {**PASS_RESULT, "status": Status.PASS}
+    assert parse_worker_result(PASS_RESULT) == {**PASS_RESULT, "status": CheckStatus.PASS}
     assert parse_worker_result({"status": "load_failed", "detail": None}) == {
-        "status": Status.LOAD_FAILED,
+        "status": CheckStatus.LOAD_FAILED,
         "detail": None,
     }
 
 
 def test_worker_result_is_returned(tmp_path: Path) -> None:
     result = run_worker(write_result_script(tmp_path), timeout_s=30)
-    assert result == {**PASS_RESULT, "status": Status.PASS}
+    assert result == {**PASS_RESULT, "status": CheckStatus.PASS}
 
 
 def test_stdout_noise_does_not_affect_result(tmp_path: Path) -> None:
@@ -207,7 +132,7 @@ def test_stdout_noise_does_not_affect_result(tmp_path: Path) -> None:
         "print('plugin banner')\n"
         f"open(sys.argv[-1], 'w').write(json.dumps({PASS_RESULT!r}))\n",
     )
-    assert run_worker(command, timeout_s=30)["status"] is Status.PASS
+    assert run_worker(command, timeout_s=30)["status"] is CheckStatus.PASS
 
 
 def test_failed_first_plugin_still_reports_second(
@@ -226,8 +151,8 @@ def test_failed_first_plugin_still_reports_second(
     results = plugin_check.run_check(specs)
 
     assert [(r.name, r.status) for r in results] == [
-        ("One", Status.CRASHED),
-        ("Two", Status.PASS),
+        ("One", CheckStatus.CRASHED),
+        ("Two", CheckStatus.PASS),
     ]
 
 
@@ -237,7 +162,10 @@ def test_real_worker_reports_missing_bundle_as_load_failed(tmp_path: Path) -> No
 
     results = plugin_check.run_check(specs, timeout_s=60)
 
-    assert [result.status for result in results] == [Status.LOAD_FAILED, Status.LOAD_FAILED]
+    assert [result.status for result in results] == [
+        CheckStatus.LOAD_FAILED,
+        CheckStatus.LOAD_FAILED,
+    ]
     assert all(result.detail for result in results)
 
 
@@ -247,8 +175,8 @@ class FakeInstrument:
         self.audio = tone_render() if audio is None else audio
 
     def __call__(self, messages: list[object], **kwargs: object) -> np.ndarray:
-        assert kwargs["sample_rate"] == plugin_check.SAMPLE_RATE
-        assert kwargs["duration"] == plugin_check.DURATION_S
+        assert kwargs["sample_rate"] == SAMPLE_RATE
+        assert kwargs["duration"] == render_duration_s(CHECK_SAMPLES)
         return self.audio
 
 
@@ -264,7 +192,7 @@ def test_worker_result_loads_a_fresh_instance_per_render(monkeypatch: pytest.Mon
     result = plugin_check._worker_result("/a.vst3", None)
 
     assert len(loads) == 2
-    assert result["status"] is Status.PASS
+    assert result["status"] is CheckStatus.PASS
     assert result.get("is_instrument") is True
 
 
@@ -276,12 +204,16 @@ def test_worker_result_does_not_render_an_effect(monkeypatch: pytest.MonkeyPatch
 
     result = plugin_check._worker_result("/a.vst3", None)
 
-    assert result == {"status": Status.NOT_INSTRUMENT, "is_instrument": False}
+    assert result == {
+        "status": CheckStatus.LOAD_FAILED,
+        "is_instrument": False,
+        "detail": "/a.vst3 is not an instrument",
+    }
 
 
 def test_worker_result_rejects_an_unexpected_render_shape(monkeypatch: pytest.MonkeyPatch) -> None:
     def fake_load(path: str, **kwargs: object) -> FakeInstrument:
-        return FakeInstrument(audio=np.zeros((NUM_SAMPLES, plugin_check.NUM_CHANNELS)))
+        return FakeInstrument(audio=np.zeros((CHECK_SAMPLES, NUM_CHANNELS)))
 
     monkeypatch.setattr("pedalboard.load_plugin", fake_load)
 
@@ -307,7 +239,7 @@ def test_main_exits_zero_when_all_pass(
     monkeypatch.setattr(plugin_check, "worker_command", lambda spec: command)
     config = write_config(tmp_path, ["a", "b"])
 
-    assert plugin_check.main(["--config", str(config)]) == plugin_check.EXIT_ALL_PASS
+    assert plugin_check.main(["--config", str(config)]) == EXIT_ALL_PASS
     output = capsys.readouterr().out
     assert "pass" in output
     assert "a" in output
@@ -320,7 +252,7 @@ def test_main_exits_one_when_a_plugin_does_not_pass(
     monkeypatch.setattr(plugin_check, "worker_command", lambda spec: command)
     config = write_config(tmp_path, ["a"])
 
-    assert plugin_check.main(["--config", str(config)]) == plugin_check.EXIT_SOME_FAILED
+    assert plugin_check.main(["--config", str(config)]) == EXIT_SOME_FAILED
 
 
 def test_main_json_output_is_the_report(
@@ -354,7 +286,7 @@ def test_main_exits_two_for_bad_config(tmp_path: Path, contents: str | None) -> 
     if contents is not None:
         config.write_text(contents)
 
-    assert plugin_check.main(["--config", str(config)]) == plugin_check.EXIT_BAD_CONFIG
+    assert plugin_check.main(["--config", str(config)]) == EXIT_BAD_CONFIG
 
 
 def test_main_without_config_uses_the_workspace_plugin_list(
@@ -373,8 +305,8 @@ def test_main_without_config_uses_the_workspace_plugin_list(
 def test_table_shows_each_plugin_and_detail() -> None:
     table = plugin_check.format_table(
         [
-            PluginResult("Serum", "/s", Status.PASS, True, -3.0, [], False, False, -20.0),
-            PluginResult("Primer", "/p", Status.LOAD_FAILED, detail="no bundle"),
+            PluginResult("Serum", "/s", CheckStatus.PASS, True, -3.0, [], False, False, -20.0),
+            PluginResult("Primer", "/p", CheckStatus.LOAD_FAILED, detail="no bundle"),
         ]
     )
     lines = table.splitlines()
@@ -383,18 +315,24 @@ def test_table_shows_each_plugin_and_detail() -> None:
     assert lines[3] == "Primer: no bundle"
 
 
-def test_pattern_has_four_notes_within_duration() -> None:
-    # mido sets message fields dynamically, so they are read through `dict()`.
-    messages = [m.dict() for m in plugin_check.note_pattern()]
-    assert [m["type"] for m in messages].count("note_on") == 4
-    assert [m["type"] for m in messages].count("note_off") == 4
-    assert all(0 <= m["time"] <= plugin_check.DURATION_S for m in messages)
-    assert [m["note"] for m in messages if m["type"] == "note_on"] == [48, 60, 72, 84]
-    assert [m["time"] for m in messages if m["type"] == "note_on"] == [0.5, 1.5, 2.5, 3.5]
-    assert [m["time"] for m in messages if m["type"] == "note_off"] == [1.0, 2.0, 3.0, 4.0]
-
-
 def test_parent_module_does_not_import_pedalboard_at_module_level() -> None:
     source = Path(plugin_check.__file__).read_text()
     assert "\nimport pedalboard" not in source
     assert "\nfrom pedalboard" not in source
+
+
+def test_plugin_name_that_is_not_an_identifier_is_refused(tmp_path: Path) -> None:
+    config = tmp_path / "plugins.toml"
+    config.write_text('[[plugin]]\nname = "Serum Presets"\npath = "/s.vst3"\n')
+    with pytest.raises(ConfigError) as caught:
+        load_config(config)
+    assert str(caught.value) == (
+        f"{config}: plugin name 'Serum Presets' must match [A-Za-z0-9][A-Za-z0-9_-]*"
+    )
+
+
+@pytest.mark.parametrize("name", ["Serum", "Serum2", "serum-2"])
+def test_identifier_plugin_names_load(tmp_path: Path, name: str) -> None:
+    config = tmp_path / "plugins.toml"
+    config.write_text(f'[[plugin]]\nname = "{name}"\npath = "/s.vst3"\n')
+    assert load_config(config) == [PluginSpec(name, "/s.vst3")]

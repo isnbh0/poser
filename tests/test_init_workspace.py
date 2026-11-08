@@ -6,8 +6,9 @@ from pathlib import Path
 import pytest
 
 from poser import init_workspace
+from poser.adapters.song_formats import SONG_FORMATS
+from poser.core.loading import load_song
 from poser.init_workspace import GITIGNORE_RESOURCE, SCAFFOLD_FILES
-from poser.song import load_song
 from poser.workspace import Workspace, find_workspace
 
 
@@ -78,7 +79,7 @@ def test_initialized_directory_is_a_workspace_with_a_loadable_demo(tmp_path: Pat
     init_workspace.main([str(tmp_path)])
 
     assert find_workspace(tmp_path / "songs") == Workspace(tmp_path.resolve())
-    assert load_song(tmp_path / "songs" / "demo.yaml").tracks
+    assert load_song(tmp_path / "songs" / "demo.yaml", SONG_FORMATS).tracks
 
 
 def test_a_file_where_the_workspace_goes_refuses(

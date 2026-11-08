@@ -8,9 +8,9 @@ from pathlib import Path
 
 import pytest
 
-from poser import music
-from poser.music import chord, degree, humanize, notes, pitch, scale, swing
-from poser.song import Note
+from poser.core import music
+from poser.core.music import chord, degree, humanize, notes, pitch, scale, swing
+from poser.core.song import Note
 
 
 @pytest.mark.parametrize(

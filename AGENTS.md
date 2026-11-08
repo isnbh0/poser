@@ -6,14 +6,30 @@ for changing poser itself. The composer guide that every workspace receives as i
 
 ## Layout
 
+- `src/poser/__init__.py`: the composer API that song scripts import, re-exported from the core.
+- `src/poser/core/`: the application. Model modules hold values and pure functions (`names`,
+  `jsonvalue`, `song`, `music`, `sounds`, `audio`, `performance`, `statuses`, `cache`, `report`,
+  `checks`); `ports` declares the protocols adapters implement; use-case modules (`loading`) run
+  the model through ports.
+- `src/poser/adapters/`: implementations of the ports, such as `song_formats` (YAML and script
+  songs) and `wav` (stem files).
+- `src/poser/cli/`: what the commands share, such as exit codes and `align_rows`.
 - `src/poser/`: the command modules (`init_workspace`, `plugin_check`, `render`, `analyze`, and
-  `sounds`, which holds `save-sound` and `list-sounds`) and the modules they share (`song`,
-  `music`, `presets`, `workspace`, and `worker`).
+  `sounds`, which holds `save-sound` and `list-sounds`) and the modules they share (`presets`,
+  `workspace`, and `worker`).
 - `src/poser/scaffold/`: package data that `uv run init-workspace` writes into a new workspace.
-- `tests/`: the tests. Tests marked `real_plugins` load real plugins.
+- `tests/`: the tests. Tests marked `real_plugins` load real plugins. `tests/contracts.py` holds
+  the checks every adapter of a port must pass.
 
 ## Rules
 
+- `poser.core` imports only the standard library, numpy, and `poser.core`. Within it, model
+  modules import only model modules, `ports` imports only model modules, and a use case imports
+  model modules, `ports`, and use cases earlier in `USE_CASES`. No module uses a relative import,
+  the import graph has no cycle, and package `__init__.py` files hold no imports except the
+  composer API. `tests/test_boundaries.py` enforces these rules.
+- Core value types check their rules in their constructor and raise `ValueError`, so code that
+  receives one never checks again.
 - `tests/test_guide.py` checks `src/poser/scaffold/guide.md` against the code. A change to song
   keys, report fields, statuses, bands, music helpers, or scripts updates the guide in the same
   commit.

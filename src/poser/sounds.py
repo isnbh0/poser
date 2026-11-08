@@ -20,24 +20,18 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, TypedDict, cast
 
-import numpy as np
-
-from poser.plugin_check import (
-    DURATION_S,
-    EXIT_ALL_PASS,
-    EXIT_BAD_CONFIG,
-    EXIT_SOME_FAILED,
-    INITIALIZATION_TIMEOUT_S,
+from poser.adapters.wav import WavAudioFiles
+from poser.cli.common import EXIT_ALL_PASS, EXIT_BAD_CONFIG, EXIT_SOME_FAILED, align_rows
+from poser.core.audio import (
     NUM_CHANNELS,
     SAMPLE_RATE,
     SILENCE_DBFS,
-    ConfigError,
-    PluginSpec,
-    align_rows,
-    load_config,
+    AudioProblem,
+    make_audio,
     measure_peak_dbfs,
-    note_pattern,
 )
+from poser.core.checks import CHECK_SAMPLES, check_pattern
+from poser.plugin_check import INITIALIZATION_TIMEOUT_S, ConfigError, PluginSpec, load_config
 from poser.presets import PresetError, preset_description, preset_files
 from poser.worker import (
     MalformedJobError,
@@ -46,6 +40,8 @@ from poser.worker import (
     job_fields,
     json_object,
     optional_str,
+    performance_messages,
+    render_duration_s,
     run_isolated,
 )
 from poser.workspace import WorkspaceError, fill_path_options
@@ -413,8 +409,6 @@ def save_in_worker(job: SaveJob) -> SaveFailure | SaveSuccess:
     # Imported here so the parent never loads plugin code.
     from pedalboard import AudioUnitPlugin, VST3Plugin, load_plugin
 
-    from poser.render import write_stem
-
     def load(state: bytes | None) -> VST3Plugin | AudioUnitPlugin:
         # `load_plugin` is annotated as returning `ExternalPlugin`, but it returns one of these.
         plugin = cast(
@@ -446,18 +440,19 @@ def save_in_worker(job: SaveJob) -> SaveFailure | SaveSuccess:
         return {"error": f"cannot restore the saved state: {error}"}
     # The same reset as `render_stem`, so the preview sounds as a song will.
     # Pedalboard's stubs take a `list` of its message union, and `list` is invariant.
-    messages: list[MIDIMessageLike] = [*note_pattern()]
-    audio = plugin(
+    messages: list[MIDIMessageLike] = [*performance_messages(check_pattern())]
+    rendered = plugin(
         messages,
-        duration=DURATION_S,
+        duration=render_duration_s(CHECK_SAMPLES),
         sample_rate=SAMPLE_RATE,
         num_channels=NUM_CHANNELS,
         reset=True,
     )
-    if not np.isfinite(audio).all():
-        return {"error": "preview contains NaN or infinity"}
-    write_stem(Path(job["preview_path"]), audio)
-    return {"state": encode_state(state), "peak_dbfs": measure_peak_dbfs(audio)}
+    audio = make_audio(rendered, CHECK_SAMPLES)
+    if isinstance(audio, AudioProblem):
+        return {"error": f"preview: {audio.message}"}
+    WavAudioFiles().write(Path(job["preview_path"]), audio)
+    return {"state": encode_state(state), "peak_dbfs": measure_peak_dbfs(audio.samples)}
 
 
 def worker_main(argv: list[str]) -> int:

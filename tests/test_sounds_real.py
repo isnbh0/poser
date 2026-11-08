@@ -8,7 +8,8 @@ import pytest
 from helpers import CAPTURE_STATE, real_specs, strongest_hz
 
 from poser import render
-from poser.song import Note, Song, Track
+from poser.core.song import Note, Song, Track
+from poser.core.statuses import StemStatus
 from poser.sounds import SavedSound, write_sound
 
 
@@ -26,7 +27,7 @@ def test_saved_sound_state_reaches_the_render(tmp_path: Path) -> None:
     )
 
     def note_song(sound: str) -> Song:
-        return Song(bpm=60, tracks=(Track("lead", "pedalboard", sound, (Note(0, 60, 1.5, 100),)),))
+        return Song(bpm=60, tracks=(Track("lead", sound, (Note(0, 60, 1.5, 100),)),))
 
     out = tmp_path / "renders"
     [default] = render.render_song(
@@ -34,8 +35,8 @@ def test_saved_sound_state_reaches_the_render(tmp_path: Path) -> None:
     )
     [saved] = render.render_song(note_song("low"), out / "saved", specs, sounds_dir=sounds_dir)
 
-    assert default.status is render.TrackStatus.RENDERED, default.detail
-    assert saved.status is render.TrackStatus.RENDERED, saved.detail
+    assert default.status is StemStatus.RENDERED, default.detail
+    assert saved.status is StemStatus.RENDERED, saved.detail
     assert default.stem is not None
     assert saved.stem is not None
     assert strongest_hz(default.stem) == pytest.approx(262, abs=5)

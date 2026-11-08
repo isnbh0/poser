@@ -1,19 +1,13 @@
-"""Tests for the song format. No plugins or rendering."""
+"""Tests for the song model. No plugins, files, or rendering."""
 
-import os
-import stat
 from collections.abc import Callable
-from pathlib import Path
-from typing import Self, cast
+from typing import cast
 
-import numpy as np
 import pytest
-import yaml
-from helpers import SCAFFOLD_DIR
 
-from poser import song as song_module
-from poser.music import chord, notes, pitch, scale, swing
-from poser.song import (
+from poser.core.music import chord, notes, pitch, scale, swing
+from poser.core.names import Identifier, TrackName
+from poser.core.song import (
     ControlChange,
     Note,
     NoteData,
@@ -21,11 +15,10 @@ from poser.song import (
     SongData,
     SongError,
     Track,
-    load_song,
     parse_song,
     song_to_data,
-    write_song,
 )
+from poser.core.sounds import SoundRef
 
 
 def valid_note() -> dict[str, object]:
@@ -33,31 +26,11 @@ def valid_note() -> dict[str, object]:
 
 
 def valid_track(name: str = "lead") -> dict[str, object]:
-    return {"name": name, "engine": "pedalboard", "sound": "Serum", "notes": [valid_note()]}
+    return {"name": name, "sound": "Serum", "notes": [valid_note()]}
 
 
 def valid_song() -> dict[str, object]:
     return {"bpm": 120, "tracks": [valid_track()]}
-
-
-def test_valid_song_loads_with_expected_values(tmp_path: Path) -> None:
-    path = tmp_path / "song.yaml"
-    path.write_text(yaml.safe_dump(valid_song()))
-
-    song = load_song(path)
-
-    assert song.bpm == 120
-    assert song.tracks == (
-        Track("lead", "pedalboard", "Serum", (Note(beat=0, pitch=60, length=1, velocity=100),)),
-    )
-
-
-def test_demo_song_loads_with_two_serum_preset_tracks_and_eight_notes() -> None:
-    song = load_song(SCAFFOLD_DIR / "demo.yaml")
-
-    assert len(song.tracks) == 2
-    assert all(track.sound.startswith("Serum:") for track in song.tracks)
-    assert sum(len(track.notes) for track in song.tracks) >= 8
 
 
 def test_seconds_uses_bpm() -> None:
@@ -110,8 +83,10 @@ def set_note(song: dict[str, object], key: str, value: object) -> None:
         (lambda s: set_track(s, "name", "../escape"), "tracks[0].name"),
         (lambda s: set_track(s, "name", "line\n"), "tracks[0].name"),
         (lambda s: set_track(s, "name", 7), "tracks[0].name"),
-        (lambda s: set_track(s, "engine", "reaper"), "unknown engine 'reaper'"),
-        (lambda s: set_track(s, "engine", ["reaper"]), "unknown engine ['reaper']"),
+        (lambda s: set_track(s, "engine", "pedalboard"), "tracks[0]: unknown key 'engine'"),
+        (lambda s: set_track(s, "sound", "bad name"), "tracks[0].sound: must be <instrument>"),
+        (lambda s: set_track(s, "sound", "Serum:"), "tracks[0].sound"),
+        (lambda s: set_track(s, "sound", ":preset"), "tracks[0].sound"),
         (lambda s: set_track(s, "sound", ""), "tracks[0].sound"),
         (lambda s: set_note(s, "pitch", -1), "notes[0].pitch"),
         (lambda s: set_note(s, "pitch", 128), "notes[0].pitch"),
@@ -160,139 +135,21 @@ def test_each_problem_gets_its_own_message() -> None:
     assert len(raised.value.problems) == 3
 
 
-def test_missing_file_is_a_song_error(tmp_path: Path) -> None:
-    with pytest.raises(SongError, match="cannot read"):
-        load_song(tmp_path / "missing.yaml")
-
-
-def test_malformed_yaml_is_a_song_error(tmp_path: Path) -> None:
-    path = tmp_path / "bad.yaml"
-    path.write_text("bpm: [unclosed")
-    with pytest.raises(SongError, match="cannot read"):
-        load_song(path)
-
-
-def test_song_module_stays_engine_neutral() -> None:
-    source = Path(song_module.__file__).read_text()
-    assert "pedalboard import" not in source
-    assert "import mido" not in source
-
-
 def helper_song() -> Song:
     progression = chord(pitch("A3"), "min") + chord(pitch("F3"), "maj", 1)
     lead = swing(notes(scale(pitch("A4"), "minor"), 0, 0.5, 90, step=0.5), 2 / 3)
     return Song(
         bpm=96.5,
         tracks=(
-            Track("lead", "pedalboard", "Serum:Leads/LD A Bit of Luck [SD]", lead),
-            Track("pad", "pedalboard", "Serum", notes(progression, 0, 4, 70)),
+            Track("lead", "Serum:Leads/LD A Bit of Luck [SD]", lead),
+            Track("pad", "Serum", notes(progression, 0, 4, 70)),
         ),
     )
-
-
-def test_written_song_loads_back_equal(tmp_path: Path) -> None:
-    path = tmp_path / "song.yaml"
-    song = helper_song()
-
-    write_song(song, path)
-
-    assert load_song(path) == song
-    assert any(note.beat == 2 / 3 for note in load_song(path).tracks[0].notes)
-    assert [p.name for p in tmp_path.iterdir()] == ["song.yaml"]
-
-
-def test_written_song_keeps_the_format_key_order(tmp_path: Path) -> None:
-    path = tmp_path / "song.yaml"
-    write_song(helper_song(), path)
-
-    data = yaml.safe_load(path.read_text())
-
-    assert list(data) == ["bpm", "tracks"]
-    assert all(list(track) == ["name", "engine", "sound", "notes"] for track in data["tracks"])
-    assert list(data["tracks"][0]["notes"][0]) == ["beat", "pitch", "length", "velocity"]
 
 
 def test_song_to_data_round_trips_through_parse_song() -> None:
     song = helper_song()
     assert parse_song(song_to_data(song)) == song
-
-
-def test_failed_replace_keeps_the_old_file_and_leaves_no_temp_file(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    path = tmp_path / "song.yaml"
-    path.write_text("old contents\n")
-
-    def fail(*args: object) -> None:
-        raise OSError("disk full")
-
-    monkeypatch.setattr(Path, "replace", fail)
-    with pytest.raises(SongError, match="disk full"):
-        write_song(helper_song(), path)
-
-    assert path.read_text() == "old contents\n"
-    assert [p.name for p in tmp_path.iterdir()] == ["song.yaml"]
-
-
-def test_failed_write_leaves_no_temp_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    path = tmp_path / "song.yaml"
-    real_fdopen = song_module.os.fdopen
-
-    class FailingFile:
-        def __init__(self, fd: int, mode: str) -> None:
-            self.handle = real_fdopen(fd, mode)
-
-        def __enter__(self) -> Self:
-            return self
-
-        def __exit__(self, *args: object) -> None:
-            self.handle.close()
-            raise OSError("flush failed")
-
-        def write(self, text: str) -> int:
-            return self.handle.write(text)
-
-    monkeypatch.setattr(song_module.os, "fdopen", FailingFile)
-    with pytest.raises(SongError, match="flush failed"):
-        write_song(helper_song(), path)
-
-    assert list(tmp_path.iterdir()) == []
-
-
-def test_written_song_keeps_the_existing_file_mode(tmp_path: Path) -> None:
-    path = tmp_path / "song.yaml"
-    path.write_text("old\n")
-    path.chmod(0o640)
-
-    write_song(helper_song(), path)
-
-    assert stat.S_IMODE(path.stat().st_mode) == 0o640
-
-
-def test_new_song_file_gets_umask_permissions(tmp_path: Path) -> None:
-    old = os.umask(0o022)
-    try:
-        write_song(helper_song(), tmp_path / "song.yaml")
-    finally:
-        os.umask(old)
-    assert stat.S_IMODE((tmp_path / "song.yaml").stat().st_mode) == 0o644
-
-
-def test_writing_through_a_symlink_keeps_the_link(tmp_path: Path) -> None:
-    real = tmp_path / "real.yaml"
-    real.write_text("old\n")
-    link = tmp_path / "link.yaml"
-    link.symlink_to(real)
-
-    write_song(helper_song(), link)
-
-    assert link.is_symlink()
-    assert load_song(real) == helper_song()
-
-
-def test_writing_into_a_missing_directory_is_a_song_error(tmp_path: Path) -> None:
-    with pytest.raises(SongError, match="cannot write"):
-        write_song(helper_song(), tmp_path / "missing" / "song.yaml")
 
 
 def test_track_without_gain_has_gain_zero() -> None:
@@ -346,66 +203,22 @@ def test_integer_gain_is_stored_as_a_float() -> None:
     assert type(gain) is float
 
 
-def test_numpy_gain_writes_as_a_plain_float(tmp_path: Path) -> None:
-    note = (Note(beat=0, pitch=60, length=1, velocity=100),)
-    song = Song(bpm=120, tracks=(Track("lead", "pedalboard", "Serum", note, gain=np.float64(-6)),))
-    path = tmp_path / "song.yaml"
-
-    write_song(song, path)
-
-    assert load_song(path).tracks[0].gain == -6.0
-
-
-def test_numbers_write_in_one_spelling(tmp_path: Path) -> None:
-    def write(beat: float, length: float, bpm: float) -> str:
-        note = (Note(beat=beat, pitch=60, length=length, velocity=100),)
-        path = tmp_path / "song.yaml"
-        write_song(Song(bpm=bpm, tracks=(Track("lead", "pedalboard", "Serum", note),)), path)
-        return path.read_text()
-
-    assert write(0, 1, 120) == write(0.0, np.float64(1.0), 120.0)
-    assert write(np.float64(0.5), 1, 120) == write(0.5, 1, 120)
-    assert "beat: 0.5" in write(np.float64(0.5), 1, 120)
-
-
-class Pitch(int):
-    pass
-
-
-def test_unrepresentable_value_is_a_song_error(tmp_path: Path) -> None:
-    note = (Note(beat=0.5, pitch=Pitch(60), length=1, velocity=100),)
-    song = Song(bpm=120, tracks=(Track("lead", "pedalboard", "Serum", note),))
-    with pytest.raises(SongError, match="cannot write"):
-        write_song(song, tmp_path / "song.yaml")
-    assert list(tmp_path.iterdir()) == []
-
-
-def test_gain_from_yaml_nan_and_inf_is_rejected(tmp_path: Path) -> None:
-    for text in (".nan", ".inf"):
-        path = tmp_path / "song.yaml"
-        path.write_text(
-            yaml.safe_dump(valid_song()).replace("  name: lead", f"  gain: {text}\n  name: lead")
-        )
-        with pytest.raises(SongError, match="gain"):
-            load_song(path)
-
-
 def gain_song() -> Song:
     note = (Note(beat=0, pitch=60, length=1, velocity=100),)
     return Song(
         bpm=120,
         tracks=(
-            Track("lead", "pedalboard", "Serum", note, gain=-6),
-            Track("bass", "pedalboard", "Serum", note),
+            Track("lead", "Serum", note, gain=-6),
+            Track("bass", "Serum", note),
         ),
     )
 
 
 def test_song_to_data_writes_gain_between_sound_and_notes_only_when_set() -> None:
     lead, bass = song_to_data(gain_song())["tracks"]
-    assert list(lead) == ["name", "engine", "sound", "gain", "notes"]
+    assert list(lead) == ["name", "sound", "gain", "notes"]
     assert lead["gain"] == -6
-    assert list(bass) == ["name", "engine", "sound", "notes"]
+    assert list(bass) == ["name", "sound", "notes"]
 
 
 def test_song_to_data_is_the_song_format() -> None:
@@ -415,12 +228,11 @@ def test_song_to_data_is_the_song_format() -> None:
         "tracks": [
             {
                 "name": "lead",
-                "engine": "pedalboard",
                 "sound": "Serum",
                 "gain": -6.0,
                 "notes": [note],
             },
-            {"name": "bass", "engine": "pedalboard", "sound": "Serum", "notes": [note]},
+            {"name": "bass", "sound": "Serum", "notes": [note]},
         ],
     }
 
@@ -429,20 +241,12 @@ def test_song_to_data_is_the_song_format() -> None:
     assert data == expected
     assert list(data) == ["bpm", "tracks"]
     assert [list(track) for track in data["tracks"]] == [
-        ["name", "engine", "sound", "gain", "notes"],
-        ["name", "engine", "sound", "notes"],
+        ["name", "sound", "gain", "notes"],
+        ["name", "sound", "notes"],
     ]
     assert [list(note) for track in data["tracks"] for note in track["notes"]] == [
         ["beat", "pitch", "length", "velocity"]
     ] * 2
-
-
-def test_song_with_gains_round_trips(tmp_path: Path) -> None:
-    path = tmp_path / "song.yaml"
-    write_song(gain_song(), path)
-
-    assert load_song(path) == gain_song()
-    assert "gain" not in yaml.safe_load(path.read_text())["tracks"][1]
 
 
 # Controller changes
@@ -563,8 +367,8 @@ def cc_track_song() -> Song:
     return Song(
         120,
         (
-            Track("lead", "pedalboard", "Serum", (note,), gain=-6.0, cc=changes),
-            Track("bass", "pedalboard", "Serum", (note,)),
+            Track("lead", "Serum", (note,), gain=-6.0, cc=changes),
+            Track("bass", "Serum", (note,)),
         ),
     )
 
@@ -573,161 +377,12 @@ def test_song_to_data_writes_cc_after_notes_and_shape_only_for_linear() -> None:
     data = song_to_data(cc_track_song())
 
     lead, bass = data["tracks"]
-    assert list(lead) == ["name", "engine", "sound", "gain", "notes", "cc"]
-    assert list(bass) == ["name", "engine", "sound", "notes"]
+    assert list(lead) == ["name", "sound", "gain", "notes", "cc"]
+    assert list(bass) == ["name", "sound", "notes"]
     assert lead.get("cc") == [
         {"beat": 0, "control": 1, "value": 0, "shape": "linear"},
         {"beat": 2, "control": 1, "value": 127},
     ]
-
-
-def test_song_with_controller_changes_round_trips(tmp_path: Path) -> None:
-    path = tmp_path / "song.yaml"
-    write_song(cc_track_song(), path)
-
-    assert load_song(path) == cc_track_song()
-
-
-SCRIPT_HEADER = """from poser.song import ControlChange, Note, Song, Track
-"""
-
-
-def write_script(tmp_path: Path, body: str, name: str = "tune.py") -> Path:
-    path = tmp_path / name
-    path.write_text(SCRIPT_HEADER + body)
-    return path
-
-
-def test_script_song_loads_equal_to_the_song_it_builds(tmp_path: Path) -> None:
-    path = write_script(
-        tmp_path,
-        """
-def build():
-    note = Note(0, 60, 1, 100)
-    return Song(120, (Track("lead", "pedalboard", "Serum", (note,), gain=-3),))
-""",
-    )
-
-    song = load_song(path)
-
-    assert song == Song(
-        120, (Track("lead", "pedalboard", "Serum", (Note(0, 60, 1, 100),), gain=-3.0),)
-    )
-
-
-@pytest.mark.parametrize(
-    ("body", "message"),
-    [
-        ("x = 1\n", "must define a function build() that returns a Song"),
-        ("build = 3\n", "must define a function build() that returns a Song"),
-        ("raise ImportError('no module')\n", "cannot run"),
-        ("def build():\n    raise ValueError('boom')\n", "build() raised ValueError: boom"),
-        ("def build():\n    return {'bpm': 120, 'tracks': []}\n", "must return a Song, got dict"),
-    ],
-)
-def test_broken_script_song_is_one_song_error_naming_the_file(
-    tmp_path: Path, body: str, message: str
-) -> None:
-    path = write_script(tmp_path, body)
-
-    with pytest.raises(SongError) as error:
-        load_song(path)
-
-    assert len(error.value.problems) == 1
-    assert str(path) in error.value.problems[0]
-    assert message in error.value.problems[0]
-
-
-def test_unknown_song_suffix_is_a_song_error(tmp_path: Path) -> None:
-    path = tmp_path / "tune.json"
-    path.write_text("{}")
-
-    with pytest.raises(SongError) as error:
-        load_song(path)
-
-    assert len(error.value.problems) == 1
-    assert str(path) in error.value.problems[0]
-    assert ".yaml, .yml, or .py" in error.value.problems[0]
-
-
-def test_script_song_is_validated_like_yaml(tmp_path: Path) -> None:
-    pitch_path = write_script(
-        tmp_path,
-        """
-def build():
-    return Song(120, (Track("lead", "pedalboard", "Serum", (Note(0, 200, 1, 100),)),))
-""",
-        "pitch.py",
-    )
-    ramp_path = write_script(
-        tmp_path,
-        """
-def build():
-    notes = (Note(0, 60, 1, 100),)
-    ramp = (ControlChange(0, 1, 0, "linear"),)
-    return Song(120, (Track("lead", "pedalboard", "Serum", notes, cc=ramp),))
-""",
-        "ramp.py",
-    )
-
-    with pytest.raises(SongError) as pitch_error:
-        load_song(pitch_path)
-    with pytest.raises(SongError) as ramp_error:
-        load_song(ramp_path)
-
-    assert pitch_error.value.problems == [
-        f"{pitch_path}: Note.pitch: must be an integer from 0 to 127, got 200"
-    ]
-    assert ramp_error.value.problems == [
-        f"{ramp_path}: Track.cc[0].shape: linear needs a later change to control 1"
-    ]
-
-
-def test_script_and_yaml_with_one_stem_both_load(tmp_path: Path) -> None:
-    write_script(
-        tmp_path,
-        "def build():\n"
-        "    return Song(90, (Track('lead', 'pedalboard', 'Serum', (Note(0, 60, 1, 100),)),))\n",
-        "x.py",
-    )
-    (tmp_path / "x.yaml").write_text(yaml.safe_dump(valid_song()))
-
-    assert load_song(tmp_path / "x.py").bpm == 90
-    assert load_song(tmp_path / "x.yaml").bpm == 120
-
-
-@pytest.mark.parametrize("where", ["import", "build"])
-def test_script_song_that_exits_is_a_song_error(tmp_path: Path, where: str) -> None:
-    exits = "import sys\nsys.exit(2)\n"
-    body = exits if where == "import" else "def build():\n    import sys\n    sys.exit(2)\n"
-    path = write_script(tmp_path, body)
-
-    with pytest.raises(SongError) as error:
-        load_song(path)
-
-    assert "SystemExit" in error.value.problems[0]
-
-
-@pytest.mark.parametrize(
-    ("build", "problem"),
-    [
-        ("Song(120, None)", "Song.tracks:"),
-        ('Song(120, (Track("lead", "pedalboard", "Serum", None),))', "Track.notes:"),
-        (
-            'Song(120, (Track("lead", "pedalboard", "Serum", ((0, 60, 1, 100),)),))',
-            "Track.notes[0]:",
-        ),
-    ],
-)
-def test_misshapen_script_song_reports_the_path(tmp_path: Path, build: str, problem: str) -> None:
-    path = write_script(tmp_path, f"def build():\n    return {build}\n")
-
-    with pytest.raises(SongError) as error:
-        load_song(path)
-
-    assert any(p.startswith(f"{path}: {problem}") for p in error.value.problems), (
-        error.value.problems
-    )
 
 
 def construct[T](cls: type[T], **values: object) -> T:
@@ -738,7 +393,6 @@ def construct[T](cls: type[T], **values: object) -> T:
 def make_track(**changes: object) -> Track:
     values: dict[str, object] = {
         "name": "lead",
-        "engine": "pedalboard",
         "sound": "Serum",
         "notes": (Note(0, 60, 1, 100),),
     }
@@ -777,7 +431,7 @@ def make_song(bpm: object, tracks: object) -> Song:
         (lambda: make_change(shape="curve"), "ControlChange.shape:"),
         (lambda: make_track(name="../victim"), "Track.name:"),
         (lambda: make_track(name=""), "Track.name:"),
-        (lambda: make_track(engine="other"), "Track.engine:"),
+        (lambda: make_track(sound="bad name"), "Track.sound:"),
         (lambda: make_track(sound=""), "Track.sound:"),
         (lambda: make_track(gain=13), "Track.gain:"),
         (lambda: make_track(gain="0"), "Track.gain:"),
@@ -822,18 +476,51 @@ def test_note_reports_every_problem_at_once() -> None:
 
 def test_track_name_cannot_leave_the_render_directory() -> None:
     with pytest.raises(SongError) as error:
-        Track(name="../victim", engine="pedalboard", sound="x", notes=(Note(0, 60, 1, 100),))
+        Track(name="../victim", sound="x", notes=(Note(0, 60, 1, 100),))
 
     assert error.value.problems == [
         "Track.name: must contain only letters, digits, '_', and '-', got '../victim'"
     ]
 
 
-def test_unhashable_engine_is_a_song_error() -> None:
-    with pytest.raises(SongError) as error:
-        Track("lead", cast("str", {}), "x", (Note(0, 60, 1, 100),))
+def test_sound_that_is_not_a_reference_is_a_song_error() -> None:
+    expected = (
+        "must be <instrument> or <instrument>:<name>, with an instrument name matching "
+        "[A-Za-z0-9][A-Za-z0-9_-]*, got 'bad name'"
+    )
+    data = valid_song()
+    set_track(data, "sound", "bad name")
+    with pytest.raises(SongError) as parsed:
+        parse_song(data)
+    with pytest.raises(SongError) as built:
+        make_track(sound="bad name")
 
-    assert error.value.problems == ["Track.engine: unknown engine {}"]
+    assert parsed.value.problems == [f"tracks[0].sound: {expected}"]
+    assert built.value.problems == [f"Track.sound: {expected}"]
+
+
+@pytest.mark.parametrize(
+    ("sound", "ref"),
+    [
+        ("Serum", SoundRef(Identifier("Serum"))),
+        (
+            "Serum:Leads/LD A Bit of Luck [SD]",
+            SoundRef(Identifier("Serum"), "Leads/LD A Bit of Luck [SD]"),
+        ),
+        ("serum-2:a:b", SoundRef(Identifier("serum-2"), "a:b")),
+    ],
+)
+def test_track_sound_ref_and_track_name_are_the_parsed_values(sound: str, ref: SoundRef) -> None:
+    track = make_track(name="lead_1", sound=sound)
+
+    assert track.sound_ref == ref
+    assert track.track_name == TrackName("lead_1")
+    assert isinstance(track.track_name, TrackName)
+
+
+def test_track_has_no_engine() -> None:
+    with pytest.raises(TypeError):
+        make_track(engine="pedalboard")
 
 
 def test_song_without_tracks_is_a_song_error() -> None:

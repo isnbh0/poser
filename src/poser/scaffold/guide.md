@@ -17,14 +17,14 @@ loads them in this project's environment.
 
 A song is `songs/<name>.py`, whose `build()` returns a `Song`, or `songs/<name>.yaml`.
 `songs/demo.yaml` shows the YAML form; both forms use the same keys and checks.
-Times are in beats from 0, and pitches are MIDI numbers, where middle C is 60.
+Times are in beats from 0, and pitches are MIDI numbers, where middle C is 60. A song must end
+within one hour: its last note end or controller change falls at most 3600 seconds in.
 
 | Key | Where | Type | Range |
 |---|---|---|---|
 | `bpm` | song | number | above 0 |
 | `tracks` | song | list of tracks | names unique |
 | `name` | track | text | letters, digits, `_`, `-` |
-| `engine` | track | text | `pedalboard` |
 | `sound` | track | text | a name from `uv run list-sounds` |
 | `notes` | track | list of notes | |
 | `gain` | track, optional | decibels | -60 to 12 |
@@ -43,8 +43,7 @@ to the next change to the same controller, so it needs a later one.
 A short song script, showing the form rather than a finished piece:
 
 ```python
-from poser.music import chord, degree, humanize, notes, pitch, scale
-from poser.song import ControlChange, Song, Track
+from poser import ControlChange, Song, Track, chord, degree, humanize, notes, pitch, scale
 
 
 def build() -> Song:
@@ -52,7 +51,6 @@ def build() -> Song:
     line = notes([degree(key, i) for i in (0, 2, 4, 7, 6, 4, 2, 0)], 0, 0.5, 100, step=0.5)
     lead = Track(
         name="lead",
-        engine="pedalboard",
         sound="Serum:Leads/LD A Bit of Luck [SD]",
         notes=humanize(line, seed=1, velocity=8),
         gain=-2,
@@ -63,14 +61,12 @@ def build() -> Song:
     )
     bass = Track(
         name="bass",
-        engine="pedalboard",
         sound="Serum:Bass/BA Ampology [CFA]",
         notes=notes([pitch("A2")], 0, 2, 100) + notes([pitch("F2")], 2, 2, 100),
         gain=-2,
     )
     pad = Track(
         name="pad",
-        engine="pedalboard",
         sound="Serum:Pads/PD Celestial Light [SW]",
         notes=notes(chord(pitch("A3"), "min"), 0, 4, 70),
         gain=-8,
@@ -78,7 +74,7 @@ def build() -> Song:
     return Song(bpm=100, tracks=(lead, bass, pad))
 ```
 
-Music helpers, in `poser.music`; their docstrings give the parameters:
+Music helpers, from `poser`; their docstrings give the parameters:
 
 - `pitch` — the MIDI pitch of a note name such as `C4`, `F#3`, or `Bb2`.
 - `scale` — one octave of a mode (`MODES`, such as major, minor, dorian) from a root.
@@ -129,6 +125,7 @@ the report. Report fields whose meaning is not obvious from their names:
 | `bands_db` | Level in each frequency band, relative and uncalibrated |
 | `bar_dbfs` | RMS level of each 4-beat span, up to the song's last beat |
 | `detail` | Why a track has no measurements |
+| `sections` | Extra analysis from configured report sections, by name; each has a `version` and either `data` with its own `defects`, or an `error` |
 
 Track measurements are of the stem before `gain`; mix measurements are after it. Band levels are
 relative, so compare them between tracks and versions, not against a target.
@@ -142,7 +139,8 @@ Track statuses from `render-song`: `rendered`, `silent`, `unknown_sound`, `load_
 rendering again fixes it.
 
 Defects fail the analysis: `silent`, for a track or the mix; `clipping`, for mix samples beyond
-full scale; and `headroom`, for a mix peak above -1 dBFS.
+full scale; and `headroom`, for a mix peak above -1 dBFS. A section's defects and errors also
+fail the analysis.
 
 Results live in `renders/<song path>/`. `analysis/` and `mix/` exist only when every track
 analyzed:

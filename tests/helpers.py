@@ -6,7 +6,8 @@ import numpy as np
 import pytest
 from pedalboard.io import ReadableAudioFile
 
-from poser.plugin_check import SAMPLE_RATE, PluginSpec, load_config
+from poser.core.audio import SAMPLE_RATE
+from poser.plugin_check import PluginSpec, load_config
 
 REPO_DIR = Path(__file__).resolve().parents[1]
 SCAFFOLD_DIR = REPO_DIR / "src" / "poser" / "scaffold"

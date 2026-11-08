@@ -9,9 +9,10 @@ import pytest
 from helpers import CAPTURE_STATE, fxp_bytes, real_specs, strongest_hz
 
 from poser import render
+from poser.core.song import Note, Song, Track
+from poser.core.statuses import StemStatus
 from poser.plugin_check import load_config
 from poser.presets import component_state
-from poser.song import Note, Song, Track
 
 
 @pytest.mark.real_plugins
@@ -29,14 +30,12 @@ def test_preset_chunk_reaches_the_render(tmp_path: Path) -> None:
     config.write_text(
         f'[[plugin]]\nname = "Serum"\npath = "{serum.path}"\npresets = "{presets_dir}"\n'
     )
-    song = Song(
-        bpm=60, tracks=(Track("lead", "pedalboard", "Serum:Test/low", (Note(0, 60, 1.5, 100),)),)
-    )
+    song = Song(bpm=60, tracks=(Track("lead", "Serum:Test/low", (Note(0, 60, 1.5, 100),)),))
 
     [result] = render.render_song(
         song, tmp_path / "renders" / "preset", load_config(config), sounds_dir=tmp_path / "sounds"
     )
 
-    assert result.status is render.TrackStatus.RENDERED, result.detail
+    assert result.status is StemStatus.RENDERED, result.detail
     assert result.stem is not None
     assert strongest_hz(result.stem) == pytest.approx(33, abs=3)

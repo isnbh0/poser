@@ -63,6 +63,8 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S101", "ARG", "FBT", "SLF001", "PLR2004"]
+# Core value types raise ValueError for every broken rule, including a wrong type.
+"src/poser/core/**" = ["TRY004"]
 
 [tool.ruff.lint.flake8-tidy-imports.banned-api]
 "typing.Any".msg = "Use object, a TypedDict, a Protocol, or a concrete type."

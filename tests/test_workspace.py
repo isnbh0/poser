@@ -8,6 +8,7 @@ import pytest
 import yaml
 
 from poser import analyze, plugin_check, render, sounds
+from poser.cli.common import EXIT_ALL_PASS, EXIT_BAD_CONFIG
 from poser.sounds import SavedSound, write_sound
 from poser.workspace import (
     SongOutsideWorkspaceError,
@@ -29,7 +30,7 @@ def make_workspace(root: Path) -> Path:
 def write_song_file(path: Path) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     note = {"beat": 0, "pitch": 60, "length": 1, "velocity": 100}
-    track = {"name": "lead", "engine": "pedalboard", "sound": "Nope", "notes": [note]}
+    track = {"name": "lead", "sound": "Nope", "notes": [note]}
     path.write_text(yaml.safe_dump({"bpm": 120, "tracks": [track]}))
     return path
 
@@ -98,7 +99,7 @@ def test_command_outside_a_workspace_exits_2(
 ) -> None:
     write_song_file(tmp_path / "song.yaml")
 
-    assert main(argv) == plugin_check.EXIT_BAD_CONFIG
+    assert main(argv) == EXIT_BAD_CONFIG
 
     assert capsys.readouterr().err.startswith(f"{prog}: no plugins.toml in ")
 
@@ -109,7 +110,7 @@ def test_explicit_paths_need_no_workspace(tmp_path: Path) -> None:
 
     argv = ["--config", str(config), "--sounds-dir", str(tmp_path / "sounds")]
 
-    assert sounds.list_main(argv) == plugin_check.EXIT_ALL_PASS
+    assert sounds.list_main(argv) == EXIT_ALL_PASS
 
 
 def test_render_from_a_subdirectory_writes_at_the_workspace_root(

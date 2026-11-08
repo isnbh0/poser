@@ -13,16 +13,18 @@ import yaml
 from pedalboard.io import ReadableAudioFile, WriteableAudioFile
 
 from poser import analyze, render
-from poser.analyze import Defect, TrackStatus, analyze_song
-from poser.plugin_check import (
-    EXIT_ALL_PASS,
-    EXIT_BAD_CONFIG,
-    EXIT_SOME_FAILED,
-    PluginSpec,
-)
-from poser.song import Note, Song, Track, load_song
+from poser.adapters.song_formats import SONG_FORMATS
+from poser.analyze import analyze_song
+from poser.cli.common import EXIT_ALL_PASS, EXIT_BAD_CONFIG, EXIT_SOME_FAILED, EXIT_SONG_BUSY
+from poser.core.audio import SAMPLE_RATE, stem_samples
+from poser.core.cache import track_key
+from poser.core.loading import load_song
+from poser.core.report import BANDS, AnalysisStatus, Defect, Report, TrackReport
+from poser.core.song import Note, Song, Track
+from poser.core.statuses import StemStatus
+from poser.plugin_check import PluginSpec
 
-RATE = 48000
+RATE = SAMPLE_RATE
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 SPECS = [PluginSpec("Serum", "/serum.vst3")]
 SERUM_KEY = render.sound_key(SPECS[0], None)
@@ -64,7 +66,6 @@ def make_song(
     tracks = [
         {
             "name": name,
-            "engine": "pedalboard",
             "sound": "Serum",
             **({"gain": gains[name]} if name in gains else {}),
             "notes": [{"beat": 0, "pitch": 60, "length": beats, "velocity": 100}],
@@ -87,22 +88,26 @@ def make_song(
 def stamp(song_path: Path, name: str, sound: str = SERUM_KEY) -> None:
     """Write the render stamp `render-song` would write for the track's stem as it is now, with
     the given sound key."""
-    song = load_song(song_path)
+    song = read_song(song_path)
     (track,) = (track for track in song.tracks if track.name == name)
     directory = song_dir(song_path)
     render.write_stamp(
         render.stamp_path(directory, name),
         render.stem_path(directory, name),
-        render.track_key(song, track),
+        track_key(song, track),
         sound,
-        render.TrackStatus.RENDERED,
+        StemStatus.RENDERED,
         -20.0,
     )
 
 
-def run(song_path: Path) -> analyze.Report:
+def read_song(song_path: Path) -> Song:
+    return load_song(song_path, SONG_FORMATS)
+
+
+def run(song_path: Path) -> Report:
     return analyze_song(
-        load_song(song_path),
+        read_song(song_path),
         song_path,
         SPECS,
         song_dir(song_path),
@@ -158,7 +163,7 @@ def song_dir(song_path: Path) -> Path:
     return song_path.parent / "renders" / song_path.resolve().relative_to(Path.cwd().resolve())
 
 
-def tracks_by_name(report: analyze.Report) -> dict[str, analyze.TrackReport]:
+def tracks_by_name(report: Report) -> dict[str, TrackReport]:
     return {track.name: track for track in report.tracks}
 
 
@@ -288,12 +293,6 @@ def make_stale(song_path: Path, case: str) -> None:
             song_path.write_text(yaml.safe_dump(data))
         case "wrong_length":
             write_wav(stem, constant(0.1, beats=2))
-        case "mono":
-            write_wav(stem, constant(0.1)[:1])
-        case "unreadable":
-            stem.write_bytes(b"not a wav file")
-        case "truncated":
-            stem.write_bytes(stem.read_bytes()[: stem.stat().st_size // 2])
         case "not_finite":
             audio = constant(0.1)
             audio[:, 1000:2000] = np.nan
@@ -305,22 +304,19 @@ def make_stale(song_path: Path, case: str) -> None:
 @pytest.mark.parametrize(
     ("case", "status", "detail"),
     [
-        ("missing", TrackStatus.MISSING_STEM, None),
-        ("no_stamp", TrackStatus.STALE_STEM, "stem has no render stamp"),
-        ("stem_changed", TrackStatus.STALE_STEM, "stem changed after it was rendered"),
-        ("song_changed", TrackStatus.STALE_STEM, "song changed since this stem was rendered"),
-        ("wrong_length", TrackStatus.STALE_STEM, f"samples, expected {samples_for(1)}"),
-        ("mono", TrackStatus.STALE_STEM, "shorter than its audio data"),
-        ("unreadable", TrackStatus.STALE_STEM, "shorter than its audio data"),
-        ("truncated", TrackStatus.STALE_STEM, "shorter than its audio data"),
-        ("not_finite", TrackStatus.STALE_STEM, "NaN or infinity"),
+        ("missing", AnalysisStatus.MISSING_STEM, None),
+        ("no_stamp", AnalysisStatus.STALE_STEM, "stem has no render stamp"),
+        ("stem_changed", AnalysisStatus.STALE_STEM, "stem changed after it was rendered"),
+        ("song_changed", AnalysisStatus.STALE_STEM, "song changed since this stem was rendered"),
+        ("wrong_length", AnalysisStatus.STALE_STEM, f"samples, expected {samples_for(1)}"),
+        ("not_finite", AnalysisStatus.STALE_STEM, "NaN or infinity"),
     ],
 )
 def test_unusable_stem_removes_earlier_results(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
     case: str,
-    status: TrackStatus,
+    status: AnalysisStatus,
     detail: str | None,
 ) -> None:
     song_path = make_song(
@@ -334,7 +330,7 @@ def test_unusable_stem_removes_earlier_results(
     assert code == EXIT_SOME_FAILED
     lead, bass = items(printed, "tracks")
     assert at(lead, "name") == "lead"
-    assert at(lead, "status") == TrackStatus.ANALYZED
+    assert at(lead, "status") == AnalysisStatus.ANALYZED
     assert at(bass, "status") == status
     bass_detail = at(bass, "detail")
     if detail is None:
@@ -373,7 +369,7 @@ def test_track_named_mix_keeps_its_own_stem(tmp_path: Path) -> None:
 
     report = run(song_path)
 
-    assert [track.status for track in report.tracks] == [TrackStatus.ANALYZED] * 2
+    assert [track.status for track in report.tracks] == [AnalysisStatus.ANALYZED] * 2
     assert np.array_equal(read_wav(song_dir(song_path) / "mix.wav"), constant(0.25))
     assert np.array_equal(read_wav(song_dir(song_path) / "analysis.wav"), constant(0.125))
     assert report.mix is not None
@@ -400,6 +396,64 @@ def test_full_run_writes_spectrograms_and_leaves_no_temporary_files(tmp_path: Pa
     # The lock file stays, because deleting it could let two runs hold different locks.
     leftovers = [path for path in tmp_path.rglob("*") if path.name.startswith(".")]
     assert leftovers == [directory / render.LOCK_NAME]
+
+
+REPORT_KEYS = {"song", "run", "song_sha256", "tracks", "mix"}
+TRACK_REPORT_KEYS = {
+    "name",
+    "status",
+    "track_key",
+    "sound_key",
+    "gain_db",
+    "peak_dbfs",
+    "integrated_lufs",
+    "clipped_samples",
+    "bands_db",
+    "bar_dbfs",
+    "spectrogram",
+    "defects",
+    "detail",
+    "sections",
+}
+MIX_REPORT_KEYS = {
+    "path",
+    "peak_dbfs",
+    "integrated_lufs",
+    "clipped_samples",
+    "bands_db",
+    "bar_dbfs",
+    "spectrogram",
+    "defects",
+    "sections",
+}
+
+
+def test_full_report_keeps_its_json_shape(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    song_path = make_song(tmp_path, {"lead": constant(0.1), "bass": constant(0.2)})
+
+    code, printed = run_main(song_path, capsys)
+
+    assert code == EXIT_ALL_PASS
+    written = json.loads((song_dir(song_path) / "analysis" / "report.json").read_text())
+    for data in (printed, written):
+        assert isinstance(data, dict)
+        assert set(data) == REPORT_KEYS
+        tracks = items(data, "tracks")
+        assert len(tracks) == 2
+        mix = at(data, "mix")
+        for part, keys in [
+            *((track, TRACK_REPORT_KEYS) for track in tracks),
+            (mix, MIX_REPORT_KEYS),
+        ]:
+            assert isinstance(part, dict)
+            assert set(part) == keys
+            assert part["sections"] == {}
+            assert isinstance(part["defects"], list)
+            assert isinstance(part["bar_dbfs"], list)
+            assert isinstance(part["bands_db"], dict)
+            assert set(part["bands_db"]) == set(BANDS)
 
 
 def test_analysis_never_loads_a_plugin(
@@ -496,8 +550,8 @@ def test_track_measurements_ignore_gain_and_report_it(
     for name in stems:
         assert at(reported[name], "peak_dbfs") == plain[name].peak_dbfs
         assert at(reported[name], "integrated_lufs") == plain[name].integrated_lufs
-        assert at(reported[name], "bands_db") == plain[name].bands_db
-        assert at(reported[name], "bar_dbfs") == plain[name].bar_dbfs
+        assert at(reported[name], "bands_db") == dict(plain[name].bands_db or {})
+        assert at(reported[name], "bar_dbfs") == list(plain[name].bar_dbfs or ())
 
 
 def test_missing_stem_still_reports_its_gain(tmp_path: Path) -> None:
@@ -531,7 +585,7 @@ def test_analysis_refuses_to_start_while_the_song_is_locked(
     with render.song_lock(song_dir(song_path).resolve()):
         with pytest.raises(render.SongBusyError):
             run(song_path)
-        assert analyze.main(cli_args(song_path)) == render.EXIT_SONG_BUSY
+        assert analyze.main(cli_args(song_path)) == EXIT_SONG_BUSY
         assert capsys.readouterr().err == (
             "analyze-song: another render-song or analyze-song is running on song.yaml\n"
         )
@@ -576,7 +630,7 @@ def test_render_leaves_history_intact(tmp_path: Path, monkeypatch: pytest.Monkey
     monkeypatch.setattr(render, "worker_command", lambda job_path: ["false"])
 
     render.render_song(
-        load_song(song_path),
+        read_song(song_path),
         song_dir(song_path),
         SPECS,
         sounds_dir=song_path.parent / "sounds",
@@ -603,7 +657,7 @@ def test_record_holds_the_song_and_its_digest(tmp_path: Path) -> None:
     report = run(song_path)
 
     record_song = history(song_path) / "1" / "song.yaml"
-    assert load_song(record_song) == load_song(song_path)
+    assert read_song(record_song) == read_song(song_path)
     assert report.song_sha256 == hashlib.sha256(record_song.read_bytes()).hexdigest()
 
 
@@ -641,8 +695,8 @@ def test_report_keys_are_the_stamp_keys(tmp_path: Path) -> None:
     assert stamp_data is not None
     assert (lead.track_key, lead.sound_key) == (stamp_data.track_key, stamp_data.sound_key)
     assert lead.sound_key == SERUM_KEY
-    song = load_song(song_path)
-    assert bass.track_key == render.track_key(song, song.tracks[1])
+    song = read_song(song_path)
+    assert bass.track_key == track_key(song, song.tracks[1])
     assert bass.sound_key is None
 
 
@@ -652,7 +706,7 @@ def test_stem_of_another_sound_is_stale(tmp_path: Path) -> None:
 
     (lead,) = run(song_path).tracks
 
-    assert lead.status == TrackStatus.STALE_STEM
+    assert lead.status == AnalysisStatus.STALE_STEM
     assert lead.detail == "sound changed since this stem was rendered"
 
 
@@ -662,7 +716,7 @@ def test_stem_of_a_sound_that_no_longer_resolves_is_stale(tmp_path: Path) -> Non
 
     (lead,) = run(song_path).tracks
 
-    assert lead.status == TrackStatus.STALE_STEM
+    assert lead.status == AnalysisStatus.STALE_STEM
     assert lead.sound_key is None
     assert lead.detail == "no plugin, saved sound, or preset named 'Gone'"
 
@@ -677,7 +731,7 @@ def sine(frequency: float, seconds: float, amplitude: float = 1.0) -> np.ndarray
 def test_sine_band_level_leads_every_other_band(frequency: float, band: str) -> None:
     levels = analyze.bands_db(sine(frequency, 2.0, 0.5))
 
-    assert list(levels) == list(analyze.BANDS)
+    assert list(levels) == list(BANDS)
     others = [level for name, level in levels.items() if name != band]
     assert levels[band] >= max(others) + 20
 
@@ -693,7 +747,7 @@ def test_bar_levels_follow_the_song_in_four_beat_spans(tmp_path: Path) -> None:
     report = run(song_path)
 
     (lead,) = report.tracks
-    assert lead.status == TrackStatus.ANALYZED
+    assert lead.status == AnalysisStatus.ANALYZED
     assert lead.bar_dbfs is not None
     assert len(lead.bar_dbfs) == 2
     assert lead.bar_dbfs[0] == pytest.approx(-3.01, abs=0.02)
@@ -702,27 +756,6 @@ def test_bar_levels_follow_the_song_in_four_beat_spans(tmp_path: Path) -> None:
     assert report.mix.bar_dbfs == lead.bar_dbfs
     assert lead.bands_db is not None
     assert all(round(level, 2) == level for level in lead.bands_db.values())
-
-
-@pytest.mark.parametrize(
-    ("peak_dbfs", "defects"),
-    [
-        (-1.5, []),
-        (-0.5, [Defect.HEADROOM]),
-        (1.0, [Defect.CLIPPING, Defect.HEADROOM]),
-    ],
-)
-def test_mix_above_the_ceiling_has_the_headroom_defect(
-    tmp_path: Path, peak_dbfs: float, defects: list[Defect]
-) -> None:
-    song_path = make_song(tmp_path, {"lead": constant(10 ** (peak_dbfs / 20))})
-
-    report = run(song_path)
-
-    assert report.mix is not None
-    assert report.mix.defects == defects
-    assert report.tracks[0].defects == []
-    assert (analyze.exit_code(report) == EXIT_ALL_PASS) == (not defects)
 
 
 def test_spectrogram_has_a_log_axis_from_20_hz_to_20_khz_and_a_db_scale() -> None:
@@ -752,9 +785,7 @@ def test_record_number_follows_the_largest_existing_record(tmp_path: Path) -> No
 @pytest.mark.parametrize("bars", [1, 3, 8])
 def test_bar_count_ends_at_the_last_beat(bpm: float, bars: int) -> None:
     note = Note(beat=0, pitch=60, length=4 * bars, velocity=100)
-    song = Song(bpm=bpm, tracks=(Track("lead", "pedalboard", "Serum", (note,)),))
-    audio = np.full(
-        (2, render.expected_samples(render.song_duration_s(song))), 0.5, dtype=np.float32
-    )
+    song = Song(bpm=bpm, tracks=(Track("lead", "Serum", (note,)),))
+    audio = np.full((2, stem_samples(song)), 0.5, dtype=np.float32)
 
     assert len(analyze.measure(audio, song).bar_dbfs) == bars

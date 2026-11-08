@@ -8,7 +8,6 @@ inputs it came from, and a later run reuses a stem whose stamp still matches.
 import argparse
 import base64
 import fcntl
-import hashlib
 import json
 import os
 import shutil
@@ -17,49 +16,44 @@ import tempfile
 from collections.abc import Generator
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
-from enum import StrEnum
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal, TypedDict, cast
+from typing import TYPE_CHECKING, TypedDict, cast
 
-import mido
-import numpy as np
-
-from poser.plugin_check import (
+from poser.adapters.song_formats import SONG_FORMATS
+from poser.adapters.wav import WavAudioFiles
+from poser.cli.common import (
     EXIT_ALL_PASS,
     EXIT_BAD_CONFIG,
     EXIT_SOME_FAILED,
-    INITIALIZATION_TIMEOUT_S,
+    EXIT_SONG_BUSY,
+    RENDER_TIMEOUT_S,
+    align_rows,
+)
+from poser.core.audio import (
     NUM_CHANNELS,
     SAMPLE_RATE,
     SILENCE_DBFS,
-    WORKER_TIMEOUT_S,
-    ConfigError,
-    PluginSpec,
-    align_rows,
-    load_config,
+    AudioProblem,
+    make_audio,
     measure_peak_dbfs,
 )
+from poser.core.cache import track_key
+from poser.core.jsonvalue import JsonValue, digest, json_object
+from poser.core.loading import load_song
+from poser.core.performance import perform, performance_from_data, performance_to_data
+from poser.core.song import Song, SongError, Track, is_int, is_number
+from poser.core.statuses import RenderFailureStatus, RenderStatus, SoundFailureStatus, StemStatus
+from poser.plugin_check import INITIALIZATION_TIMEOUT_S, ConfigError, PluginSpec, load_config
 from poser.presets import PresetError, build_state, preset_files, read_chunk
-from poser.song import (
-    ControlChange,
-    ControlData,
-    Note,
-    Song,
-    SongError,
-    Track,
-    is_int,
-    is_number,
-    is_shape,
-    load_song,
-)
 from poser.sounds import SoundError, read_sound, sound_files
 from poser.worker import (
     MalformedJobError,
     WorkerCrashedError,
     WorkerTimedOutError,
     job_fields,
-    json_object,
     optional_str,
+    performance_messages,
+    render_duration_s,
     run_isolated,
 )
 from poser.workspace import WorkspaceError, fill_path_options, song_render_dir
@@ -70,67 +64,35 @@ if TYPE_CHECKING:
 # Directories, so a track named `mix` or `analysis` still writes its stem beside them.
 MIX_DIR = "mix"
 ANALYSIS_DIR = "analysis"
-TAIL_S = 2.0
-WAV_BIT_DEPTH = 32  # Float WAV, so levels above full scale survive until mixing.
 # Serum applies a controller change at the start of the processing block that contains it, so
 # the block size bounds controller timing. 512 samples is 10.7 ms at 48 kHz.
 BUFFER_SIZE = 512
-# Raise whenever rendering code changes what a stem contains for the same inputs, so every
-# existing stamp stops matching.
-RENDER_FORMAT = 2
 
-# Exit code when another render-song or analyze-song holds the song's lock.
-EXIT_SONG_BUSY = 3
 LOCK_NAME = ".lock"
 
 WORKER_FIELDS = {"status", "peak_dbfs", "detail"}
 STAMP_FIELDS = {"track_key", "sound_key", "status", "peak_dbfs", "stem_size", "stem_mtime_ns"}
 
 
-class TrackStatus(StrEnum):
-    RENDERED = "rendered"
-    SILENT = "silent"
-    UNKNOWN_SOUND = "unknown_sound"
-    LOAD_FAILED = "load_failed"
-    CRASHED = "crashed"
-    TIMED_OUT = "timed_out"
-
-
-# The statuses of a track that wrote a stem, the only ones a stamp can record.
-type StemStatus = Literal[TrackStatus.RENDERED, TrackStatus.SILENT]
-
-
 def stem_status(value: object) -> StemStatus | None:
-    """Return the status as a stem-writing status, or None for any other value."""
-    if value == TrackStatus.RENDERED:
-        return TrackStatus.RENDERED
-    if value == TrackStatus.SILENT:
-        return TrackStatus.SILENT
-    return None
+    """Return the value as a stem-writing status, or None for any other value."""
+    return StemStatus(value) if isinstance(value, str) and value in StemStatus else None
+
+
+def worker_status(value: object) -> StemStatus | RenderFailureStatus | None:
+    """Return the value as a status a render worker reports, or None for any other value."""
+    if isinstance(value, str) and value in RenderFailureStatus:
+        return RenderFailureStatus(value)
+    return stem_status(value)
 
 
 @dataclass(frozen=True)
 class Outcome:
     """What happened when one track was resolved and rendered, as the worker reports it."""
 
-    status: TrackStatus
+    status: RenderStatus
     peak_dbfs: float | None = None
     detail: str | None = None
-
-
-class NoteJob(TypedDict):
-    beat: float
-    pitch: int
-    length: float
-    velocity: int
-
-
-class TrackJob(TypedDict):
-    name: str
-    engine: str
-    sound: str
-    notes: list[NoteJob]
-    cc: list[ControlData]
 
 
 class RenderJob(TypedDict):
@@ -139,16 +101,14 @@ class RenderJob(TypedDict):
     plugin_path: str
     plugin_name: str | None
     state: str | None
-    bpm: float
-    track: TrackJob
-    duration_s: float
+    performance: JsonValue
     stem_path: str
 
 
 @dataclass(frozen=True)
 class TrackResult:
     track: str
-    status: TrackStatus
+    status: RenderStatus
     peak_dbfs: float | None = None
     stem: str | None = None
     detail: str | None = None
@@ -167,147 +127,14 @@ class Stamp:
     stem_mtime_ns: int
 
 
-def song_last_beat(song: Song) -> float:
-    """Return the latest note end or controller change across tracks."""
-    note_ends = [note.beat + note.length for track in song.tracks for note in track.notes]
-    return max([*note_ends, *(change.beat for track in song.tracks for change in track.cc)])
-
-
-def song_duration_s(song: Song) -> float:
-    """Return the length shared by every stem: the song's last beat plus the tail. Pedalboard
-    ignores messages after the end, so changes must fall within.
-    """
-    return song.seconds(song_last_beat(song)) + TAIL_S
-
-
-def expected_samples(duration_s: float) -> int:
-    """Return the sample count Pedalboard renders, which truncates rather than rounds."""
-    return int(duration_s * SAMPLE_RATE)
-
-
-def _sample(song: Song, beat: float) -> int:
-    return round(song.seconds(beat) * SAMPLE_RATE)
-
-
-def _ramp_events(
-    song: Song, start: ControlChange, end: ControlChange
-) -> list[tuple[int, int, int]]:
-    """Return one event per value along a linear segment, at the beat where the line rounds to it.
-
-    The segment's start value is the start entry's own event, so values run from one past it.
-    """
-    span = abs(end.value - start.value)
-    direction = 1 if end.value > start.value else -1
-    return [
-        (
-            _sample(song, start.beat + (step - 0.5) / span * (end.beat - start.beat)),
-            start.control,
-            start.value + direction * step,
-        )
-        for step in range(1, span + 1)
-    ]
-
-
-def control_events(song: Song, track: Track) -> list[tuple[int, int, int]]:
-    """Return a track's controller changes as `(sample, control, value)` events in time order.
-
-    Each controller holds its first value from the start of the song, as automation does in a
-    DAW, so a change at a note's start is already in place when the note begins. Linear segments
-    expand to one event per value. Per controller, only the last event at a sample is kept, and an
-    event that repeats the controller's current value is dropped.
-    """
-    events: list[tuple[int, int, int]] = []
-    seen: set[int] = set()
-    for index, change in enumerate(track.cc):
-        events.append((_sample(song, change.beat), change.control, change.value))
-        if change.control not in seen:
-            seen.add(change.control)
-            events.append((0, change.control, change.value))
-        if change.shape == "linear":
-            # `Track` guarantees a later change to the same controller.
-            target = next(c for c in track.cc[index + 1 :] if c.control == change.control)
-            events.extend(_ramp_events(song, change, target))
-    events.sort(key=lambda event: event[0])
-
-    last_at_sample = {
-        (sample, control): position for position, (sample, control, _) in enumerate(events)
-    }
-    kept: list[tuple[int, int, int]] = []
-    current: dict[int, int] = {}
-    for position, (sample, control, value) in enumerate(events):
-        if last_at_sample[(sample, control)] != position or current.get(control) == value:
-            continue
-        current[control] = value
-        kept.append((sample, control, value))
-    return kept
-
-
-def track_messages(song: Song, track: Track) -> list[mido.Message]:
-    """Build MIDI in time order. At one sample, note-offs come first, then controller changes,
-    then note-ons, so a repeated pitch retriggers.
-
-    Times snap to whole samples first. Otherwise float error, as in beats 0.1 + 0.2 against 0.3,
-    can place a note-off just after the note-on it should precede and silence the new note.
-    Pedalboard reads `time` as absolute seconds, not mido deltas, converts it to a 32-bit float,
-    and truncates `time * sample_rate` to a sample, so each time sits half a sample past its
-    sample. That lands exactly for the first 128 seconds; later, float32 rounding can move a
-    message by a sample or more, without reordering messages.
-    """
-    events = []
-    for note in track.notes:
-        start = _sample(song, note.beat)
-        end = max(_sample(song, note.beat + note.length), start + 1)
-        events.append((start, 2, mido.Message("note_on", note=note.pitch, velocity=note.velocity)))
-        events.append((end, 0, mido.Message("note_off", note=note.pitch)))
-    for sample, control, value in control_events(song, track):
-        events.append((sample, 1, mido.Message("control_change", control=control, value=value)))
-    events.sort(key=lambda event: event[:2])
-    return [message.copy(time=(sample + 0.5) / SAMPLE_RATE) for sample, _, message in events]
-
-
 def stem_path(song_dir: Path, track_name: str) -> Path:
     """Return where a track's stem lives. Later steps find stems only through this rule."""
-    return song_dir / f"{track_name}.wav"
-
-
-def _digest(data: object) -> str:
-    canonical = json.dumps(data, sort_keys=True, separators=(",", ":"), allow_nan=False)
-    return hashlib.sha256(canonical.encode()).hexdigest()
-
-
-def track_key(song: Song, track: Track) -> str:
-    """Return a digest of everything from the song that reaches the track's worker.
-
-    Gain is left out, because it applies only at mixdown. The song's duration is in, because every
-    stem shares it. Numbers are normalized so that `1` and `1.0` give the same key.
-    """
-    return _digest(
-        {
-            "format": RENDER_FORMAT,
-            "sample_rate": SAMPLE_RATE,
-            "channels": NUM_CHANNELS,
-            "bit_depth": WAV_BIT_DEPTH,
-            "tail_s": TAIL_S,
-            "bpm": float(song.bpm),
-            "duration_s": song_duration_s(song),
-            "name": track.name,
-            "engine": track.engine,
-            "sound": track.sound,
-            "notes": [
-                [float(note.beat), int(note.pitch), float(note.length), int(note.velocity)]
-                for note in track.notes
-            ],
-            "cc": [
-                [float(change.beat), int(change.control), int(change.value), change.shape]
-                for change in track.cc
-            ],
-        }
-    )
+    return song_dir / f"{track_name}{WavAudioFiles().suffix}"
 
 
 def sound_key(spec: PluginSpec, state: str | None) -> str:
     """Return a digest of a resolved sound, so editing a saved sound or preset changes it."""
-    return _digest({"plugin_path": spec.path, "plugin_name": spec.plugin_name, "state": state})
+    return digest({"plugin_path": spec.path, "plugin_name": spec.plugin_name, "state": state})
 
 
 def stamp_path(song_dir: Path, track_name: str) -> Path:
@@ -403,9 +230,11 @@ def clear_results(song_dir: Path) -> None:
     shutil.rmtree(song_dir / ANALYSIS_DIR, ignore_errors=True)
 
 
-def temp_stem_path(stem: Path) -> Path:
-    # Pedalboard picks the file format from the extension, so the name must end in .wav.
-    return stem.with_name(f".{stem.stem}.tmp.wav")
+def remove_temporary_stems(stem: Path) -> None:
+    """Remove the temporary files a killed worker could leave while writing the stem."""
+    # Track names hold no dots, so this matches only this stem's temporary files.
+    for leftover in stem.parent.glob(f".{stem.stem}.*{stem.suffix}"):
+        leftover.unlink(missing_ok=True)
 
 
 def worker_command(job_path: Path) -> list[str]:
@@ -413,61 +242,14 @@ def worker_command(job_path: Path) -> list[str]:
 
 
 def render_job(
-    song: Song, track: Track, spec: PluginSpec, state: str | None, stem: Path, duration_s: float
+    song: Song, track: Track, spec: PluginSpec, state: str | None, stem: Path
 ) -> RenderJob:
     return {
         "plugin_path": spec.path,
         "plugin_name": spec.plugin_name,
         "state": state,
-        "bpm": song.bpm,
-        "track": {
-            "name": track.name,
-            "engine": track.engine,
-            "sound": track.sound,
-            "notes": [
-                {"beat": n.beat, "pitch": n.pitch, "length": n.length, "velocity": n.velocity}
-                for n in track.notes
-            ],
-            "cc": [
-                {"beat": c.beat, "control": c.control, "value": c.value, "shape": c.shape}
-                for c in track.cc
-            ],
-        },
-        "duration_s": duration_s,
+        "performance": performance_to_data(perform(song, track)),
         "stem_path": str(stem),
-    }
-
-
-def _parse_note_job(value: object) -> NoteJob:
-    fields = job_fields(value, {"beat", "pitch", "length", "velocity"}, "note")
-    beat, pitch, length, velocity = (fields[k] for k in ("beat", "pitch", "length", "velocity"))
-    if not (is_number(beat) and is_int(pitch) and is_number(length) and is_int(velocity)):
-        raise MalformedJobError("note", value)
-    return {"beat": beat, "pitch": pitch, "length": length, "velocity": velocity}
-
-
-def _parse_change_job(value: object) -> ControlData:
-    fields = job_fields(value, {"beat", "control", "value", "shape"}, "controller change")
-    beat, control, level, shape = (fields[k] for k in ("beat", "control", "value", "shape"))
-    if not (is_number(beat) and is_int(control) and is_int(level) and is_shape(shape)):
-        raise MalformedJobError("controller change", value)
-    return {"beat": beat, "control": control, "value": level, "shape": shape}
-
-
-def _parse_track_job(value: object) -> TrackJob:
-    fields = job_fields(value, {"name", "engine", "sound", "notes", "cc"}, "track")
-    name, engine, sound = fields["name"], fields["engine"], fields["sound"]
-    notes, cc = fields["notes"], fields["cc"]
-    if not (isinstance(name, str) and isinstance(engine, str) and isinstance(sound, str)):
-        raise MalformedJobError("track", value)
-    if not (isinstance(notes, list) and isinstance(cc, list)):
-        raise MalformedJobError("track", value)
-    return {
-        "name": name,
-        "engine": engine,
-        "sound": sound,
-        "notes": [_parse_note_job(note) for note in notes],
-        "cc": [_parse_change_job(change) for change in cc],
     }
 
 
@@ -479,36 +261,41 @@ def parse_render_job(value: object) -> RenderJob:
     keys = set(RenderJob.__annotations__)
     fields = job_fields(value, keys, "render job")
     plugin_path, plugin_name, state = fields["plugin_path"], fields["plugin_name"], fields["state"]
-    bpm, duration_s, stem = fields["bpm"], fields["duration_s"], fields["stem_path"]
+    performance, stem = fields["performance"], fields["stem_path"]
     if not (isinstance(plugin_path, str) and optional_str(plugin_name) and optional_str(state)):
         raise MalformedJobError("render job", value)
-    if not (is_number(bpm) and is_number(duration_s) and isinstance(stem, str)):
+    if not isinstance(stem, str):
         raise MalformedJobError("render job", value)
+    try:
+        parsed = performance_to_data(performance_from_data(performance))
+    except ValueError as error:
+        raise MalformedJobError("render job", value) from error
     return {
         "plugin_path": plugin_path,
         "plugin_name": plugin_name,
         "state": state,
-        "bpm": bpm,
-        "track": _parse_track_job(fields["track"]),
-        "duration_s": duration_s,
+        "performance": parsed,
         "stem_path": stem,
     }
 
 
 def parse_worker_result(payload: object, stem: Path) -> Outcome:
     """Turn the worker's JSON result into an outcome, reporting anything malformed as a crash."""
-    malformed = Outcome(TrackStatus.CRASHED, detail="worker wrote a malformed result")
+    malformed = Outcome(RenderFailureStatus.CRASHED, detail="worker wrote a malformed result")
     fields = json_object(payload)
     if fields is None or not set(fields) <= WORKER_FIELDS:
         return malformed
-    status, peak, detail = fields.get("status"), fields.get("peak_dbfs"), fields.get("detail")
-    if not isinstance(status, str) or status not in TrackStatus:
-        return Outcome(TrackStatus.CRASHED, detail="worker wrote an unknown status")
+    status = worker_status(fields.get("status"))
+    peak, detail = fields.get("peak_dbfs"), fields.get("detail")
+    if status is None:
+        return Outcome(RenderFailureStatus.CRASHED, detail="worker wrote an unknown status")
     if not (peak is None or is_number(peak)) or not (detail is None or isinstance(detail, str)):
         return malformed
-    outcome = Outcome(TrackStatus(status), None if peak is None else float(peak), detail)
-    if stem_status(outcome.status) is not None and not stem.exists():
-        return Outcome(TrackStatus.CRASHED, detail="worker reported a stem it did not write")
+    outcome = Outcome(status, None if peak is None else float(peak), detail)
+    if isinstance(outcome.status, StemStatus) and not stem.exists():
+        return Outcome(
+            RenderFailureStatus.CRASHED, detail="worker reported a stem it did not write"
+        )
     return outcome
 
 
@@ -519,9 +306,9 @@ def _run_track_worker(job: RenderJob, timeout_s: float) -> Outcome:
         try:
             payload = run_isolated(worker_command(job_path), timeout_s)
         except WorkerTimedOutError as error:
-            return Outcome(TrackStatus.TIMED_OUT, detail=str(error))
+            return Outcome(RenderFailureStatus.TIMED_OUT, detail=str(error))
         except WorkerCrashedError as error:
-            return Outcome(TrackStatus.CRASHED, detail=str(error))
+            return Outcome(RenderFailureStatus.CRASHED, detail=str(error))
     return parse_worker_result(payload, Path(job["stem_path"]))
 
 
@@ -538,7 +325,8 @@ def resolve_sound(
     if sound in specs_by_name:
         return specs_by_name[sound], None
     unknown = Outcome(
-        TrackStatus.UNKNOWN_SOUND, detail=f"no plugin, saved sound, or preset named {sound!r}"
+        SoundFailureStatus.UNKNOWN_SOUND,
+        detail=f"no plugin, saved sound, or preset named {sound!r}",
     )
     plugin_name, colon, _ = sound.partition(":")
     if colon:
@@ -551,7 +339,7 @@ def resolve_sound(
                 return unknown
             state = build_state(read_chunk(preset))
         except PresetError as error:
-            return Outcome(TrackStatus.LOAD_FAILED, detail=f"preset {sound!r}: {error}")
+            return Outcome(SoundFailureStatus.LOAD_FAILED, detail=f"preset {sound!r}: {error}")
         return spec, base64.b64encode(state).decode("ascii")
     path = sound_files(sounds_dir).get(sound)
     if path is None:
@@ -559,7 +347,7 @@ def resolve_sound(
     try:
         saved = read_sound(path, specs)
     except SoundError as error:
-        return Outcome(TrackStatus.LOAD_FAILED, detail=f"saved sound {sound!r}: {error}")
+        return Outcome(SoundFailureStatus.LOAD_FAILED, detail=f"saved sound {sound!r}: {error}")
     return specs_by_name[saved.plugin], saved.state
 
 
@@ -569,7 +357,7 @@ def render_song(
     specs: list[PluginSpec],
     *,
     sounds_dir: Path,
-    timeout_s: float = WORKER_TIMEOUT_S,
+    timeout_s: float = RENDER_TIMEOUT_S,
     force: bool = False,
 ) -> list[TrackResult]:
     """Render each track whose inputs changed since its stem was written, or every track if forced.
@@ -591,7 +379,6 @@ def _render_tracks(
     sounds_dir: Path,
     force: bool,
 ) -> list[TrackResult]:
-    duration_s = song_duration_s(song)
     clear_results(song_dir)
 
     results = []
@@ -622,10 +409,10 @@ def _render_tracks(
         # Remove the old stem and stamp first, so only a stem this worker writes can be stamped.
         stamp.unlink(missing_ok=True)
         stem.unlink(missing_ok=True)
-        job = render_job(song, track, spec, state, stem, duration_s)
+        job = render_job(song, track, spec, state, stem)
         outcome = _run_track_worker(job, timeout_s)
-        temp_stem_path(stem).unlink(missing_ok=True)
-        written = stem_status(outcome.status)
+        remove_temporary_stems(stem)
+        written = outcome.status if isinstance(outcome.status, StemStatus) else None
         if written is not None:
             write_stamp(stamp, stem, *keys, written, outcome.peak_dbfs)
         else:
@@ -644,7 +431,7 @@ def _render_tracks(
 
 
 def exit_code(results: list[TrackResult]) -> int:
-    all_rendered = all(result.status is TrackStatus.RENDERED for result in results)
+    all_rendered = all(result.status is StemStatus.RENDERED for result in results)
     return EXIT_ALL_PASS if all_rendered else EXIT_SOME_FAILED
 
 
@@ -681,7 +468,7 @@ def main(argv: list[str] | None = None) -> int:
         return EXIT_BAD_CONFIG
 
     try:
-        song = load_song(args.song)
+        song = load_song(args.song, SONG_FORMATS)
         specs = load_config(args.config)
     except (SongError, ConfigError) as error:
         print(f"render-song: {error}", file=sys.stderr)
@@ -705,30 +492,13 @@ def main(argv: list[str] | None = None) -> int:
     return exit_code(results)
 
 
-def write_stem(path: Path, audio: np.ndarray) -> None:
-    """Write audio in the stem format through a temporary file that then replaces the target."""
-    from pedalboard.io import WriteableAudioFile
-
-    temp = temp_stem_path(path)
-    # Pedalboard's stubs mark `__new__` as a classmethod, which ty cannot match to any call.
-    with WriteableAudioFile(  # ty: ignore[no-matching-overload]
-        str(temp), samplerate=SAMPLE_RATE, num_channels=NUM_CHANNELS, bit_depth=WAV_BIT_DEPTH
-    ) as output:
-        output.write(audio)
-    temp.replace(path)
-
-
 def render_stem(job: RenderJob) -> Outcome:
     """Render one track inside the worker process and write its stem."""
     # Imported here so the parent never loads plugin code.
     from pedalboard import AudioUnitPlugin, VST3Plugin, load_plugin
 
-    duration_s = job["duration_s"]
-    track_data = job["track"]
-    notes = tuple(Note(**note) for note in track_data["notes"])
-    cc = tuple(ControlChange(**change) for change in track_data["cc"])
-    track = Track(track_data["name"], track_data["engine"], track_data["sound"], notes, cc=cc)
-    song = Song(bpm=job["bpm"], tracks=(track,))
+    # `parse_render_job` checked the performance.
+    performance = performance_from_data(job["performance"])
 
     # Any exception from loading third-party plugin code, or from it rejecting a saved state, is
     # the result being reported.
@@ -746,30 +516,28 @@ def render_stem(job: RenderJob) -> Outcome:
         if job["state"] is not None:
             plugin.raw_state = base64.b64decode(job["state"])
     except Exception as error:  # noqa: BLE001
-        return Outcome(TrackStatus.LOAD_FAILED, detail=str(error))
+        return Outcome(RenderFailureStatus.LOAD_FAILED, detail=str(error))
 
     # Pedalboard's reset rebuilds an instrument by saving its state, recreating it, and restoring
     # that state, so a restored sound survives. Serum renders differently without the reset.
     # Pedalboard's stubs take a `list` of its message union, and `list` is invariant.
-    messages: list[MIDIMessageLike] = [*track_messages(song, track)]
-    audio = plugin(
+    messages: list[MIDIMessageLike] = [*performance_messages(performance)]
+    rendered = plugin(
         messages,
-        duration=duration_s,
+        duration=render_duration_s(performance.samples),
         sample_rate=SAMPLE_RATE,
         num_channels=NUM_CHANNELS,
         buffer_size=BUFFER_SIZE,
         reset=True,
     )
-    expected = (NUM_CHANNELS, expected_samples(duration_s))
-    if audio.shape != expected:
-        raise RuntimeError(f"render shape {audio.shape}, expected {expected}")
-    if not np.isfinite(audio).all():
-        raise RuntimeError("render contains NaN or infinity")
+    audio = make_audio(rendered, performance.samples)
+    if isinstance(audio, AudioProblem):
+        return Outcome(RenderFailureStatus.CRASHED, detail=audio.message)
 
-    write_stem(Path(job["stem_path"]), audio)
+    WavAudioFiles().write(Path(job["stem_path"]), audio)
 
-    peak_dbfs = measure_peak_dbfs(audio)
-    status = TrackStatus.SILENT if peak_dbfs < SILENCE_DBFS else TrackStatus.RENDERED
+    peak_dbfs = measure_peak_dbfs(audio.samples)
+    status = StemStatus.SILENT if peak_dbfs < SILENCE_DBFS else StemStatus.RENDERED
     return Outcome(status, peak_dbfs)
 
 

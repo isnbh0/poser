@@ -9,20 +9,29 @@ import argparse
 import json
 import sys
 import tomllib
-from collections.abc import Sequence
 from dataclasses import asdict, dataclass, field, fields
-from enum import StrEnum
 from pathlib import Path
 from typing import TYPE_CHECKING, NotRequired, TypedDict, cast
 
-import mido
 import numpy as np
 
-from poser.song import is_number
+from poser.cli.common import (
+    EXIT_ALL_PASS,
+    EXIT_BAD_CONFIG,
+    EXIT_SOME_FAILED,
+    RENDER_TIMEOUT_S,
+    align_rows,
+)
+from poser.core.audio import NUM_CHANNELS, SAMPLE_RATE
+from poser.core.checks import CHECK_SAMPLES, CheckStatus, analyze_check, check_pattern
+from poser.core.names import Identifier
+from poser.core.song import is_number
 from poser.worker import (
     WorkerCrashedError,
     WorkerTimedOutError,
     json_object,
+    performance_messages,
+    render_duration_s,
     run_isolated,
 )
 from poser.workspace import WorkspaceError, fill_path_options
@@ -30,35 +39,7 @@ from poser.workspace import WorkspaceError, fill_path_options
 if TYPE_CHECKING:
     from pedalboard_native import MIDIMessageLike
 
-SAMPLE_RATE = 48000
-NUM_CHANNELS = 2
-DURATION_S = 5.0
-NOTES = (48, 60, 72, 84)
-VELOCITY = 100
-FIRST_NOTE_S = 0.5
-NOTE_SPACING_S = 1.0
-NOTE_LENGTH_S = 0.5
-
-SILENCE_DBFS = -60.0
-FLOOR_DBFS = -120.0  # Reported for digital silence, because JSON has no -inf.
-
-WORKER_TIMEOUT_S = 120.0
 INITIALIZATION_TIMEOUT_S = 30.0
-
-EXIT_ALL_PASS = 0
-EXIT_SOME_FAILED = 1
-EXIT_BAD_CONFIG = 2
-
-
-class Status(StrEnum):
-    TIMED_OUT = "timed_out"
-    CRASHED = "crashed"
-    LOAD_FAILED = "load_failed"
-    NOT_INSTRUMENT = "not_instrument"
-    NON_FINITE = "non_finite"
-    SILENT = "silent"
-    MISSING_NOTES = "missing_notes"
-    PASS = "pass"  # noqa: S105 -- a check status, not a password.
 
 
 class ConfigError(Exception):
@@ -74,20 +55,10 @@ class PluginSpec:
 
 
 @dataclass(frozen=True)
-class Analysis:
-    status: Status
-    peak_dbfs: float
-    note_peaks_dbfs: list[float]
-    clipped: bool
-    repeatable: bool
-    max_difference_dbfs: float
-
-
-@dataclass(frozen=True)
 class PluginResult:
     name: str
     path: str
-    status: Status
+    status: CheckStatus
     is_instrument: bool | None = None
     peak_dbfs: float | None = None
     note_peaks_dbfs: list[float] = field(default_factory=list)
@@ -103,7 +74,7 @@ WORKER_FIELDS = {f.name for f in fields(PluginResult)} - {"name", "path"}
 class WorkerResult(TypedDict):
     """What a check worker reports: the fields of `PluginResult` other than name and path."""
 
-    status: Status
+    status: CheckStatus
     is_instrument: NotRequired[bool | None]
     peak_dbfs: NotRequired[float | None]
     note_peaks_dbfs: NotRequired[list[float]]
@@ -111,70 +82,6 @@ class WorkerResult(TypedDict):
     repeatable: NotRequired[bool | None]
     max_difference_dbfs: NotRequired[float | None]
     detail: NotRequired[str | None]
-
-
-def note_pattern() -> list[mido.Message]:
-    """Build the test pattern. Pedalboard reads `time` as absolute seconds, not mido deltas."""
-    messages = []
-    for index, note in enumerate(NOTES):
-        start = FIRST_NOTE_S + index * NOTE_SPACING_S
-        messages.append(mido.Message("note_on", note=note, velocity=VELOCITY, time=start))
-        messages.append(mido.Message("note_off", note=note, time=start + NOTE_LENGTH_S))
-    return messages
-
-
-def _to_dbfs(peak: float) -> float:
-    floor = 10.0 ** (FLOOR_DBFS / 20.0)
-    return FLOOR_DBFS if peak <= floor else 20.0 * float(np.log10(peak))
-
-
-def measure_peak_dbfs(samples: np.ndarray) -> float:
-    return _to_dbfs(float(np.abs(samples[np.isfinite(samples)]).max(initial=0.0)))
-
-
-def _note_peaks_dbfs(render: np.ndarray) -> list[float]:
-    peaks = []
-    for index in range(len(NOTES)):
-        start_s = FIRST_NOTE_S + index * NOTE_SPACING_S
-        start = round(start_s * SAMPLE_RATE)
-        stop = round((start_s + NOTE_LENGTH_S) * SAMPLE_RATE)
-        peaks.append(measure_peak_dbfs(render[..., start:stop]))
-    return peaks
-
-
-def analyze(first: np.ndarray, second: np.ndarray) -> Analysis:
-    """Measure two channels-first renders of the test pattern.
-
-    Peaks report the quieter of the two renders, so a plugin that goes silent on reload is caught.
-    """
-    first = np.asarray(first, dtype=np.float64)
-    second = np.asarray(second, dtype=np.float64)
-
-    both_finite = np.isfinite(first) & np.isfinite(second)
-    difference = np.abs(first[both_finite] - second[both_finite]).max(initial=0.0)
-
-    peak_dbfs = min(measure_peak_dbfs(first), measure_peak_dbfs(second))
-    note_peaks_dbfs = [
-        min(a, b) for a, b in zip(_note_peaks_dbfs(first), _note_peaks_dbfs(second), strict=True)
-    ]
-
-    if not bool(both_finite.all()):
-        status = Status.NON_FINITE
-    elif peak_dbfs < SILENCE_DBFS:
-        status = Status.SILENT
-    elif min(note_peaks_dbfs) < SILENCE_DBFS:
-        status = Status.MISSING_NOTES
-    else:
-        status = Status.PASS
-
-    return Analysis(
-        status=status,
-        peak_dbfs=peak_dbfs,
-        note_peaks_dbfs=note_peaks_dbfs,
-        clipped=bool((np.abs(first) >= 1.0).any() or (np.abs(second) >= 1.0).any()),
-        repeatable=bool(np.array_equal(first, second)),
-        max_difference_dbfs=_to_dbfs(float(difference)),
-    )
 
 
 def load_config(path: Path) -> list[PluginSpec]:
@@ -196,9 +103,11 @@ def load_config(path: Path) -> list[PluginSpec]:
         )
         if not valid:
             raise ConfigError(f"{path} has an invalid entry: {entry!r}")
-        # The first `:` in a sound name ends the plugin name of a preset.
-        if ":" in entry["name"]:
-            raise ConfigError(f"{path}: plugin name {entry['name']!r} contains ':'")
+        # A plugin name starts a sound reference, so it must be an instrument name.
+        if not Identifier.PATTERN.fullmatch(entry["name"]):
+            raise ConfigError(
+                f"{path}: plugin name {entry['name']!r} must match {Identifier.PATTERN.pattern}"
+            )
         specs.append(
             PluginSpec(entry["name"], entry["path"], entry.get("plugin_name"), entry.get("presets"))
         )
@@ -224,17 +133,17 @@ def _optional_float(value: object) -> tuple[bool, float | None]:
 def parse_worker_result(payload: object) -> WorkerResult:
     """Turn a check worker's JSON result into a result, reporting anything malformed as a crash."""
     malformed: WorkerResult = {
-        "status": Status.CRASHED,
+        "status": CheckStatus.CRASHED,
         "detail": "worker wrote a malformed result",
     }
     fields = json_object(payload)
     if fields is None or not set(fields) <= WORKER_FIELDS:
         return malformed
     status = fields.get("status")
-    if not isinstance(status, str) or status not in Status:
-        return {"status": Status.CRASHED, "detail": "worker wrote an unknown status"}
+    if not isinstance(status, str) or status not in CheckStatus:
+        return {"status": CheckStatus.CRASHED, "detail": "worker wrote an unknown status"}
 
-    result: WorkerResult = {"status": Status(status)}
+    result: WorkerResult = {"status": CheckStatus(status)}
     for key in ("is_instrument", "clipped", "repeatable"):
         if key in fields:
             flag = fields[key]
@@ -265,13 +174,13 @@ def run_worker(command: list[str], timeout_s: float) -> WorkerResult:
     try:
         payload = run_isolated(command, timeout_s)
     except WorkerTimedOutError as error:
-        return {"status": Status.TIMED_OUT, "detail": str(error)}
+        return {"status": CheckStatus.TIMED_OUT, "detail": str(error)}
     except WorkerCrashedError as error:
-        return {"status": Status.CRASHED, "detail": str(error)}
+        return {"status": CheckStatus.CRASHED, "detail": str(error)}
     return parse_worker_result(payload)
 
 
-def run_check(specs: list[PluginSpec], timeout_s: float = WORKER_TIMEOUT_S) -> list[PluginResult]:
+def run_check(specs: list[PluginSpec], timeout_s: float = RENDER_TIMEOUT_S) -> list[PluginResult]:
     results = []
     for spec in specs:
         payload = run_worker(worker_command(spec), timeout_s)
@@ -280,16 +189,8 @@ def run_check(specs: list[PluginSpec], timeout_s: float = WORKER_TIMEOUT_S) -> l
 
 
 def exit_code(results: list[PluginResult]) -> int:
-    all_pass = all(result.status is Status.PASS for result in results)
+    all_pass = all(result.status is CheckStatus.PASS for result in results)
     return EXIT_ALL_PASS if all_pass else EXIT_SOME_FAILED
-
-
-def align_rows(rows: Sequence[Sequence[str]]) -> list[str]:
-    widths = [max(len(row[column]) for row in rows) for column in range(len(rows[0]))]
-    return [
-        "  ".join(cell.ljust(w) for cell, w in zip(row, widths, strict=True)).rstrip()
-        for row in rows
-    ]
 
 
 YES_NO = {None: "-", True: "yes", False: "no"}
@@ -356,15 +257,15 @@ def _worker_result(path: str, plugin_name: str | None) -> WorkerResult:
 
     def render(plugin: VST3Plugin | AudioUnitPlugin) -> np.ndarray:
         # Pedalboard's stubs take a `list` of its message union, and `list` is invariant.
-        messages: list[MIDIMessageLike] = [*note_pattern()]
+        messages: list[MIDIMessageLike] = [*performance_messages(check_pattern())]
         audio = plugin(
             messages,
-            duration=DURATION_S,
+            duration=render_duration_s(CHECK_SAMPLES),
             sample_rate=SAMPLE_RATE,
             num_channels=NUM_CHANNELS,
             reset=True,
         )
-        expected = (NUM_CHANNELS, round(DURATION_S * SAMPLE_RATE))
+        expected = (NUM_CHANNELS, CHECK_SAMPLES)
         if audio.shape != expected:
             raise RuntimeError(f"render shape {audio.shape}, expected {expected}")
         return audio
@@ -373,23 +274,27 @@ def _worker_result(path: str, plugin_name: str | None) -> WorkerResult:
     try:
         plugin = load()
     except Exception as error:  # noqa: BLE001
-        return {"status": Status.LOAD_FAILED, "detail": str(error)}
+        return {"status": CheckStatus.LOAD_FAILED, "detail": str(error)}
 
     if not plugin.is_instrument:
-        return {"status": Status.NOT_INSTRUMENT, "is_instrument": False}
+        return {
+            "status": CheckStatus.LOAD_FAILED,
+            "is_instrument": False,
+            "detail": f"{path} is not an instrument",
+        }
 
     first = render(plugin)
     try:
         plugin = load()
     except Exception as error:  # noqa: BLE001
-        return {"status": Status.LOAD_FAILED, "is_instrument": True, "detail": str(error)}
+        return {"status": CheckStatus.LOAD_FAILED, "is_instrument": True, "detail": str(error)}
 
-    analysis = analyze(first, render(plugin))
+    analysis = analyze_check(first, render(plugin))
     return {
         "status": analysis.status,
         "is_instrument": True,
         "peak_dbfs": analysis.peak_dbfs,
-        "note_peaks_dbfs": analysis.note_peaks_dbfs,
+        "note_peaks_dbfs": list(analysis.note_peaks_dbfs),
         "clipped": analysis.clipped,
         "repeatable": analysis.repeatable,
         "max_difference_dbfs": analysis.max_difference_dbfs,

@@ -12,8 +12,10 @@ import pytest
 from helpers import fxp_bytes
 
 from poser import sounds
-from poser.plugin_check import EXIT_ALL_PASS, EXIT_BAD_CONFIG, EXIT_SOME_FAILED
-from poser.worker import json_object, run_isolated
+from poser.cli.common import EXIT_ALL_PASS, EXIT_BAD_CONFIG, EXIT_SOME_FAILED
+from poser.core.checks import CHECK_SAMPLES
+from poser.core.jsonvalue import json_object
+from poser.worker import run_isolated
 
 WORKER_STATE = b"state-from-the-window"
 
@@ -462,7 +464,7 @@ def test_save_worker_renders_the_preview_from_a_newly_loaded_plugin(
     from pedalboard.io import ReadableAudioFile
 
     events: list[tuple[str, bytes | None]] = []
-    audio = np.zeros((2, 48000), dtype=np.float32)
+    audio = np.zeros((2, CHECK_SAMPLES), dtype=np.float32)
     audio[:, 100] = 0.5
 
     def load(*args: object, **kwargs: object) -> EditorFakePlugin:
@@ -510,6 +512,27 @@ def test_save_worker_reports_a_load_failure(
     }
 
     assert sounds.save_in_worker(job) == {"error": "cannot load the plugin: no such plugin"}
+
+
+def test_save_worker_refuses_a_non_finite_preview(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    audio = np.zeros((2, CHECK_SAMPLES), dtype=np.float32)
+    audio[0, 100] = np.nan
+    events: list[tuple[str, bytes | None]] = []
+    monkeypatch.setattr(
+        "pedalboard.load_plugin", lambda *args, **kwargs: EditorFakePlugin(events, audio)
+    )
+    preview = tmp_path / ".pad.preview.wav"
+    job: sounds.SaveJob = {
+        "plugin_path": "/serum.vst3",
+        "plugin_name": None,
+        "state": None,
+        "preview_path": str(preview),
+    }
+
+    assert sounds.save_in_worker(job) == {"error": "preview: audio contains NaN or infinity"}
+    assert list(tmp_path.iterdir()) == []
 
 
 def test_failed_preview_move_leaves_the_sound_unchanged(

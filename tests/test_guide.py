@@ -3,15 +3,19 @@
 import dataclasses
 import re
 import tomllib
-from enum import StrEnum
 from pathlib import Path
 
 import pytest
 import yaml
 from helpers import REPO_DIR, SCAFFOLD_DIR, real_specs
 
-from poser import analyze, music, render, song
-from poser.song import Song, SongError, load_song, parse_song
+import poser
+from poser import analyze, render
+from poser.adapters.song_formats import SONG_FORMATS
+from poser.core import music, report, song
+from poser.core.loading import load_song
+from poser.core.song import MAX_SONG_S, Song, SongError, parse_song
+from poser.core.statuses import RENDER_STATUSES
 
 GUIDE_PATH = SCAFFOLD_DIR / "guide.md"
 GUIDE = GUIDE_PATH.read_text()
@@ -20,6 +24,20 @@ FENCE = re.compile(r"^```([a-z]+)\n(.*?)^```$", re.MULTILINE | re.DOTALL)
 BACKTICKED = re.compile(r"`([^`\n]+)`")
 INT_RANGE = re.compile(r"^(-?\d+) to (-?\d+)$")
 MUSIC_HELPERS = ("pitch", "scale", "degree", "chord", "swing", "humanize", "notes")
+COMPOSER_API = [
+    "ControlChange",
+    "Note",
+    "Song",
+    "SongError",
+    "Track",
+    "chord",
+    "degree",
+    "humanize",
+    "notes",
+    "pitch",
+    "scale",
+    "swing",
+]
 
 
 def blocks(language: str) -> list[str]:
@@ -60,7 +78,7 @@ def python_songs(tmp_path: Path) -> list[Song]:
         path = tmp_path / f"example{index}" / "example.py"
         path.parent.mkdir()
         path.write_text(body)
-        songs.append(load_song(path))
+        songs.append(load_song(path, SONG_FORMATS))
     return songs
 
 
@@ -85,25 +103,37 @@ def test_commands_are_project_scripts() -> None:
     assert {"render-song", "analyze-song", "list-sounds"} <= set(commands)
 
 
-@pytest.mark.parametrize("enum", [render.TrackStatus, analyze.TrackStatus, analyze.Defect])
-def test_statuses_and_defects_are_named(enum: type[StrEnum]) -> None:
-    assert {member.value for member in enum} <= backticked()
+def test_statuses_and_defects_are_named() -> None:
+    names = {
+        *RENDER_STATUSES,
+        *(str(status) for status in report.AnalysisStatus),
+        *(str(defect) for defect in report.Defect),
+    }
+    assert names <= backticked()
 
 
 def test_report_fields_exist() -> None:
     fields = {
         field.name
-        for cls in (analyze.Report, analyze.TrackReport, analyze.MixReport)
+        for cls in (report.Report, report.TrackReport, report.MixReport)
         for field in dataclasses.fields(cls)
     }
     names = set(first_column("Reading the analysis"))
     assert names <= fields
-    assert {"run", "song_sha256", "track_key", "sound_key", "bands_db", "bar_dbfs"} <= names
+    assert {
+        "run",
+        "song_sha256",
+        "track_key",
+        "sound_key",
+        "bands_db",
+        "bar_dbfs",
+        "sections",
+    } <= names
 
 
 def test_bands_are_named_with_their_ranges() -> None:
     text = " ".join(GUIDE.split())
-    for name, (low, high) in analyze.BANDS.items():
+    for name, (low, high) in report.BANDS.items():
         # The guide writes ranges with an en dash.
         assert f"`{name}` {low:g}–{high:g} Hz" in text  # noqa: RUF001
 
@@ -128,7 +158,6 @@ def with_key(key: str, value: int) -> dict[str, object]:
     cc: dict[str, object] = {"beat": 0, "control": 1, "value": 0}
     track: dict[str, object] = {
         "name": "lead",
-        "engine": "pedalboard",
         "sound": "Serum",
         "notes": [note],
         "cc": [cc],
@@ -175,6 +204,16 @@ def test_music_helpers_are_listed() -> None:
     assert all(callable(getattr(music, name, None)) for name in listed)
 
 
+def test_composer_api_exports() -> None:
+    assert poser.__all__ == COMPOSER_API
+    assert set(MUSIC_HELPERS) <= set(poser.__all__)
+    assert "from poser import " in GUIDE
+
+
+def test_song_length_limit_is_stated() -> None:
+    assert f"{MAX_SONG_S:.0f} seconds" in " ".join(GUIDE.split())
+
+
 @pytest.mark.real_plugins
 def test_sound_names_resolve(tmp_path: Path) -> None:
     specs = real_specs()
@@ -197,10 +236,10 @@ def test_python_example_renders_without_defects(tmp_path: Path) -> None:
     song_dir = tmp_path / "renders" / "example0" / "example.py"
     render.render_song(example, song_dir, specs, sounds_dir=tmp_path / "sounds")
 
-    report = analyze.analyze_song(example, song_path, specs, song_dir, tmp_path / "sounds")
+    result = analyze.analyze_song(example, song_path, specs, song_dir, tmp_path / "sounds")
 
-    for track in report.tracks:
-        assert track.status is analyze.TrackStatus.ANALYZED, track.detail
-        assert track.defects == []
-    assert report.mix is not None
-    assert report.mix.defects == [], report.mix.peak_dbfs
+    for track in result.tracks:
+        assert track.status is report.AnalysisStatus.ANALYZED, track.detail
+        assert track.defects == ()
+    assert result.mix is not None
+    assert result.mix.defects == (), result.mix.peak_dbfs

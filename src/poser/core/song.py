@@ -1,24 +1,18 @@
-"""Song data: engine-neutral text, separate from rendering code."""
+"""Songs: the composition as values, independent of how it is stored or rendered."""
 
 import math
-import os
-import re
-import runpy
-import stat
-import tempfile
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from itertools import pairwise
-from pathlib import Path
 from typing import Literal, NotRequired, TypedDict, TypeGuard, cast
 
-import yaml
+from poser.core.names import Identifier, TrackName
+from poser.core.sounds import SoundRef, parse_sound_ref
 
-ENGINES = {"pedalboard"}
-TRACK_NAME = re.compile(r"[A-Za-z0-9_-]+")
+TRACK_NAME = TrackName.PATTERN
 
 SONG_KEYS = {"bpm", "tracks"}
-TRACK_KEYS = {"name", "engine", "sound", "notes"}
+TRACK_KEYS = {"name", "sound", "notes"}
 OPTIONAL_TRACK_KEYS = {"gain", "cc"}
 NOTE_KEYS = {"beat", "pitch", "length", "velocity"}
 CC_KEYS = {"beat", "control", "value"}
@@ -32,6 +26,9 @@ CONTROL_MAX = 119
 # `step` holds a value until the next change of its controller; `linear` ramps to that change.
 type Shape = Literal["step", "linear"]
 SHAPES: tuple[Shape, ...] = ("step", "linear")
+
+# The longest a song may run, to its last beat. Every frame count of a valid song fits in an int.
+MAX_SONG_S = 3600.0
 
 
 class SongError(Exception):
@@ -84,7 +81,6 @@ class ControlChange:
 @dataclass(frozen=True)
 class Track:
     name: str
-    engine: str
     sound: str
     notes: tuple[Note, ...]
     gain: float = 0.0
@@ -93,7 +89,6 @@ class Track:
     def __post_init__(self) -> None:
         values = {
             "name": self.name,
-            "engine": self.engine,
             "sound": self.sound,
             "gain": self.gain,
             "notes": self.notes,
@@ -105,6 +100,16 @@ class Track:
         object.__setattr__(self, "notes", tuple(self.notes))
         object.__setattr__(self, "cc", tuple(self.cc))
         object.__setattr__(self, "gain", float(self.gain))
+
+    @property
+    def sound_ref(self) -> SoundRef:
+        """The track's sound as a reference; the constructor checked that it parses."""
+        return parse_sound_ref(self.sound)
+
+    @property
+    def track_name(self) -> TrackName:
+        """The track's name as a name; the constructor checked that it is one."""
+        return TrackName(self.name)
 
 
 @dataclass(frozen=True)
@@ -119,6 +124,16 @@ class Song:
 
     def seconds(self, beat: float) -> float:
         return beat * 60 / self.bpm
+
+
+def song_last_beat(song: Song) -> float:
+    """Return the latest note end or controller change across tracks."""
+    return _last_beat(song.tracks)
+
+
+def _last_beat(tracks: Sequence[Track]) -> float:
+    note_ends = [note.beat + note.length for track in tracks for note in track.notes]
+    return max([*note_ends, *(change.beat for track in tracks for change in track.cc)])
 
 
 class NoteData(TypedDict):
@@ -137,7 +152,6 @@ class ControlData(TypedDict):
 
 class TrackData(TypedDict):
     name: str
-    engine: str
     sound: str
     gain: NotRequired[float]
     notes: list[NoteData]
@@ -216,24 +230,34 @@ def _control_change_problems(values: Mapping[str, object], where: str) -> list[s
 
 
 def _track_field_problems(values: Mapping[str, object], where: str) -> list[str]:
-    """Check a track's name, engine, sound, and gain. `_track_problems` checks the rest."""
-    name, engine = values.get("name"), values.get("engine")
-    sound, gain = values.get("sound"), values.get("gain")
+    """Check a track's name, sound, and gain. `_track_problems` checks the rest."""
+    name, sound, gain = values.get("name"), values.get("sound"), values.get("gain")
     problems: list[str] = []
     if "name" in values and not (isinstance(name, str) and TRACK_NAME.fullmatch(name)):
         problems.append(
             f"{where}.name: must contain only letters, digits, '_', and '-', got {name!r}"
         )
-    if "engine" in values and not (isinstance(engine, str) and engine in ENGINES):
-        problems.append(f"{where}.engine: unknown engine {engine!r}")
-    if "sound" in values and not (isinstance(sound, str) and sound):
-        problems.append(f"{where}.sound: must be a sound name, got {sound!r}")
+    if "sound" in values and not _is_sound_ref(sound):
+        problems.append(
+            f"{where}.sound: must be <instrument> or <instrument>:<name>, with an instrument "
+            f"name matching {Identifier.PATTERN.pattern}, got {sound!r}"
+        )
     if "gain" in values and not (is_number(gain) and GAIN_MIN_DB <= gain <= GAIN_MAX_DB):
         problems.append(
             f"{where}.gain: must be a number of decibels from {GAIN_MIN_DB} to {GAIN_MAX_DB}, "
             f"got {gain!r}"
         )
     return problems
+
+
+def _is_sound_ref(value: object) -> bool:
+    if not isinstance(value, str):
+        return False
+    try:
+        parse_sound_ref(value)
+    except ValueError:
+        return False
+    return True
 
 
 def _notes_problems(notes: object, where: str) -> list[str]:
@@ -325,6 +349,22 @@ def _duplicate_name_problems(tracks: Sequence[Track], where: str) -> list[str]:
     return problems
 
 
+def _length_problems(bpm: float, tracks: Sequence[Track], where: str) -> list[str]:
+    """Check that a song with a valid bpm and valid tracks ends within `MAX_SONG_S`."""
+    try:
+        seconds = float(_last_beat(tracks) * 60 / bpm)
+    except OverflowError:
+        seconds = math.inf
+    if seconds <= MAX_SONG_S:
+        return []
+    return [
+        (
+            f"{where}: must end within {MAX_SONG_S:.0f} seconds, but its last beat is at "
+            f"{seconds:.0f} seconds"
+        )
+    ]
+
+
 def _song_problems(values: Mapping[str, object], where: str) -> list[str]:
     """Check every field of a song built in code, whose tracks are objects."""
     problems = _song_field_problems(values, where)
@@ -337,6 +377,9 @@ def _song_problems(values: Mapping[str, object], where: str) -> list[str]:
             if not isinstance(track, Track)
         ]
         problems += _duplicate_name_problems([t for t in items if isinstance(t, Track)], where)
+        bpm = values["bpm"]
+        if not problems and is_number(bpm):
+            problems += _length_problems(bpm, [t for t in items if isinstance(t, Track)], where)
     return problems
 
 
@@ -442,16 +485,15 @@ def _parse_track(value: object, where: str, problems: list[str]) -> Track | None
 
     cc = _parse_cc(data["cc"], where, problems) if "cc" in data else ()
 
-    name, engine, sound = data.get("name"), data.get("engine"), data.get("sound")
+    name, sound = data.get("name"), data.get("sound")
     gain = data.get("gain", 0.0)
     # Each of these fails only when a problem was reported. A missing key reads as None.
     if len(problems) > before or not is_number(gain) or "notes" not in data:
         return None
-    if not (isinstance(name, str) and isinstance(engine, str) and isinstance(sound, str)):
+    if not (isinstance(name, str) and isinstance(sound, str)):
         return None
     return Track(
         name=name,
-        engine=engine,
         sound=sound,
         notes=tuple(n for n in notes if n is not None),
         gain=gain,
@@ -483,51 +525,9 @@ def parse_song(value: object) -> Song:
     # `bpm` fails `is_number` only when a problem was reported.
     if problems or not is_number(bpm):
         raise SongError(problems)
+    if problems := _length_problems(bpm, tracks, "song"):
+        raise SongError(problems)
     return Song(bpm=bpm, tracks=tuple(tracks))
-
-
-YAML_SUFFIXES = (".yaml", ".yml")
-SCRIPT_SUFFIX = ".py"
-
-
-def load_song(path: Path) -> Song:
-    """Load a song from YAML, or from a script whose `build()` returns one."""
-    suffix = path.suffix
-    if suffix not in (*YAML_SUFFIXES, SCRIPT_SUFFIX):
-        raise SongError([f"cannot read {path}: a song is a .yaml, .yml, or .py file"])
-    if suffix == SCRIPT_SUFFIX:
-        return _build_song(path)
-    try:
-        data = yaml.safe_load(path.read_text())
-    except (OSError, UnicodeDecodeError, yaml.YAMLError) as error:
-        raise SongError([f"cannot read {path}: {error}"]) from error
-    return parse_song(data)
-
-
-def _build_song(path: Path) -> Song:
-    # A song script is the owner's or agent's own code, run like any project script.
-    try:
-        build = runpy.run_path(str(path)).get("build")
-    except SongError as error:
-        raise _in_script(path, error) from error
-    except (Exception, SystemExit) as error:
-        raise SongError([f"cannot run {path}: {type(error).__name__}: {error}"]) from error
-    if not callable(build):
-        raise SongError([f"{path}: must define a function build() that returns a Song"])
-    try:
-        song = build()
-    except SongError as error:
-        raise _in_script(path, error) from error
-    except (Exception, SystemExit) as error:
-        raise SongError([f"{path}: build() raised {type(error).__name__}: {error}"]) from error
-    if not isinstance(song, Song):
-        raise SongError([f"{path}: build() must return a Song, got {type(song).__name__}"])
-    return song
-
-
-def _in_script(path: Path, error: SongError) -> SongError:
-    """Return a script's song error with the script's path before each problem."""
-    return SongError([f"{path}: {problem}" for problem in error.problems])
 
 
 def _plain(value: float) -> float:
@@ -561,7 +561,6 @@ def _control_to_data(change: ControlChange) -> ControlData:
 def _track_to_data(track: Track) -> TrackData:
     data: TrackData = {
         "name": track.name,
-        "engine": track.engine,
         "sound": track.sound,
         "gain": track.gain,
         "notes": [_note_to_data(note) for note in track.notes],
@@ -584,40 +583,3 @@ def song_to_data(song: Song) -> SongData:
         "bpm": _plain(song.bpm),
         "tracks": [_track_to_data(track) for track in song.tracks],
     }
-
-
-def write_song(song: Song, path: Path) -> None:
-    """Write a song as YAML, replacing `path` only once the file is complete.
-
-    A symlinked `path` keeps its link and the target is replaced. The file keeps an existing
-    target's permissions, or gets the usual umask-based ones when new.
-    """
-    data = song_to_data(song)
-    try:
-        text = yaml.safe_dump(data, sort_keys=False)
-    except yaml.YAMLError as error:
-        raise SongError([f"cannot write {path}: {error}"]) from error
-    target = Path(path).resolve()
-    try:
-        mode = stat.S_IMODE(target.stat().st_mode)
-    except FileNotFoundError:
-        umask = os.umask(0)
-        os.umask(umask)
-        mode = 0o666 & ~umask
-    except OSError as error:
-        raise SongError([f"cannot write {path}: {error}"]) from error
-    try:
-        fd, name = tempfile.mkstemp(dir=target.parent, prefix=f".{target.name}.", suffix=".tmp")
-    except OSError as error:
-        raise SongError([f"cannot write {path}: {error}"]) from error
-    temp = Path(name)
-    try:
-        with os.fdopen(fd, "w") as handle:
-            handle.write(text)
-        temp.chmod(mode)
-        temp.replace(target)
-    except BaseException as error:
-        temp.unlink(missing_ok=True)
-        if isinstance(error, OSError):
-            raise SongError([f"cannot write {path}: {error}"]) from error
-        raise
