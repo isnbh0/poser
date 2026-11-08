@@ -1,4 +1,4 @@
-"""The agent guide, `AGENTS.md`, agrees with the code it describes."""
+"""The composer guide, `src/poser/scaffold/guide.md`, agrees with the code it describes."""
 
 import dataclasses
 import re
@@ -8,12 +8,12 @@ from pathlib import Path
 
 import pytest
 import yaml
-from helpers import REPO_DIR, real_specs
+from helpers import REPO_DIR, SCAFFOLD_DIR, real_specs
 
 from poser import analyze, music, render, song
 from poser.song import Song, SongError, load_song, parse_song
 
-GUIDE_PATH = REPO_DIR / "AGENTS.md"
+GUIDE_PATH = SCAFFOLD_DIR / "guide.md"
 GUIDE = GUIDE_PATH.read_text()
 LINES = GUIDE.splitlines()
 FENCE = re.compile(r"^```([a-z]+)\n(.*?)^```$", re.MULTILINE | re.DOTALL)
@@ -66,7 +66,7 @@ def python_songs(tmp_path: Path) -> list[Song]:
 
 def test_guide_is_short_and_claude_imports_it() -> None:
     assert len(LINES) < 200
-    assert (REPO_DIR / "CLAUDE.md").read_text() == "@AGENTS.md\n"
+    assert (SCAFFOLD_DIR / "claude.md").read_text() == "@AGENTS.md\n"
 
 
 def test_python_examples_load(tmp_path: Path) -> None:

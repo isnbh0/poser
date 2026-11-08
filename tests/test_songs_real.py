@@ -1,17 +1,15 @@
-"""Every song in `songs/` renders and analyzes on this machine's plugins with no defects."""
+"""Every one of the scaffold's songs renders and analyzes on this machine's plugins with no defects."""
 
 from pathlib import Path
 
 import pytest
-from helpers import REPO_DIR, real_specs
+from helpers import SCAFFOLD_DIR, real_specs
 
 from poser import analyze, render
 from poser.song import SCRIPT_SUFFIX, YAML_SUFFIXES, load_song
 
 SONGS = sorted(
-    path
-    for path in (REPO_DIR / "songs").iterdir()
-    if path.suffix in (*YAML_SUFFIXES, SCRIPT_SUFFIX)
+    path for path in SCAFFOLD_DIR.iterdir() if path.suffix in (*YAML_SUFFIXES, SCRIPT_SUFFIX)
 )
 
 

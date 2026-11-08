@@ -22,6 +22,7 @@ render-song = "poser.render:main"
 analyze-song = "poser.analyze:main"
 save-sound = "poser.sounds:save_main"
 list-sounds = "poser.sounds:list_main"
+init-workspace = "poser.init_workspace:main"
 
 [build-system]
 requires = ["uv_build>=0.13.6,<0.14.0"]

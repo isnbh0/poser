@@ -9,6 +9,7 @@ from pedalboard.io import ReadableAudioFile
 from poser.plugin_check import SAMPLE_RATE, PluginSpec, load_config
 
 REPO_DIR = Path(__file__).resolve().parents[1]
+SCAFFOLD_DIR = REPO_DIR / "src" / "poser" / "scaffold"
 
 
 def real_specs() -> list[PluginSpec]:

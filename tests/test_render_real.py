@@ -4,7 +4,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-from helpers import REPO_DIR, band_spectrum_db, change_time_s, read_stem, real_specs
+from helpers import SCAFFOLD_DIR, band_spectrum_db, change_time_s, read_stem, real_specs
 from pedalboard.io import ReadableAudioFile
 
 from poser import render
@@ -15,7 +15,7 @@ from poser.song import ControlChange, Note, Song, Track, load_song
 
 @pytest.mark.real_plugins
 def test_demo_song_renders_aligned_audible_stems(tmp_path: Path) -> None:
-    song = load_song(REPO_DIR / "songs" / "demo.yaml")
+    song = load_song(SCAFFOLD_DIR / "demo.yaml")
     expected_samples = render.expected_samples(render.song_duration_s(song))
 
     results = render.render_song(

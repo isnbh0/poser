@@ -9,7 +9,7 @@ from typing import Self, cast
 import numpy as np
 import pytest
 import yaml
-from helpers import REPO_DIR
+from helpers import SCAFFOLD_DIR
 
 from poser import song as song_module
 from poser.music import chord, notes, pitch, scale, swing
@@ -53,7 +53,7 @@ def test_valid_song_loads_with_expected_values(tmp_path: Path) -> None:
 
 
 def test_demo_song_loads_with_two_serum_preset_tracks_and_eight_notes() -> None:
-    song = load_song(REPO_DIR / "songs" / "demo.yaml")
+    song = load_song(SCAFFOLD_DIR / "demo.yaml")
 
     assert len(song.tracks) == 2
     assert all(track.sound.startswith("Serum:") for track in song.tracks)

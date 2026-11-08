@@ -4,7 +4,7 @@ import math
 from pathlib import Path
 
 import pytest
-from helpers import REPO_DIR, real_specs
+from helpers import SCAFFOLD_DIR, real_specs
 from pedalboard.io import ReadableAudioFile
 
 from poser import render
@@ -14,7 +14,7 @@ from poser.song import load_song
 
 @pytest.mark.real_plugins
 def test_demo_song_mixes_and_analyzes(tmp_path: Path) -> None:
-    song_path = REPO_DIR / "songs" / "demo.yaml"
+    song_path = SCAFFOLD_DIR / "demo.yaml"
     song = load_song(song_path)
     specs = real_specs()
     render.render_song(song, tmp_path / "demo", specs, sounds_dir=tmp_path / "sounds")
