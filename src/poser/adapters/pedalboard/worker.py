@@ -2,10 +2,12 @@
 
 This is the only module under `poser.adapters` that imports `pedalboard` plugin code or `mido`.
 It imports `pedalboard` inside the functions, so a parent that imports this module to name a
-target loads no plugin code.
+target loads no plugin code. Every performance renders through `render_fresh`, on a plugin it has
+just loaded.
 """
 
 from collections.abc import Mapping
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
@@ -94,8 +96,28 @@ def load(path: str, plugin_name: str | None, state: bytes | None) -> "VST3Plugin
     return plugin
 
 
-def play(plugin: "VST3Plugin | AudioUnitPlugin", performance: Performance) -> np.ndarray:
-    """Render a performance on a loaded plugin, returning what Pedalboard returns."""
+@dataclass(frozen=True)
+class NotLoaded:
+    """A plugin that could not be loaded as an instrument with its state, and why."""
+
+    detail: str
+
+
+def render_fresh(
+    path: str, plugin_name: str | None, state: bytes | None, performance: Performance
+) -> np.ndarray | NotLoaded:
+    """Load a plugin, restore a state into it, and render a performance on that new instance.
+
+    Returns what Pedalboard returns, unchecked. An exception raised while processing escapes.
+    """
+    # Any exception from loading third-party plugin code, or from it rejecting a saved state, is
+    # the result being reported.
+    try:
+        plugin = load(path, plugin_name, state)
+    except Exception as error:  # noqa: BLE001
+        return NotLoaded(str(error))
+    if not plugin.is_instrument:
+        return NotLoaded(f"{path} is not an instrument")
     # Pedalboard's reset rebuilds an instrument by saving its state, recreating it, and restoring
     # that state, so a restored sound survives. Serum renders differently without the reset.
     # Pedalboard's stubs take a `list` of its message union, and `list` is invariant.
@@ -119,15 +141,10 @@ def render_job(job: JsonValue) -> JsonValue:
         job, RENDER_KEYS, "audio_path", "render job"
     )
     path = cast("str", fields["path"])  # `_parse` checked it.
-    # Any exception from loading third-party plugin code, or from it rejecting a saved state, is
-    # the result being reported.
-    try:
-        plugin = load(path, plugin_name, state)
-    except Exception as error:  # noqa: BLE001
-        return {"status": "load_failed", "detail": str(error)}
-    if not plugin.is_instrument:
-        return {"status": "load_failed", "detail": f"{path} is not an instrument"}
-    write_raw_audio(audio_path, play(plugin, performance))
+    result = render_fresh(path, plugin_name, state, performance)
+    if isinstance(result, NotLoaded):
+        return {"status": "load_failed", "detail": result.detail}
+    write_raw_audio(audio_path, result)
     return {"status": "ok"}
 
 
@@ -160,11 +177,12 @@ def capture_job(job: JsonValue) -> JsonValue:
 
     plugin.show_editor()  # Blocks until the owner closes the window.
     state = capture_state(plugin)
+    # Release the edited instance, so only the preview's instance is alive while it renders.
+    del plugin
 
     # A newly loaded plugin proves the captured state restores before the sound is kept.
-    try:
-        plugin = load(path, plugin_name, state)
-    except Exception as error:  # noqa: BLE001
-        return {"error": f"cannot restore the captured state: {error}"}
-    write_raw_audio(preview_path, play(plugin, performance))
+    result = render_fresh(path, plugin_name, state, performance)
+    if isinstance(result, NotLoaded):
+        return {"error": f"cannot restore the captured state: {result.detail}"}
+    write_raw_audio(preview_path, result)
     return {"state": encode_state(state)}

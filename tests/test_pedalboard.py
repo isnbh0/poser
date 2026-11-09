@@ -1,5 +1,6 @@
 """Tests for the Pedalboard instrument, with test workers in place of the plugin workers."""
 
+import gc
 import importlib
 import io
 import json
@@ -8,6 +9,8 @@ import plistlib
 import re
 import subprocess
 import sys
+import weakref
+from collections.abc import Callable, Iterator
 from importlib import metadata
 from pathlib import Path
 from types import ModuleType
@@ -21,7 +24,11 @@ from test_performance import cc_track, performed
 
 from poser.adapters.isolation import WorkerTimedOutError
 from poser.adapters.pedalboard import instrument as instrument_module
-from poser.adapters.pedalboard.config import PedalboardConfig, from_options
+from poser.adapters.pedalboard.config import (
+    INITIALIZATION_TIMEOUT_S,
+    PedalboardConfig,
+    from_options,
+)
 from poser.adapters.pedalboard.formats import PRESET_FORMATS, PresetFormat
 from poser.adapters.pedalboard.instrument import (
     MALFORMED_RESULT,
@@ -31,10 +38,11 @@ from poser.adapters.pedalboard.instrument import (
 )
 from poser.adapters.pedalboard.state import build_state, encode_state
 from poser.adapters.pedalboard.worker import (
+    NotLoaded,
     capture_job,
     performance_messages,
-    play,
     render_duration_s,
+    render_fresh,
     render_job,
 )
 from poser.core.audio import SAMPLE_RATE, Audio, read_raw_audio
@@ -1077,20 +1085,258 @@ def test_create_refuses_two_formats_with_one_suffix(
     assert str(error.value) == "instrument 'serum': two preset formats read '.fxp' files"
 
 
-def test_play_renders_in_512_sample_blocks_after_a_reset() -> None:
-    class RecordingPlugin:
-        def __call__(self, messages: object, **kwargs: object) -> np.ndarray:
-            self.kwargs = kwargs
-            return np.zeros((2, 100), np.float32)
+# The worker's jobs on fake plugins
 
-    plugin = RecordingPlugin()
+EDITED = b"edited"
+type Call = tuple[list[object], dict[str, object], bytes | None]
 
-    play(plugin, PERFORMANCE)  # ty: ignore[invalid-argument-type]
 
-    assert plugin.kwargs == {
+class FakePlugin:
+    """A loaded instrument that records each call and renders an array of its own."""
+
+    is_instrument = True
+
+    def __init__(self, fill: float = 1.0, calls: list[Call] | None = None) -> None:
+        self.fill = fill
+        self.calls: list[Call] = [] if calls is None else calls
+        self.rendered: list[np.ndarray] = []
+        self.state: bytes | None = None
+        self.state_error: Exception | None = None
+        self.call_error: Exception | None = None
+        self.on_call: Callable[[], None] | None = None
+
+    @property
+    def raw_state(self) -> bytes | None:
+        return self.state
+
+    @raw_state.setter
+    def raw_state(self, value: bytes) -> None:
+        if self.state_error is not None:
+            raise self.state_error
+        self.state = value
+
+    def show_editor(self) -> None:
+        self.raw_state = EDITED
+
+    def __call__(self, messages: Iterator[object], **kwargs: object) -> np.ndarray:
+        self.calls.append((list(messages), kwargs, self.state))
+        if self.on_call is not None:
+            self.on_call()
+        if self.call_error is not None:
+            raise self.call_error
+        duration = kwargs["duration"]
+        assert isinstance(duration, float)
+        self.rendered.append(np.full((2, int(duration * SAMPLE_RATE)), self.fill, np.float32))
+        return self.rendered[-1]
+
+
+class FakeLoader:
+    """Stands in for `pedalboard.load_plugin`, handing out preset or new plugins."""
+
+    def __init__(self) -> None:
+        self.loads: list[tuple[str, str | None, float]] = []
+        self.queue: list[FakePlugin] = []
+        self.made: list[weakref.ref[FakePlugin]] = []
+        self.error: Exception | None = None
+
+    def __call__(
+        self, path: str, plugin_name: str | None = None, initialization_timeout: float = 0
+    ) -> FakePlugin:
+        self.loads.append((path, plugin_name, initialization_timeout))
+        if self.error is not None:
+            raise self.error
+        plugin = self.queue.pop(0) if self.queue else FakePlugin(len(self.made) + 1)
+        self.made.append(weakref.ref(plugin))
+        return plugin
+
+
+@pytest.fixture
+def loader(monkeypatch: pytest.MonkeyPatch) -> FakeLoader:
+    fake = FakeLoader()
+    monkeypatch.setattr("pedalboard.load_plugin", fake)
+    return fake
+
+
+def message_values(messages: list[object]) -> list[tuple[object, ...]]:
+    return [(m.type, m.dict()) for m in messages]  # ty: ignore[unresolved-attribute]
+
+
+def test_render_fresh_loads_restores_and_renders_in_512_sample_blocks(
+    loader: FakeLoader,
+) -> None:
+    plugin = FakePlugin()
+    loader.queue.append(plugin)
+
+    audio = render_fresh("/S.vst3", "Synth", b"state", PERFORMANCE)
+
+    assert loader.loads == [("/S.vst3", "Synth", INITIALIZATION_TIMEOUT_S)]
+    [(messages, kwargs, state)] = plugin.calls
+    assert state == b"state"
+    assert message_values(messages) == message_values(list(performance_messages(PERFORMANCE)))
+    assert kwargs == {
         "duration": render_duration_s(PERFORMANCE.samples),
         "sample_rate": SAMPLE_RATE,
         "num_channels": 2,
         "buffer_size": 512,
         "reset": True,
     }
+    assert audio is plugin.rendered[0]
+
+
+def test_render_fresh_with_no_state_leaves_raw_state_unset(loader: FakeLoader) -> None:
+    plugin = FakePlugin()
+    plugin.state_error = AssertionError("raw_state was set")
+    loader.queue.append(plugin)
+
+    render_fresh("/S.vst3", None, None, PERFORMANCE)
+
+    [(_, _, state)] = plugin.calls
+    assert state is None
+
+
+def test_render_fresh_loads_a_new_instance_per_call(loader: FakeLoader) -> None:
+    first, second = FakePlugin(), FakePlugin()
+    loader.queue.extend([first, second])
+
+    render_fresh("/S.vst3", None, None, PERFORMANCE)
+    render_fresh("/S.vst3", None, None, PERFORMANCE)
+
+    assert len(loader.loads) == 2
+    assert first is not second
+    assert (len(first.calls), len(second.calls)) == (1, 1)
+
+
+@pytest.mark.parametrize(
+    ("error", "detail"), [(RuntimeError("bad bundle"), "bad bundle"), (RuntimeError(), "")]
+)
+def test_render_fresh_reports_a_load_exception(
+    loader: FakeLoader, error: Exception, detail: str
+) -> None:
+    loader.error = error
+
+    assert render_fresh("/S.vst3", None, None, PERFORMANCE) == NotLoaded(detail)
+
+
+def test_render_fresh_reports_a_rejected_state(loader: FakeLoader) -> None:
+    plugin = FakePlugin()
+    plugin.state_error = ValueError("bad state")
+    loader.queue.append(plugin)
+
+    assert render_fresh("/S.vst3", None, b"state", PERFORMANCE) == NotLoaded("bad state")
+    assert plugin.calls == []
+
+
+def test_render_fresh_reports_a_non_instrument(loader: FakeLoader) -> None:
+    plugin = FakePlugin()
+    plugin.is_instrument = False
+    loader.queue.append(plugin)
+
+    result = render_fresh("/S.vst3", None, None, PERFORMANCE)
+
+    assert result == NotLoaded("/S.vst3 is not an instrument")
+    assert plugin.calls == []
+
+
+def test_render_fresh_lets_a_processing_exception_escape(loader: FakeLoader) -> None:
+    plugin = FakePlugin()
+    plugin.call_error = RuntimeError("boom")
+    loader.queue.append(plugin)
+
+    with pytest.raises(RuntimeError, match="boom"):
+        render_fresh("/S.vst3", None, None, PERFORMANCE)
+
+
+def fake_job(output: str, path: Path, state: bytes | None = None) -> dict[str, JsonValue]:
+    return {
+        "path": "/S.vst3",
+        "plugin_name": None,
+        "state": None if state is None else encode_state(state),
+        "performance": performance_to_data(PERFORMANCE),
+        output: str(path),
+    }
+
+
+def test_render_job_writes_what_the_plugin_rendered(loader: FakeLoader, tmp_path: Path) -> None:
+    loader.queue.append(FakePlugin(0.25))
+    audio_path = tmp_path / "a.npy"
+
+    assert render_job(fake_job("audio_path", audio_path)) == {"status": "ok"}
+
+    audio = read_raw_audio(audio_path, PERFORMANCE.samples)
+    assert isinstance(audio, Audio)
+    assert np.array_equal(audio.samples, np.full((2, PERFORMANCE.samples), 0.25, np.float32))
+
+
+def test_render_job_reports_a_load_exception(loader: FakeLoader, tmp_path: Path) -> None:
+    loader.error = RuntimeError("bad bundle")
+    audio_path = tmp_path / "a.npy"
+
+    assert render_job(fake_job("audio_path", audio_path)) == {
+        "status": "load_failed",
+        "detail": "bad bundle",
+    }
+    assert not audio_path.exists()
+
+
+def test_capture_job_previews_the_captured_state_on_a_new_instance(
+    loader: FakeLoader, tmp_path: Path
+) -> None:
+    editor_calls: list[Call] = []
+    preview = FakePlugin(0.5)
+    loader.queue.extend([FakePlugin(0.25, editor_calls), preview])
+    editor_alive: list[bool] = []
+
+    def check_editor() -> None:
+        gc.collect()
+        editor_alive.append(loader.made[0]() is not None)
+
+    preview.on_call = check_editor
+    preview_path = tmp_path / "p.npy"
+
+    result = capture_job(fake_job("preview_path", preview_path, b"start"))
+
+    assert result == {"state": encode_state(EDITED)}
+    [(messages, kwargs, _)] = editor_calls
+    assert messages == []
+    assert kwargs["reset"] is False
+    [(messages, _, state)] = preview.calls
+    assert message_values(messages) == message_values(list(performance_messages(PERFORMANCE)))
+    assert state == EDITED
+    assert editor_alive == [False]
+    audio = read_raw_audio(preview_path, PERFORMANCE.samples)
+    assert isinstance(audio, Audio)
+    assert np.array_equal(audio.samples, np.full((2, PERFORMANCE.samples), 0.5, np.float32))
+
+
+def test_capture_job_reports_a_failed_restore(
+    loader: FakeLoader, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def load_once(*args: object, **kwargs: object) -> FakePlugin:
+        monkeypatch.setattr("pedalboard.load_plugin", failing)
+        return FakePlugin()
+
+    def failing(*args: object, **kwargs: object) -> NoReturn:
+        raise RuntimeError("gone")
+
+    monkeypatch.setattr("pedalboard.load_plugin", load_once)
+    preview_path = tmp_path / "p.npy"
+
+    assert capture_job(fake_job("preview_path", preview_path)) == {
+        "error": "cannot restore the captured state: gone"
+    }
+    assert not preview_path.exists()
+
+
+def test_capture_job_refuses_a_preview_plugin_that_is_not_an_instrument(
+    loader: FakeLoader, tmp_path: Path
+) -> None:
+    preview = FakePlugin()
+    preview.is_instrument = False
+    loader.queue.extend([FakePlugin(), preview])
+    preview_path = tmp_path / "p.npy"
+
+    assert capture_job(fake_job("preview_path", preview_path)) == {
+        "error": "cannot restore the captured state: /S.vst3 is not an instrument"
+    }
+    assert preview.calls == []
+    assert not preview_path.exists()
