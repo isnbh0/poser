@@ -4,6 +4,7 @@ import base64
 import dataclasses
 import subprocess
 import sys
+from importlib import metadata
 from pathlib import Path
 
 import pytest
@@ -19,9 +20,9 @@ from helpers import (
 
 from poser.adapters.pedalboard.config import from_options
 from poser.adapters.pedalboard.formats import SavedFormat, SavedSound
-from poser.adapters.pedalboard.instrument import PedalboardInstrument
+from poser.adapters.pedalboard.instrument import PedalboardInstrument, plugin_version
 from poser.adapters.pedalboard.state import component_state
-from poser.core.audio import Audio, read_raw_audio
+from poser.core.audio import SAMPLE_RATE, SILENCE_DBFS, Audio, measure_peak_dbfs, read_raw_audio
 from poser.core.names import Identifier
 from poser.core.performance import NoteOff, NoteOn, Performance, perform
 from poser.core.ports import RenderRequest, ResolvedSound
@@ -102,3 +103,26 @@ def test_a_captured_state_reaches_the_render(tmp_path: Path) -> None:
     assert strongest_hz(default.samples) == pytest.approx(262, abs=5)
     assert strongest_hz(low.samples) == pytest.approx(33, abs=3)
     assert strongest_hz(preset.samples) == pytest.approx(33, abs=3)
+
+
+@pytest.mark.parametrize(
+    "preset", ["presets/Bass/BA Ampology [CFA]", "presets/Leads/LD A Bit of Luck [SD]"]
+)
+def test_a_long_release_preset_is_silent_until_its_note(tmp_path: Path, preset: str) -> None:
+    composition = real_composition(tmp_path)
+    (spec,) = [item for item in composition.config.instruments if item.name == "serum"]
+    config = from_options(spec.name, spec.spec.options, composition.context.root)
+    serum = PedalboardInstrument(config, tmp_path / "sounds", REAL_FORMATS)
+    note_on = NoteOn(SAMPLE_RATE // 2, 48, 100)
+    performance = Performance(3 * SAMPLE_RATE // 2, (note_on, NoteOff(SAMPLE_RATE, 48)))
+    first = note_on.sample
+
+    audio = render(serum, SoundRef(config.name, preset), performance, tmp_path / "out.npy")
+
+    versions = f"pedalboard {metadata.version('pedalboard')}, plugin {plugin_version(config.path)}"
+    before = measure_peak_dbfs(audio.samples[:, :first])
+    after = measure_peak_dbfs(audio.samples[:, first:])
+    assert before < -100, f"{preset} sounds before its note at {before:.1f} dBFS ({versions})"
+    assert after > SILENCE_DBFS, (
+        f"{preset} is silent after its note at {after:.1f} dBFS ({versions})"
+    )

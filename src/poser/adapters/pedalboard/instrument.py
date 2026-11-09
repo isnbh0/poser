@@ -126,7 +126,7 @@ class PedalboardInstrument:
 
     @property
     def adapter_version(self) -> str:
-        return "1"
+        return "2"
 
     @property
     def guide(self) -> str:

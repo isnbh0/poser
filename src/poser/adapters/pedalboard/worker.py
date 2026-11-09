@@ -118,8 +118,10 @@ def render_fresh(
         return NotLoaded(str(error))
     if not plugin.is_instrument:
         return NotLoaded(f"{path} is not an instrument")
-    # Pedalboard's reset rebuilds an instrument by saving its state, recreating it, and restoring
-    # that state, so a restored sound survives. Serum renders differently without the reset.
+    # The plugin was loaded for this render and has processed nothing, so Pedalboard's reset (save
+    # the state, recreate the plugin, restore the state) has nothing to clear. Its rebuild also
+    # plays a note no event asked for, which a long amp release or an effect tail carries into the
+    # render.
     # Pedalboard's stubs take a `list` of its message union, and `list` is invariant.
     messages: list[MIDIMessageLike] = [*performance_messages(performance)]
     return plugin(
@@ -128,7 +130,7 @@ def render_fresh(
         sample_rate=SAMPLE_RATE,
         num_channels=NUM_CHANNELS,
         buffer_size=BUFFER_SIZE,
-        reset=True,
+        reset=False,
     )
 
 

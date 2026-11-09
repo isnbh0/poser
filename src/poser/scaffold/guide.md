@@ -63,7 +63,7 @@ def build() -> Song:
         name="bass",
         sound="serum:presets/Bass/BA Ampology [CFA]",
         notes=notes([pitch("A2")], 0, 2, 100) + notes([pitch("F2")], 2, 2, 100),
-        gain=-2,
+        gain=-5,
     )
     pad = Track(
         name="pad",

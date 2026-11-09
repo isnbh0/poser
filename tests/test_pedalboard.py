@@ -1161,7 +1161,7 @@ def message_values(messages: list[object]) -> list[tuple[object, ...]]:
     return [(m.type, m.dict()) for m in messages]  # ty: ignore[unresolved-attribute]
 
 
-def test_render_fresh_loads_restores_and_renders_in_512_sample_blocks(
+def test_render_fresh_renders_the_new_instance_without_a_reset(
     loader: FakeLoader,
 ) -> None:
     plugin = FakePlugin()
@@ -1178,7 +1178,7 @@ def test_render_fresh_loads_restores_and_renders_in_512_sample_blocks(
         "sample_rate": SAMPLE_RATE,
         "num_channels": 2,
         "buffer_size": 512,
-        "reset": True,
+        "reset": False,
     }
     assert audio is plugin.rendered[0]
 
@@ -1202,7 +1202,6 @@ def test_render_fresh_loads_a_new_instance_per_call(loader: FakeLoader) -> None:
     render_fresh("/S.vst3", None, None, PERFORMANCE)
 
     assert len(loader.loads) == 2
-    assert first is not second
     assert (len(first.calls), len(second.calls)) == (1, 1)
 
 
@@ -1309,7 +1308,7 @@ def test_capture_job_previews_the_captured_state_on_a_new_instance(
 
 
 def test_capture_job_reports_a_failed_restore(
-    loader: FakeLoader, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     def load_once(*args: object, **kwargs: object) -> FakePlugin:
         monkeypatch.setattr("pedalboard.load_plugin", failing)
