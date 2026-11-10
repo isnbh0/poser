@@ -18,7 +18,7 @@ from poser.cli.common import (
     load_composition,
 )
 from poser.cli.workspace import WorkspaceError, fill_path_options, song_id
-from poser.core.analysis import analyze_song, report_text
+from poser.core.analysis import analyze_song, report_json
 from poser.core.loading import load_song
 from poser.core.ports import ConfigError, SongBusyError
 from poser.core.report import (
@@ -130,5 +130,5 @@ def main(argv: list[str] | None = None) -> int:
     except SongBusyError as error:
         fail(PROG, error)
         return EXIT_SONG_BUSY
-    print(report_text(report) if args.json else format_table(report), end="" if args.json else "\n")
+    print(report_json(report) if args.json else format_table(report), end="" if args.json else "\n")
     return exit_code(report)

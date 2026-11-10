@@ -124,7 +124,7 @@ def read_stem(
         raise StaleStemError(str(error)) from error
 
 
-def report_text(report: Report) -> str:
+def report_json(report: Report) -> str:
     """Return the report as the JSON text kept in files."""
     # allow_nan=False makes a non-finite number an error instead of invalid JSON.
     return json.dumps(report_to_data(report), indent=2, allow_nan=False) + "\n"
@@ -266,7 +266,7 @@ def _analyze(
         song=song_name, run=record.run, song_sha256=song_sha256, tracks=tuple(tracks), mix=mix
     )
     if complete:
-        store.report_path().write_text(report_text(report), encoding="utf-8")
+        store.report_path().write_text(report_json(report), encoding="utf-8")
 
     # The record's report points at the record's own copies of the images.
     kept = tuple(
@@ -283,7 +283,7 @@ def _analyze(
         if report.mix is None
         else replace(report.mix, spectrogram=str(store.keep_image(record, None, suffix)))
     )
-    store.finish_record(record, report_text(replace(report, tracks=kept, mix=kept_mix)))
+    store.finish_record(record, report_json(replace(report, tracks=kept, mix=kept_mix)))
     return report
 
 
