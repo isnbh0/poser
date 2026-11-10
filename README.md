@@ -12,17 +12,18 @@ and writes a JSON report and spectrograms, so that an agent, or a person, can re
 - At least one VST3 or Audio Unit instrument
 
 The workspace that `init-workspace` creates describes the instruments it detects on this
-machine: with Serum installed you get the Serum workspace as before; with only Surge XT
-installed you get a Surge XT workspace whose demo song is ready to render; with neither you
-get the scaffold and a note.
+machine: with Surge XT installed you get a Surge XT workspace whose demo song is ready to
+render; with only Serum installed you get a Serum workspace; with neither you get the
+scaffold, which names Surge XT at its documented paths, and a note.
 
 No synthesizer installed? Surge XT (https://surge-synthesizer.github.io) is a capable, free
-one. Its packaged installer installs for all users, putting the plugin at
-`/Library/Audio/Plug-Ins/VST3/Surge XT.vst3` and the factory patches at
+one, and poser's default instrument. Its packaged installer installs for all users, putting
+the plugin at `/Library/Audio/Plug-Ins/VST3/Surge XT.vst3` and the factory patches at
 `/Library/Application Support/Surge XT/patches_factory`; a per-user install puts them under
-`~/Library` instead. Run `uv run init-workspace` after installing, or edit `poser.toml`
-yourself afterwards: activate the commented Surge XT tables, remove the Serum tables, point
-`songs/demo.yaml`'s sound names at yours, and run `uv run update-guide`.
+`~/Library` instead. Install it and run `uv run check-instruments`; if it lives elsewhere,
+set the paths in `poser.toml` to match and run `uv run update-guide` afterwards. For another
+instrument, name it in `poser.toml`, point `songs/demo.yaml`'s sound names at it, and run
+`uv run update-guide`.
 
 ## Start a workspace
 
@@ -49,17 +50,17 @@ commands find the workspace by walking up from the working directory to the near
 instrument, and its name is what songs write before the colon in a track's `sound`:
 
 ```toml
-[instruments.serum]
+[instruments.surge]
 adapter = "pedalboard"
-path = "/Library/Audio/Plug-Ins/VST3/Serum.vst3"
+path = "/Library/Audio/Plug-Ins/VST3/Surge XT.vst3"
 guide = "A note about this instrument for the workspace guide."
 
-[instruments.serum.sources]
-presets = "/Library/Audio/Presets/Xfer Records/Serum Presets/Presets"
+[instruments.surge.sources]
+presets = "/Library/Application Support/Surge XT/patches_factory"
 ```
 
-A song names `serum` for the default patch, `serum:presets/<path without suffix>` for a preset
-in a source, and `serum:saved/<name>` for a sound saved with `save-sound`. The `pedalboard`
+A song names `surge` for the default patch, `surge:presets/<path without suffix>` for a preset
+in a source, and `surge:saved/<name>` for a sound saved with `save-sound`. The `pedalboard`
 adapter takes `path`, `plugin_name` for a bundle holding several plugins, `sources`, and
 `formats`, the preset formats it reads (`fxp`, and `saved` for saved sounds, by default).
 Relative paths resolve against the directory holding `poser.toml`. By default a source's presets

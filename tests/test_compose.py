@@ -165,7 +165,7 @@ def files_under(root: Path) -> set[Path]:
 def test_the_scaffold_config_loads_one_pedalboard_instrument() -> None:
     config = read_config(SCAFFOLD_DIR / "poser.toml")
 
-    assert [(item.name, item.spec.use) for item in config.instruments] == [("serum", "pedalboard")]
+    assert [(item.name, item.spec.use) for item in config.instruments] == [("surge", "pedalboard")]
     assert config.instruments[0].guide is not None
     assert "guide" not in config.instruments[0].spec.options
 

@@ -3,10 +3,9 @@
 import argparse
 import json
 import sys
+import textwrap
 from importlib.resources import files
 from pathlib import Path
-
-import yaml
 
 from poser.cli.guide import GUIDE_NAME, guide_path, workspace_guide, write_guide
 from poser.cli.workspace import CONFIG_NAME, Workspace
@@ -26,12 +25,15 @@ SCAFFOLD_FILES = {
 WRITTEN_FILES = (GUIDE_NAME, *SCAFFOLD_FILES.values())
 GITIGNORE_RESOURCE = "gitignore"  # Merged into .gitignore, never refused.
 ONBOARDING_RESOURCE = "onboarding.txt"  # Printed when no instrument is detected, never written.
+# The instrument the scaffold's demo song names, which creation rewrites for a Serum machine.
+SCAFFOLD_INSTRUMENT = "surge"
 # The Serum plugin candidate; its presets are SERUM_PRESET_PATH, written only as a directory.
-SCAFFOLD_PLUGIN_PATH = Path("/Library/Audio/Plug-Ins/VST3/Serum.vst3")
+SERUM_PLUGIN_PATH = Path("/Library/Audio/Plug-Ins/VST3/Serum.vst3")
 SERUM_PRESET_PATH = Path("/Library/Audio/Presets/Xfer Records/Serum Presets/Presets")
 # Where Surge XT's installer puts the plugin and the factory patches: the documented default
 # (all users) first, then the per-user layout. Creation fills the tables from the candidates
-# that exist; the scaffold's commented tables carry the same defaults, and a test pins them.
+# that exist; the scaffold's commented Serum tables carry the same defaults, and a test pins
+# them.
 SURGE_PLUGIN_PATHS = (
     Path("/Library/Audio/Plug-Ins/VST3/Surge XT.vst3"),
     Path.home() / "Library" / "Audio" / "Plug-Ins" / "VST3" / "Surge XT.vst3",
@@ -41,6 +43,29 @@ SURGE_PATCHES_PATHS = (
     Path.home() / "Library" / "Application Support" / "Surge XT" / "patches_factory",
 )
 
+# Each guide the workspace guide holds for a detected instrument, and the scaffold's Surge XT
+# guide, which carries the install steps until one is detected and replaces it.
+SURGE_DETECTED_GUIDE = (
+    "Surge XT's factory patches are .fxp files under presets/ by category, such as "
+    "`surge:presets/Basses/Attacky`."
+)
+SCAFFOLD_SURGE_GUIDE = (
+    "No synthesizer was detected when this workspace was created, so songs cannot render yet. "
+    "Install Surge XT (https://surge-synthesizer.github.io/downloads), then run "
+    "`uv run check-instruments`, and replace this guide text with a note about the instrument. "
+    "Its factory patches, such as `surge:presets/Basses/Attacky`, are .fxp files under "
+    "presets/ by category."
+)
+SERUM_GUIDE = (
+    "Serum's default patch neither repeats between renders nor responds to controllers. "
+    "Controllers do nothing in Serum here except CC 1, the mod wheel, in presets that route "
+    "it. CC 1 on `serum:presets/Leads/LD A Bit of Luck [SD]` is confirmed. On another preset, "
+    "compare history records with the lane low and high to see whether it routes CC 1."
+)
+
+# The scaffold line that begins its commented Serum tables.
+SERUM_NOTES_INTRO = "# Serum is a paid synthesizer."
+
 
 def scaffold_bytes(name: str) -> bytes:
     """Return the bytes of a scaffold resource."""
@@ -48,32 +73,55 @@ def scaffold_bytes(name: str) -> bytes:
 
 
 def split_scaffold_config(scaffold: str) -> tuple[str, str, str]:
-    """Split the scaffold config into its head, its Serum tables, and the Surge XT notes."""
-    head, separator, rest = scaffold.partition("[instruments.serum]")
-    serum_tables, marker, surge_notes = rest.partition("# No Serum on this machine?")
-    return head, separator + serum_tables, marker + surge_notes
+    """Split the scaffold config into its header, its Surge XT table, and the Serum notes."""
+    header, marker, rest = scaffold.partition("[instruments.surge]")
+    table_end = rest.index(f"\n{SERUM_NOTES_INTRO}")
+    return header, marker + rest[: table_end + 1], rest[table_end + 1 :]
 
 
-def surge_tables(plugin: Path, patches: Path | None) -> str:
+def guide_lines(text: str) -> list[str]:
+    # The `guide` table value is a TOML multi-line basic string, so this cannot be a docstring.
+    # Return the `guide = """…"""` table lines holding `text`, wrapped, with continuations.
+    lines = textwrap.wrap(text, width=96, break_long_words=False, break_on_hyphens=False)
+    return ['guide = """', *[f"{line} \\" for line in lines[:-1]], f'{lines[-1]}"""']
+
+
+def surge_tables(plugin: Path, patches: Path | None, guide: str) -> str:
     """The active Surge XT tables creation writes, with TOML-encoded absolute paths."""
-    lines = ["[instruments.surge]", 'adapter = "pedalboard"', f"path = {json.dumps(str(plugin))}"]
+    lines = [
+        "[instruments.surge]",
+        'adapter = "pedalboard"',
+        f"path = {json.dumps(str(plugin))}",
+        *guide_lines(guide),
+    ]
     if patches is not None:
         lines += ["", "[instruments.surge.sources]", f"presets = {json.dumps(str(patches))}"]
     return "\n".join(lines) + "\n"
 
 
-def without_serum_presets(serum_tables: str) -> str:
-    """Drop the Serum preset sources table, for machines without the folder."""
-    head, _separator, _rest = serum_tables.partition("[instruments.serum.sources]")
-    return head
+def serum_tables(plugin: Path, presets: Path | None) -> str:
+    """The active Serum tables creation writes, with TOML-encoded absolute paths."""
+    lines = [
+        "[instruments.serum]",
+        'adapter = "pedalboard"',
+        f"path = {json.dumps(str(plugin))}",
+        *guide_lines(SERUM_GUIDE),
+    ]
+    if presets is not None:
+        lines += ["", "[instruments.serum.sources]", f"presets = {json.dumps(str(presets))}"]
+    return "\n".join(lines) + "\n"
 
 
-def surge_demo() -> str:
-    """The scaffold demo with every track's sound pointed at Surge XT."""
-    demo = yaml.safe_load(scaffold_bytes("demo.yaml"))
-    for track in demo["tracks"]:
-        track["sound"] = "surge"
-    return yaml.safe_dump(demo, sort_keys=False, allow_unicode=True)
+def commented_surge(surge_block: str) -> str:
+    """The scaffold's Surge XT table, commented out, for machines without it."""
+    lines = (f"# {line}" if line else line for line in surge_block.splitlines())
+    return "\n".join(lines) + "\n"
+
+
+def demo_with_instrument(name: str) -> str:
+    """The scaffold demo with every track's sound pointed at one instrument."""
+    demo = scaffold_bytes("demo.yaml").decode()
+    return demo.replace(f"sound: {SCAFFOLD_INSTRUMENT}", f"sound: {name}")
 
 
 def merge_gitignore(path: Path) -> None:
@@ -123,36 +171,33 @@ def main(argv: list[str] | None = None) -> int:
             print(f"init-workspace: {problem}", file=sys.stderr)
         return EXIT_CONFLICT
 
-    serum = SCAFFOLD_PLUGIN_PATH.exists()
+    serum = SERUM_PLUGIN_PATH.exists()
     serum_presets = SERUM_PRESET_PATH if SERUM_PRESET_PATH.is_dir() else None
     surge_plugin = next((path for path in SURGE_PLUGIN_PATHS if path.exists()), None)
     surge_patches = next((path for path in SURGE_PATCHES_PATHS if path.is_dir()), None)
 
     scaffold = scaffold_bytes(CONFIG_NAME).decode()
-    head, serum_tables, surge_notes = split_scaffold_config(scaffold)
+    header, surge_block, serum_notes = split_scaffold_config(scaffold)
     reports: list[str] = []
+    demo_text = scaffold_bytes("demo.yaml").decode()
 
-    if not serum and surge_plugin is None:
-        poser_text = scaffold
-        demo_text = scaffold_bytes("demo.yaml").decode()
+    if surge_plugin is not None:
+        poser_text = (
+            f"{header}{surge_tables(surge_plugin, surge_patches, SURGE_DETECTED_GUIDE)}"
+            f"\n{serum_notes}"
+        )
+        suffix = "" if surge_patches else " (preset source omitted)"
+        reports.append(f"Wrote poser.toml from detected surge{suffix}")
+    elif serum:
+        serum_text = serum_tables(SERUM_PLUGIN_PATH, serum_presets)
+        poser_text = f"{header}{commented_surge(surge_block)}{serum_text}"
+        suffix = "" if serum_presets else " (preset source omitted)"
+        reports.append(f"Wrote poser.toml from detected serum{suffix}")
+        demo_text = demo_with_instrument("serum")
+        reports.append("Wrote songs/demo.yaml from detected serum")
     else:
-        serum_part = ""
-        if serum:
-            serum_part = serum_tables if serum_presets else without_serum_presets(serum_tables)
-            if serum_presets is None:
-                reports.append("Wrote poser.toml from detected serum (preset source omitted)")
-        if surge_plugin is None:
-            poser_text = head + serum_part + surge_notes
-            demo_text = scaffold_bytes("demo.yaml").decode()
-        else:
-            poser_text = head + serum_part + surge_tables(surge_plugin, surge_patches)
-            suffix = "" if surge_patches else " (preset source omitted)"
-            reports.append(f"Wrote poser.toml from detected surge{suffix}")
-            if serum:
-                demo_text = scaffold_bytes("demo.yaml").decode()
-            else:
-                demo_text = surge_demo()
-                reports.append("Wrote songs/demo.yaml from detected surge")
+        documented = surge_tables(SURGE_PLUGIN_PATHS[0], surge_patches, SCAFFOLD_SURGE_GUIDE)
+        poser_text = f"{header}{documented}\n{serum_notes}"
 
     contents = {
         "claude.md": scaffold_bytes("claude.md"),
@@ -176,11 +221,8 @@ def main(argv: list[str] | None = None) -> int:
         print(target)
     for line in reports:
         print(line)
-    print(f"Edit {CONFIG_NAME} to match this machine's plugins, then run: uv run check-instruments")
-    print(
-        "songs/demo.yaml names the scaffold's instrument; if you changed poser.toml, "
-        "point its sound names at yours (uv run list-sounds)"
-    )
-    if not serum and surge_plugin is None:
+    if surge_plugin is None and not serum:
         print(scaffold_bytes(ONBOARDING_RESOURCE).decode(), end="")
+    else:
+        print("Run: uv run check-instruments")
     return EXIT_OK

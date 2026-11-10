@@ -1,7 +1,7 @@
 bpm: 100
 tracks:
   - name: lead
-    sound: serum
+    sound: surge
     gain: -3
     notes:
       - {beat: 0, pitch: 69, length: 1, velocity: 100}
@@ -12,7 +12,7 @@ tracks:
       - {beat: 5, pitch: 71, length: 1, velocity: 90}
       - {beat: 6, pitch: 67, length: 2, velocity: 105}
   - name: bass
-    sound: serum
+    sound: surge
     gain: -3
     notes:
       - {beat: 0, pitch: 45, length: 2, velocity: 100}

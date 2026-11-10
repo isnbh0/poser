@@ -5,31 +5,33 @@
 # source `saved`. `guide` is a note about the instrument for the workspace guide; run
 # `uv run update-guide` after changing this file.
 
-# Serum's default macOS install paths. Change them to match this machine.
-[instruments.serum]
+# Surge XT is a free, open-source synthesizer, and poser's default instrument. Its packaged
+# installer installs for all users, putting the plugin and the factory patches at the paths
+# below; a per-user install puts them under ~/Library instead. Change them to match this
+# machine, and run `uv run update-guide` after editing.
+[instruments.surge]
 adapter = "pedalboard"
-path = "/Library/Audio/Plug-Ins/VST3/Serum.vst3"
+path = "/Library/Audio/Plug-Ins/VST3/Surge XT.vst3"
 guide = """
-Serum's default patch neither repeats between renders nor responds to controllers. Controllers \
-do nothing in Serum here except CC 1, the mod wheel, in presets that route it. CC 1 on \
-`serum:presets/Leads/LD A Bit of Luck [SD]` is confirmed. On another preset, compare history \
-records with the lane low and high to see whether it routes CC 1."""
+No synthesizer was detected when this workspace was created, so songs cannot render yet. \
+Install Surge XT (https://surge-synthesizer.github.io/downloads), then run \
+`uv run check-instruments`, and replace this guide text with a note about the instrument. \
+Its factory patches, such as `surge:presets/Basses/Attacky`, are .fxp files under presets/ \
+by category."""
 
-[instruments.serum.sources]
-presets = "/Library/Audio/Presets/Xfer Records/Serum Presets/Presets"
+[instruments.surge.sources]
+presets = "/Library/Application Support/Surge XT/patches_factory"
 
-# No Serum on this machine? Surge XT is a capable, free synth
-# (https://surge-synthesizer.github.io/downloads). Its packaged installer installs for all
-# users, putting the plugin at /Library/Audio/Plug-Ins/VST3/Surge XT.vst3 and the factory
-# patches at /Library/Application Support/Surge XT/patches_factory — the paths below. If this
-# machine's Surge XT lives elsewhere (for example under ~/Library), set the paths to match it,
-# as absolute paths.
-# [instruments.surge]
+# Serum is a paid synthesizer. Uncomment both tables to use it, and change the paths to match
+# this machine.
+# [instruments.serum]
 # adapter = "pedalboard"
-# path = "/Library/Audio/Plug-Ins/VST3/Surge XT.vst3"
+# path = "/Library/Audio/Plug-Ins/VST3/Serum.vst3"
+# guide = """
+# Serum's default patch neither repeats between renders nor responds to controllers. \
+# Controllers do nothing in Serum here except CC 1, the mod wheel, in presets that route it. \
+# CC 1 on `serum:presets/Leads/LD A Bit of Luck [SD]` is confirmed. On another preset, compare \
+# history records with the lane low and high to see whether it routes CC 1."""
 #
-# [instruments.surge.sources]
-# presets = "/Library/Application Support/Surge XT/patches_factory"
-#
-# poser reads .fxp preset files, and Surge XT's factory patches are .fxp. Its patches then
-# name as surge:presets/<folder>/<patch>, exactly as uv run list-sounds prints them.
+# [instruments.serum.sources]
+# presets = "/Library/Audio/Presets/Xfer Records/Serum Presets/Presets"

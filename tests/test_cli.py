@@ -680,8 +680,20 @@ def test_preview_failure_after_saving(
 # update-guide
 
 
+def detect_surge(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Patch instrument detection to a machine whose Surge XT install is under tmp_path."""
+    surge = tmp_path / "surge.vst3"
+    patches = tmp_path / "patches"
+    surge.write_bytes(b"")
+    patches.mkdir()
+    monkeypatch.setattr(init_workspace, "SURGE_PLUGIN_PATHS", (surge,))
+    monkeypatch.setattr(init_workspace, "SURGE_PATCHES_PATHS", (patches,))
+    monkeypatch.setattr(init_workspace, "SERUM_PLUGIN_PATH", tmp_path / "absent.vst3")
+
+
 @pytest.fixture
 def initialized(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    detect_surge(tmp_path, monkeypatch)
     assert init_workspace.main([str(tmp_path)]) == init_workspace.EXIT_OK
     monkeypatch.chdir(tmp_path)
     return tmp_path
@@ -693,7 +705,7 @@ def test_update_guide_check_follows_poser_toml(
     guide_file = initialized / "AGENTS.md"
     assert guide.main(["--check"]) == EXIT_ALL_PASS
     config = initialized / "poser.toml"
-    config.write_text(config.read_text().replace("Serum's default patch", "This patch"))
+    config.write_text(config.read_text().replace("factory patches", "patches"))
     before = guide_file.read_text()
     capsys.readouterr()
 
@@ -705,7 +717,7 @@ def test_update_guide_check_follows_poser_toml(
 
     assert guide.main([]) == EXIT_ALL_PASS
     assert out(capsys) == f"{guide_file}\n"
-    assert "This patch neither repeats" in guide_file.read_text()
+    assert "Surge XT's patches are .fxp files" in guide_file.read_text()
     assert guide.main(["--check"]) == EXIT_ALL_PASS
     assert sorted(path.name for path in initialized.iterdir() if path.name.startswith(".")) == [
         ".gitignore"

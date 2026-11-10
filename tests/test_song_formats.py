@@ -39,7 +39,7 @@ def test_demo_song_loads_with_two_bare_instrument_tracks_and_eight_notes() -> No
     song = load_song(SCAFFOLD_DIR / "demo.yaml", SONG_FORMATS)
 
     assert len(song.tracks) == 2
-    assert all(track.sound == "serum" for track in song.tracks)
+    assert all(track.sound == "surge" for track in song.tracks)
     assert sum(len(track.notes) for track in song.tracks) >= 8
 
 
