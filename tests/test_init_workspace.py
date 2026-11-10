@@ -6,8 +6,10 @@ from pathlib import Path
 
 import pytest
 
+from poser.adapters.pedalboard.config import from_options
 from poser.adapters.song_formats import SONG_FORMATS
-from poser.cli import init_workspace
+from poser.cli import guide, init_workspace, sounds
+from poser.cli.common import EXIT_ALL_PASS
 from poser.cli.init_workspace import (
     GITIGNORE_RESOURCE,
     ONBOARDING_RESOURCE,
@@ -18,10 +20,44 @@ from poser.cli.workspace import Workspace, find_workspace
 from poser.compose import load
 from poser.core.guide import GENERATED, compose_guide
 from poser.core.loading import load_song
+from poser.core.names import Identifier
 
 
 def resource(name: str) -> bytes:
     return (files("poser") / "scaffold" / name).read_bytes()
+
+
+def detect(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    *,
+    serum: bool = False,
+    serum_presets: bool = False,
+    surge_plugin: bool = False,
+    surge_patches: bool = False,
+) -> tuple[Path, Path]:
+    """Patch every detection constant to controlled tmp_path candidates."""
+    plugin = tmp_path / "serum.vst3"
+    if serum:
+        plugin.parent.mkdir(parents=True, exist_ok=True)
+        plugin.write_bytes(b"")
+    monkeypatch.setattr(init_workspace, "SCAFFOLD_PLUGIN_PATH", plugin)
+    presets = tmp_path / "serum-presets"
+    if serum_presets:
+        presets.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(init_workspace, "SERUM_PRESET_PATH", presets)
+    all_users_surge = tmp_path / "all-users-surge.vst3"
+    home_surge = tmp_path / "home-surge.vst3"
+    if surge_plugin:
+        home_surge.parent.mkdir(parents=True, exist_ok=True)
+        home_surge.write_bytes(b"")
+    monkeypatch.setattr(init_workspace, "SURGE_PLUGIN_PATHS", (all_users_surge, home_surge))
+    all_users_patches = tmp_path / "all-users-patches"
+    home_patches = tmp_path / "home-patches"
+    if surge_patches:
+        home_patches.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(init_workspace, "SURGE_PATCHES_PATHS", (all_users_patches, home_patches))
+    return home_surge, home_patches
 
 
 def test_every_scaffold_resource_exists() -> None:
@@ -35,7 +71,7 @@ def test_init_creates_the_directory_and_writes_the_scaffold(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     target = tmp_path / "new"
-    monkeypatch.setattr(init_workspace, "SCAFFOLD_PLUGIN_PATH", target / "Serum.vst3")
+    detect(monkeypatch, target, serum=True, serum_presets=True)
 
     assert init_workspace.main([str(target)]) == init_workspace.EXIT_OK
 
@@ -55,7 +91,7 @@ def test_init_creates_the_directory_and_writes_the_scaffold(
             "point its sound names at yours (uv run list-sounds)"
         ),
     ]
-    assert out[len("\n".join(lines[:6])) + 1 :] == resource(ONBOARDING_RESOURCE).decode()
+    assert "detected" not in out
     assert not (target / "sounds").exists()
     assert not (target / "renders").exists()
 
@@ -71,7 +107,7 @@ def test_init_prints_the_free_synth_pointer_without_the_plugin(
     capsys: pytest.CaptureFixture[str],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(init_workspace, "SCAFFOLD_PLUGIN_PATH", tmp_path / "Serum.vst3")
+    detect(monkeypatch, tmp_path)
 
     assert init_workspace.main([str(tmp_path)]) == init_workspace.EXIT_OK
 
@@ -83,8 +119,7 @@ def test_init_prints_no_pointer_with_the_plugin(
     capsys: pytest.CaptureFixture[str],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    (tmp_path / "Serum.vst3").write_bytes(b"")
-    monkeypatch.setattr(init_workspace, "SCAFFOLD_PLUGIN_PATH", tmp_path / "Serum.vst3")
+    detect(monkeypatch, tmp_path, serum=True, serum_presets=True)
 
     assert init_workspace.main([str(tmp_path)]) == init_workspace.EXIT_OK
 
@@ -97,6 +132,160 @@ def test_the_scaffold_plugin_path_matches_the_scaffold_config() -> None:
     config = tomllib.loads(resource("poser.toml").decode())
 
     assert Path(config["instruments"]["serum"]["path"]) == init_workspace.SCAFFOLD_PLUGIN_PATH
+
+
+def test_the_scaffold_surge_tables_resolve_to_the_documented_defaults(tmp_path: Path) -> None:
+    lines = resource("poser.toml").decode().splitlines()
+    start = next(i for i, line in enumerate(lines) if line.startswith("# No Serum"))
+    uncommented = [
+        line[2:] if line.startswith("# ") and ("=" in line or line[2:].startswith("[")) else ""
+        for line in lines[start:]
+    ]
+    config = tomllib.loads("\n".join(uncommented))["instruments"]["surge"]
+    del config["adapter"]  # `compose` strips it before the factory sees the options.
+    instrument = from_options("surge", config, tmp_path)
+
+    assert instrument.path == Path("/Library/Audio/Plug-Ins/VST3/Surge XT.vst3")
+    assert instrument.sources == {
+        Identifier("presets"): Path("/Library/Application Support/Surge XT/patches_factory")
+    }
+
+
+def test_the_surge_constants_match_the_scaffold_tables() -> None:
+    lines = resource("poser.toml").decode().splitlines()
+    start = next(i for i, line in enumerate(lines) if line.startswith("# No Serum"))
+    uncommented = [
+        line[2:] if line.startswith("# ") and ("=" in line or line[2:].startswith("[")) else ""
+        for line in lines[start:]
+    ]
+    surge = tomllib.loads("\n".join(uncommented))["instruments"]["surge"]
+    serum = tomllib.loads(resource("poser.toml").decode())["instruments"]["serum"]
+
+    assert init_workspace.SURGE_PLUGIN_PATHS[0] == Path(surge["path"])
+    assert init_workspace.SURGE_PATCHES_PATHS[0] == Path(surge["sources"]["presets"])
+    assert Path(serum["sources"]["presets"]) == init_workspace.SERUM_PRESET_PATH
+
+
+def test_init_omits_the_serum_presets_when_the_folder_is_missing(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    detect(monkeypatch, tmp_path, serum=True)
+
+    assert init_workspace.main([str(tmp_path)]) == init_workspace.EXIT_OK
+
+    table = (
+        "[instruments.serum.sources]\n"
+        'presets = "/Library/Audio/Presets/Xfer Records/Serum Presets/Presets"\n\n'
+    )
+    expected = resource("poser.toml").decode().replace(table, "")
+    assert (tmp_path / "poser.toml").read_text() == expected
+    out = capsys.readouterr().out
+    assert "Wrote poser.toml from detected serum (preset source omitted)" in out
+
+
+def test_init_writes_detected_surge_when_serum_is_missing(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    home_surge, home_patches = detect(monkeypatch, tmp_path, surge_plugin=True, surge_patches=True)
+
+    assert init_workspace.main([str(tmp_path)]) == init_workspace.EXIT_OK
+
+    config = tomllib.loads((tmp_path / "poser.toml").read_text())
+    surge = config["instruments"]["surge"]
+    assert surge["path"] == str(home_surge)
+    assert surge["sources"]["presets"] == str(home_patches)
+    assert "serum" not in config["instruments"]
+    for track in load_song(tmp_path / "songs" / "demo.yaml", SONG_FORMATS).tracks:
+        assert str(track.sound) == "surge"
+    out = capsys.readouterr().out
+    assert "Wrote poser.toml from detected surge" in out
+    assert "Wrote songs/demo.yaml from detected surge" in out
+    assert resource(ONBOARDING_RESOURCE).decode() not in out
+    assert "check-instruments" in out
+
+
+def test_init_omits_the_surge_presets_when_no_candidate_is_a_directory(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    detect(monkeypatch, tmp_path, surge_plugin=True)
+
+    assert init_workspace.main([str(tmp_path)]) == init_workspace.EXIT_OK
+
+    config = tomllib.loads((tmp_path / "poser.toml").read_text())
+    assert "sources" not in config["instruments"]["surge"]
+    out = capsys.readouterr().out
+    assert "Wrote poser.toml from detected surge (preset source omitted)" in out
+
+
+def test_init_prefers_the_first_existing_surge_candidates(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    home_surge, home_patches = detect(monkeypatch, tmp_path, surge_plugin=True, surge_patches=True)
+
+    assert init_workspace.main([str(tmp_path)]) == init_workspace.EXIT_OK
+
+    config = tomllib.loads((tmp_path / "poser.toml").read_text())
+    assert config["instruments"]["surge"]["path"] == str(home_surge)
+    assert config["instruments"]["surge"]["sources"]["presets"] == str(home_patches)
+    assert capsys.readouterr().out
+
+
+def test_init_writes_both_instruments_when_both_are_detected(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    home_surge, home_patches = detect(
+        monkeypatch, tmp_path, serum=True, serum_presets=True, surge_plugin=True, surge_patches=True
+    )
+
+    assert init_workspace.main([str(tmp_path)]) == init_workspace.EXIT_OK
+
+    config = tomllib.loads((tmp_path / "poser.toml").read_text())
+    assert list(config["instruments"]) == ["serum", "surge"]
+    assert config["instruments"]["surge"]["path"] == str(home_surge)
+    assert config["instruments"]["surge"]["sources"]["presets"] == str(home_patches)
+    assert (tmp_path / "songs" / "demo.yaml").read_text() == resource("demo.yaml").decode()
+    out = capsys.readouterr().out
+    assert "Wrote poser.toml from detected surge" in out
+    assert "Wrote songs/demo.yaml" not in out
+
+
+def test_init_composes_a_current_guide_and_lists_sounds(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    detect(monkeypatch, tmp_path, surge_plugin=True, surge_patches=True)
+
+    assert init_workspace.main([str(tmp_path)]) == init_workspace.EXIT_OK
+    capsys.readouterr()
+
+    assert guide.main(["--config", str(tmp_path / "poser.toml"), "--check"]) == EXIT_ALL_PASS
+    assert sounds.list_main(["--config", str(tmp_path / "poser.toml")]) == EXIT_ALL_PASS
+    assert "surge" in capsys.readouterr().out
+
+
+def test_init_ignores_surge_patches_without_a_surge_plugin(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    detect(monkeypatch, tmp_path, surge_patches=True)
+
+    assert init_workspace.main([str(tmp_path)]) == init_workspace.EXIT_OK
+
+    for name, path in SCAFFOLD_FILES.items():
+        assert (tmp_path / path).read_bytes() == resource(name), path
+    assert resource(ONBOARDING_RESOURCE).decode() in capsys.readouterr().out
 
 
 def test_init_merges_an_existing_gitignore(tmp_path: Path) -> None:

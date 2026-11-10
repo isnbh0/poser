@@ -11,10 +11,18 @@ and writes a JSON report and spectrograms, so that an agent, or a person, can re
 - [uv](https://docs.astral.sh/uv/)
 - At least one VST3 or Audio Unit instrument
 
-The scaffolded workspace is written for Xfer Serum, a commercial synth. Any other instrument
-needs its own table in `poser.toml`. No synthesizer installed? Surge XT
-(https://surge-synthesizer.github.io) is a capable, free one; `init-workspace` explains how to
-switch the scaffold to it.
+The workspace that `init-workspace` creates describes the instruments it detects on this
+machine: with Serum installed you get the Serum workspace as before; with only Surge XT
+installed you get a Surge XT workspace whose demo song is ready to render; with neither you
+get the scaffold and a note.
+
+No synthesizer installed? Surge XT (https://surge-synthesizer.github.io) is a capable, free
+one. Its packaged installer installs for all users, putting the plugin at
+`/Library/Audio/Plug-Ins/VST3/Surge XT.vst3` and the factory patches at
+`/Library/Application Support/Surge XT/patches_factory`; a per-user install puts them under
+`~/Library` instead. Run `uv run init-workspace` after installing, or edit `poser.toml`
+yourself afterwards: activate the commented Surge XT tables, remove the Serum tables, point
+`songs/demo.yaml`'s sound names at yours, and run `uv run update-guide`.
 
 ## Start a workspace
 
@@ -22,7 +30,8 @@ switch the scaffold to it.
 uv init --bare --python 3.13 my-studio && cd my-studio
 uv add git+https://github.com/isnbh0/poser
 uv run init-workspace
-# edit poser.toml (and songs/demo.yaml's sound names, if you swapped instruments), then:
+# the workspace's poser.toml and songs/demo.yaml then describe the instruments found on this
+# machine; edit them only when something lives in an unusual place, then:
 uv run check-instruments
 uv run render-song songs/demo.yaml
 uv run analyze-song songs/demo.yaml
