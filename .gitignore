@@ -10,3 +10,4 @@ dist/
 /sounds/
 .local/
 
+.agent-workspace/
