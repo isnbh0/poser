@@ -123,15 +123,6 @@ The module must be importable in the workspace's environment, which poser's work
 share. In a uv workspace, make the workspace a package (`[tool.uv] package = true` in its
 `pyproject.toml`, with its modules under `src/`), or depend on a package holding the adapter.
 
-## Upgrading from `plugins.toml`
-
-Workspaces now use `poser.toml`, and sounds are named `<instrument>:<name>`: `Serum` becomes
-`serum`, and `Serum:<preset path>` becomes `serum:presets/<preset path>`. Saved sounds live in
-`sounds/<instrument>/<name>.json` without a `"plugin"` key; `list-sounds` names any file left in
-`sounds/` itself. Every stem renders again once, because sound keys now come from the instrument
-adapter. Old-layout files in a song's render directory (`<track>.wav`, `<track>.json`,
-`analysis/`, and `mix/`) are ignored and can be deleted; `history/` keeps its numbering.
-
 ## Developing poser
 
 `make check` runs format, lint, types, and the tests that need no plugins. `make test-real` loads
