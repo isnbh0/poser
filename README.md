@@ -1,5 +1,7 @@
 # poser
 
+[![check](https://github.com/isnbh0/poser/actions/workflows/check.yml/badge.svg)](https://github.com/isnbh0/poser/actions/workflows/check.yml)
+
 You write a song as code, in Python or YAML. poser renders each track through a real VST3 or
 Audio Unit instrument via [pedalboard](https://github.com/spotify/pedalboard), mixes the stems,
 and writes a JSON report and spectrograms, so that an agent, or a person, can revise the song.
@@ -43,6 +45,38 @@ uv run analyze-song songs/demo.yaml
 commands find the workspace by walking up from the working directory to the nearest
 `poser.toml`. Songs are named by their path in the workspace, and their results are kept under
 `renders/`.
+
+The demo is two Surge XT tracks; its mix and a spectrogram per track land under
+`renders/songs/demo.yaml/latest/`. Play `mix.wav` to hear the song, and see its shape at a
+glance:
+
+![the demo mix's spectrogram](docs/demo-spectrogram.png)
+
+The report that drives the next revision (here abridged):
+
+```json
+{
+  "song": "demo",
+  "run": 1,
+  "tracks": [
+    {
+      "name": "lead",
+      "status": "analyzed",
+      "gain_db": -3.0,
+      "peak_dbfs": -10.383672189873698,
+      "integrated_lufs": -18.651026814438925,
+      "clipped_samples": 0,
+      "defects": []
+    }
+  ],
+  "mix": {
+    "peak_dbfs": -10.05617342416529,
+    "integrated_lufs": -19.345337407632602,
+    "spectrogram": "renders/songs/demo.yaml/latest/images/[mix].png",
+    "defects": []
+  }
+}
+```
 
 ## Configuration
 
