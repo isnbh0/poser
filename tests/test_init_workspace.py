@@ -7,7 +7,12 @@ import pytest
 
 from poser.adapters.song_formats import SONG_FORMATS
 from poser.cli import init_workspace
-from poser.cli.init_workspace import GITIGNORE_RESOURCE, SCAFFOLD_FILES, WRITTEN_FILES
+from poser.cli.init_workspace import (
+    GITIGNORE_RESOURCE,
+    ONBOARDING_RESOURCE,
+    SCAFFOLD_FILES,
+    WRITTEN_FILES,
+)
 from poser.cli.workspace import Workspace, find_workspace
 from poser.compose import load
 from poser.core.guide import GENERATED, compose_guide
@@ -19,7 +24,7 @@ def resource(name: str) -> bytes:
 
 
 def test_every_scaffold_resource_exists() -> None:
-    for name in (*SCAFFOLD_FILES, GITIGNORE_RESOURCE):
+    for name in (*SCAFFOLD_FILES, GITIGNORE_RESOURCE, ONBOARDING_RESOURCE):
         assert (files("poser") / "scaffold" / name).is_file(), name
 
 
@@ -33,13 +38,16 @@ def test_init_creates_the_directory_and_writes_the_scaffold(
     for name, path in SCAFFOLD_FILES.items():
         assert (target / path).read_bytes() == resource(name), path
     assert (target / ".gitignore").read_bytes() == resource(GITIGNORE_RESOURCE)
-    assert capsys.readouterr().out.splitlines() == [
+    out = capsys.readouterr().out
+    lines = out.splitlines()
+    assert lines[:5] == [
         "AGENTS.md",
         "CLAUDE.md",
         "poser.toml",
         "songs/demo.yaml",
         "Edit poser.toml to match this machine's plugins, then run: uv run check-instruments",
     ]
+    assert out[len("\n".join(lines[:5])) + 1 :] == resource(ONBOARDING_RESOURCE).decode()
     assert not (target / "sounds").exists()
     assert not (target / "renders").exists()
 

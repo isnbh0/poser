@@ -22,6 +22,7 @@ SCAFFOLD_FILES = {
 # Composed from poser's guide and the new poser.toml, as `update-guide` does.
 WRITTEN_FILES = (GUIDE_NAME, *SCAFFOLD_FILES.values())
 GITIGNORE_RESOURCE = "gitignore"  # Merged into .gitignore, never refused.
+ONBOARDING_RESOURCE = "onboarding.txt"  # Printed after the closing instruction, never written.
 
 
 def scaffold_bytes(name: str) -> bytes:
@@ -92,4 +93,5 @@ def main(argv: list[str] | None = None) -> int:
     for target in WRITTEN_FILES:
         print(target)
     print(f"Edit {CONFIG_NAME} to match this machine's plugins, then run: uv run check-instruments")
+    print(scaffold_bytes(ONBOARDING_RESOURCE).decode(), end="")
     return EXIT_OK

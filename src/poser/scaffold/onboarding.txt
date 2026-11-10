@@ -1,0 +1,14 @@
+No synthesizer on this machine yet? Surge XT is a capable, free one. Download and install it
+from https://surge-synthesizer.github.io/downloads, then replace the Serum tables in poser.toml
+with this and run: uv run update-guide
+
+[instruments.surge]
+adapter = "pedalboard"
+path = "/Library/Audio/Plug-Ins/VST3/Surge XT.vst3"
+
+[instruments.surge.sources]
+presets = "/Library/Application Support/Surge XT/patches_factory"
+
+Its factory patches then name as surge:presets/<folder>/<patch>, exactly as uv run
+list-sounds prints them. Checked 2026-11 with Surge XT 1.3.4: poser reads .fxp preset
+files, and Surge XT's factory patches are .fxp.
