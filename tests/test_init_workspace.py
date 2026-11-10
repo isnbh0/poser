@@ -40,14 +40,18 @@ def test_init_creates_the_directory_and_writes_the_scaffold(
     assert (target / ".gitignore").read_bytes() == resource(GITIGNORE_RESOURCE)
     out = capsys.readouterr().out
     lines = out.splitlines()
-    assert lines[:5] == [
+    assert lines[:6] == [
         "AGENTS.md",
         "CLAUDE.md",
         "poser.toml",
         "songs/demo.yaml",
         "Edit poser.toml to match this machine's plugins, then run: uv run check-instruments",
+        (
+            "songs/demo.yaml names the scaffold's instrument; if you changed poser.toml, "
+            "point its sound names at yours (uv run list-sounds)"
+        ),
     ]
-    assert out[len("\n".join(lines[:5])) + 1 :] == resource(ONBOARDING_RESOURCE).decode()
+    assert out[len("\n".join(lines[:6])) + 1 :] == resource(ONBOARDING_RESOURCE).decode()
     assert not (target / "sounds").exists()
     assert not (target / "renders").exists()
 

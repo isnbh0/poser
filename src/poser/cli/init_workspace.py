@@ -93,5 +93,9 @@ def main(argv: list[str] | None = None) -> int:
     for target in WRITTEN_FILES:
         print(target)
     print(f"Edit {CONFIG_NAME} to match this machine's plugins, then run: uv run check-instruments")
+    print(
+        "songs/demo.yaml names the scaffold's instrument; if you changed poser.toml, "
+        "point its sound names at yours (uv run list-sounds)"
+    )
     print(scaffold_bytes(ONBOARDING_RESOURCE).decode(), end="")
     return EXIT_OK

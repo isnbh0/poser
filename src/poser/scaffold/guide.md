@@ -51,7 +51,7 @@ def build() -> Song:
     line = notes([degree(key, i) for i in (0, 2, 4, 7, 6, 4, 2, 0)], 0, 0.5, 100, step=0.5)
     lead = Track(
         name="lead",
-        sound="serum:presets/Leads/LD A Bit of Luck [SD]",
+        sound="serum",
         notes=humanize(line, seed=1, velocity=8),
         gain=-2,
         cc=(
@@ -61,13 +61,13 @@ def build() -> Song:
     )
     bass = Track(
         name="bass",
-        sound="serum:presets/Bass/BA Ampology [CFA]",
+        sound="serum",
         notes=notes([pitch("A2")], 0, 2, 100) + notes([pitch("F2")], 2, 2, 100),
         gain=-5,
     )
     pad = Track(
         name="pad",
-        sound="serum:presets/Pads/PD Celestial Light [SW]",
+        sound="serum",
         notes=notes(chord(pitch("A3"), "min"), 0, 4, 70),
         gain=-8,
     )
@@ -86,10 +86,10 @@ Music helpers, from `poser`; their docstrings give the parameters:
 
 ## Sounds
 
-A `sound` is `<instrument>` or `<instrument>:<name>`, such as
-`serum:presets/Bass/BA Ampology [CFA]`, exactly as `uv run list-sounds` prints it. A bare
-instrument name is that instrument's default sound, and each instrument has its own names. Choose
-presets by the role each track plays. This workspace's instruments are under "Instruments here".
+A `sound` is `<instrument>` or `<instrument>:<name>`, exactly as `uv run list-sounds` prints
+it. A bare instrument name is that instrument's default sound, and each instrument has its own
+names. Choose sounds by the role each track plays. This workspace's instruments are under
+"Instruments here".
 
 ## Rendering
 

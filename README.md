@@ -20,7 +20,7 @@ needs its own table in `poser.toml`.
 uv init --bare --python 3.13 my-studio && cd my-studio
 uv add git+https://github.com/isnbh0/poser
 uv run init-workspace
-# edit poser.toml, then:
+# edit poser.toml (and songs/demo.yaml's sound names, if you swapped instruments), then:
 uv run check-instruments
 uv run render-song songs/demo.yaml
 uv run analyze-song songs/demo.yaml
