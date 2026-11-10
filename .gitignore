@@ -8,3 +8,5 @@ dist/
 .agents/skill-configs/*/config.local.yaml
 /poser.toml
 /sounds/
+.local/
+
