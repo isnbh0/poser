@@ -23,6 +23,8 @@ SCAFFOLD_FILES = {
 WRITTEN_FILES = (GUIDE_NAME, *SCAFFOLD_FILES.values())
 GITIGNORE_RESOURCE = "gitignore"  # Merged into .gitignore, never refused.
 ONBOARDING_RESOURCE = "onboarding.txt"  # Printed after the closing instruction, never written.
+# The scaffold poser.toml's instrument path; when it is missing, the free-synth pointer prints.
+SCAFFOLD_PLUGIN_PATH = Path("/Library/Audio/Plug-Ins/VST3/Serum.vst3")
 
 
 def scaffold_bytes(name: str) -> bytes:
@@ -97,5 +99,6 @@ def main(argv: list[str] | None = None) -> int:
         "songs/demo.yaml names the scaffold's instrument; if you changed poser.toml, "
         "point its sound names at yours (uv run list-sounds)"
     )
-    print(scaffold_bytes(ONBOARDING_RESOURCE).decode(), end="")
+    if not SCAFFOLD_PLUGIN_PATH.exists():
+        print(scaffold_bytes(ONBOARDING_RESOURCE).decode(), end="")
     return EXIT_OK

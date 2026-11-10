@@ -52,6 +52,18 @@ def test_no_instruments_leaves_the_heading() -> None:
     assert compose_guide(CORE, [], []).endswith(f"Write songs.\n\n{INSTRUMENTS_HEADING}\n")
 
 
+def test_the_first_instrument_fills_the_core_placeholder() -> None:
+    guide = compose_guide('sound="{first_instrument}"\n', [SERUM], [])
+
+    assert 'sound="serum"' in guide
+
+
+def test_no_instruments_leaves_the_placeholder() -> None:
+    guide = compose_guide('sound="{first_instrument}"\n', [], [])
+
+    assert 'sound="{first_instrument}"' in guide
+
+
 @pytest.mark.parametrize("part", ["Store\n", "# Store\n", "### Store\n", ""])
 def test_a_part_without_a_section_heading_is_refused(part: str) -> None:
     with pytest.raises(ValueError, match="must start with a '## ' heading"):

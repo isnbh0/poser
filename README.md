@@ -12,7 +12,9 @@ and writes a JSON report and spectrograms, so that an agent, or a person, can re
 - At least one VST3 or Audio Unit instrument
 
 The scaffolded workspace is written for Xfer Serum, a commercial synth. Any other instrument
-needs its own table in `poser.toml`.
+needs its own table in `poser.toml`. No synthesizer installed? Surge XT
+(https://surge-synthesizer.github.io) is a capable, free one; `init-workspace` explains how to
+switch the scaffold to it.
 
 ## Start a workspace
 

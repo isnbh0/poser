@@ -1,5 +1,6 @@
 """Tests for `init-workspace`, which writes the scaffold into a new workspace."""
 
+import tomllib
 from importlib.resources import files
 from pathlib import Path
 
@@ -29,9 +30,12 @@ def test_every_scaffold_resource_exists() -> None:
 
 
 def test_init_creates_the_directory_and_writes_the_scaffold(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     target = tmp_path / "new"
+    monkeypatch.setattr(init_workspace, "SCAFFOLD_PLUGIN_PATH", target / "Serum.vst3")
 
     assert init_workspace.main([str(target)]) == init_workspace.EXIT_OK
 
@@ -60,6 +64,39 @@ def test_init_defaults_to_the_working_directory(tmp_path: Path) -> None:
     assert init_workspace.main([]) == init_workspace.EXIT_OK
 
     assert (tmp_path / "songs" / "demo.yaml").is_file()
+
+
+def test_init_prints_the_free_synth_pointer_without_the_plugin(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(init_workspace, "SCAFFOLD_PLUGIN_PATH", tmp_path / "Serum.vst3")
+
+    assert init_workspace.main([str(tmp_path)]) == init_workspace.EXIT_OK
+
+    assert capsys.readouterr().out.endswith(resource(ONBOARDING_RESOURCE).decode())
+
+
+def test_init_prints_no_pointer_with_the_plugin(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "Serum.vst3").write_bytes(b"")
+    monkeypatch.setattr(init_workspace, "SCAFFOLD_PLUGIN_PATH", tmp_path / "Serum.vst3")
+
+    assert init_workspace.main([str(tmp_path)]) == init_workspace.EXIT_OK
+
+    out = capsys.readouterr().out
+    assert len(out.splitlines()) == 6
+    assert "Surge XT" not in out
+
+
+def test_the_scaffold_plugin_path_matches_the_scaffold_config() -> None:
+    config = tomllib.loads(resource("poser.toml").decode())
+
+    assert Path(config["instruments"]["serum"]["path"]) == init_workspace.SCAFFOLD_PLUGIN_PATH
 
 
 def test_init_merges_an_existing_gitignore(tmp_path: Path) -> None:

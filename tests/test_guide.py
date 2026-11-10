@@ -13,6 +13,7 @@ import poser
 from poser.adapters.song_formats import SONG_FORMATS
 from poser.compose import read_config
 from poser.core import music, report, song
+from poser.core.guide import FIRST_INSTRUMENT_PLACEHOLDER
 from poser.core.loading import load_song
 from poser.core.ports import ResolvedSound
 from poser.core.song import MAX_SONG_S, Song, SongError, parse_song
@@ -76,10 +77,11 @@ def first_column(heading: str) -> list[str]:
 
 def python_songs(tmp_path: Path) -> list[Song]:
     songs = []
+    first = read_config(SCAFFOLD_DIR / "poser.toml").instruments[0].name
     for index, body in enumerate(blocks("python")):
         path = tmp_path / f"example{index}" / "example.py"
         path.parent.mkdir()
-        path.write_text(body)
+        path.write_text(body.replace(FIRST_INSTRUMENT_PLACEHOLDER, f'"{first}"'))
         songs.append(load_song(path, SONG_FORMATS))
     return songs
 

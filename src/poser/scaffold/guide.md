@@ -51,7 +51,7 @@ def build() -> Song:
     line = notes([degree(key, i) for i in (0, 2, 4, 7, 6, 4, 2, 0)], 0, 0.5, 100, step=0.5)
     lead = Track(
         name="lead",
-        sound="serum",
+        sound="{first_instrument}",
         notes=humanize(line, seed=1, velocity=8),
         gain=-2,
         cc=(
@@ -61,13 +61,13 @@ def build() -> Song:
     )
     bass = Track(
         name="bass",
-        sound="serum",
+        sound="{first_instrument}",
         notes=notes([pitch("A2")], 0, 2, 100) + notes([pitch("F2")], 2, 2, 100),
         gain=-5,
     )
     pad = Track(
         name="pad",
-        sound="serum",
+        sound="{first_instrument}",
         notes=notes(chord(pitch("A3"), "min"), 0, 4, 70),
         gain=-8,
     )
@@ -90,6 +90,9 @@ A `sound` is `<instrument>` or `<instrument>:<name>`, exactly as `uv run list-so
 it. A bare instrument name is that instrument's default sound, and each instrument has its own
 names. Choose sounds by the role each track plays. This workspace's instruments are under
 "Instruments here".
+
+`list-sounds` exits 0 when every sound is listed (notes about files it cannot read may print),
+1 when a source has a problem its message names, and 2 when `poser.toml` could not be read.
 
 ## Rendering
 
