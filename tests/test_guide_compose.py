@@ -2,7 +2,13 @@
 
 import pytest
 
-from poser.core.guide import GENERATED, INSTRUMENTS_HEADING, InstrumentNote, compose_guide
+from poser.core.guide import (
+    FIRST_INSTRUMENT_PLACEHOLDER,
+    GENERATED,
+    INSTRUMENTS_HEADING,
+    InstrumentNote,
+    compose_guide,
+)
 from poser.core.names import Identifier
 
 CORE = "# Composing\n\nWrite songs.\n\n"
@@ -56,6 +62,14 @@ def test_the_first_instrument_fills_the_core_placeholder() -> None:
     guide = compose_guide('sound="{first_instrument}"\n', [SERUM], [])
 
     assert 'sound="serum"' in guide
+
+
+def test_the_placeholder_takes_the_first_instrument_in_config_order() -> None:
+    guide = compose_guide('sound="{first_instrument}"\n', [PLAIN, SERUM], [])
+
+    assert 'sound="drums"' in guide
+    assert 'sound="serum"' not in guide
+    assert FIRST_INSTRUMENT_PLACEHOLDER not in guide
 
 
 def test_no_instruments_leaves_the_placeholder() -> None:
