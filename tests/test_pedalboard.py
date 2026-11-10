@@ -374,6 +374,39 @@ def test_resolve_reports_an_unknown_name(tmp_path: Path) -> None:
     assert failure.detail == "'serum' has no sound 'presets/bass/Deep'"
 
 
+def test_resolve_appends_the_ignored_note(tmp_path: Path) -> None:
+    write(tmp_path / "presets" / "Deep.fxp", fxp_bytes(b"chunk"))
+    write(tmp_path / "presets" / "Other.vital", b"x")
+    failure = failed(make_instrument(tmp_path), "presets/Missing")
+    assert failure.status is SoundFailureStatus.UNKNOWN_SOUND
+    assert failure.detail == (
+        "'serum' has no sound 'presets/Missing'; "
+        "source 'presets' holds 1 .vital poser cannot read (it reads: .fxp, .json)"
+    )
+
+
+def test_resolve_prefers_the_ambiguity_over_the_note(tmp_path: Path) -> None:
+    fxp = write(tmp_path / "presets" / "X.fxp", fxp_bytes(b"chunk"))
+    saved = write_saved(tmp_path / "presets" / "X.json")
+    write(tmp_path / "presets" / "Other.vital", b"x")
+    failure = failed(make_instrument(tmp_path), "presets/X")
+    assert failure.status is SoundFailureStatus.UNKNOWN_SOUND
+    assert failure.detail == (
+        f"'serum' has no sound 'presets/X'; presets/X is ambiguous: {fxp} and {saved}"
+    )
+
+
+def test_resolve_unknown_with_odd_source_segment_stays_unknown(tmp_path: Path) -> None:
+    (tmp_path / "presets").mkdir()
+    failure = failed(make_instrument(tmp_path), "Unknown Bank/Patch")
+    assert failure.status is SoundFailureStatus.UNKNOWN_SOUND
+    assert failure.detail == "'serum' has no sound 'Unknown Bank/Patch'"
+    write(tmp_path / "presets" / "Other.vital", b"x")
+    failure = failed(make_instrument(tmp_path), "Unknown Bank/Patch")
+    assert failure.status is SoundFailureStatus.UNKNOWN_SOUND
+    assert failure.detail == "'serum' has no sound 'Unknown Bank/Patch'"
+
+
 def test_resolve_reports_an_ambiguous_name(tmp_path: Path) -> None:
     fxp = write(tmp_path / "presets" / "X.fxp", fxp_bytes(b"chunk"))
     saved = write_saved(tmp_path / "presets" / "X.json")
@@ -525,6 +558,43 @@ def test_sounds_reports_a_missing_source(tmp_path: Path) -> None:
     assert listing.problems == (
         f"source 'presets' directory {tmp_path / 'presets'} does not exist",
     )
+
+
+def test_sounds_notes_unclaimed_files_without_failing(tmp_path: Path) -> None:
+    write(tmp_path / "presets" / "Top.fxp", fxp_bytes(b"x"))
+    write(tmp_path / "presets" / "Notes.txt", b"notes")
+    listing = make_instrument(tmp_path).sounds()
+    assert [str(entry.ref) for entry in listing.entries] == ["serum", "serum:presets/Top"]
+    assert listing.notes == (
+        "source 'presets' holds 1 .txt poser cannot read (it reads: .fxp, .json)",
+    )
+    assert listing.problems == ()
+
+
+def test_sounds_of_clean_sources_carries_no_notes(tmp_path: Path) -> None:
+    write(tmp_path / "presets" / "Top.fxp", fxp_bytes(b"x"))
+    write_saved(saved_dir(tmp_path) / "pad.json")
+    listing = make_instrument(tmp_path).sounds()
+    assert listing.notes == ()
+
+
+def test_sounds_keeps_a_bad_saved_sound_in_problems_not_notes(tmp_path: Path) -> None:
+    (tmp_path / "presets").mkdir()
+    write(saved_dir(tmp_path) / "bad.json", b'{"description": "x"}')
+    listing = make_instrument(tmp_path).sounds()
+    assert listing.notes == ()
+    assert listing.problems == ("saved/bad: must hold exactly the keys ['description', 'state']",)
+
+
+def test_sounds_carries_a_note_and_a_problem_together(tmp_path: Path) -> None:
+    write(tmp_path / "presets" / "Notes.txt", b"notes")
+    write_saved(saved_dir(tmp_path) / "pad.json")
+    write(saved_dir(tmp_path) / "bad.json", b'{"description": "x"}')
+    listing = make_instrument(tmp_path).sounds()
+    assert listing.notes == (
+        "source 'presets' holds 1 .txt poser cannot read (it reads: .fxp, .json)",
+    )
+    assert listing.problems == ("saved/bad: must hold exactly the keys ['description', 'state']",)
 
 
 def counting(monkeypatch: pytest.MonkeyPatch, name: str) -> list[int]:

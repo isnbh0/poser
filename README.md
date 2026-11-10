@@ -51,7 +51,9 @@ A song names `serum` for the default patch, `serum:presets/<path without suffix>
 in a source, and `serum:saved/<name>` for a sound saved with `save-sound`. The `pedalboard`
 adapter takes `path`, `plugin_name` for a bundle holding several plugins, `sources`, and
 `formats`, the preset formats it reads (`fxp`, and `saved` for saved sounds, by default).
-Relative paths resolve against the directory holding `poser.toml`.
+Relative paths resolve against the directory holding `poser.toml`. By default a source's presets
+are `.fxp` files; an instrument's `formats` option names the preset formats it reads, and
+`list-sounds` notes the files in a source it cannot use.
 
 An optional `[adapters]` table chooses the adapter for every other part of poser. Each key takes
 a built-in name, an import path, or a table with `use` and options:

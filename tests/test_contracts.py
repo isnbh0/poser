@@ -113,7 +113,7 @@ class UnknownListedInstrument(FakeInstrument):
     def sounds(self) -> SoundListing:
         listing = super().sounds()
         unknown = SoundEntry(SoundRef(self.name, "gone"), "a sound that does not resolve")
-        return SoundListing((*listing.entries, unknown), listing.problems)
+        return SoundListing((*listing.entries, unknown), listing.problems, listing.notes)
 
 
 class ReplacingInstrument(FakeInstrument):

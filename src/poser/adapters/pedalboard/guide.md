@@ -7,6 +7,8 @@ A Pedalboard instrument plays a VST3 or Audio Unit plugin. A track names one of 
 - A bare instrument name, such as `synth`, is the plugin's default patch.
 - `<source>` is a preset folder named in the instrument's options, and `<path>` is a file's path
   inside it, with `/` between folders and without the file's suffix. Case matters.
+- By default a source holds `.fxp` preset files. Files no configured format claims stay
+  unnamed, and `list-sounds` reports them in a note.
 - Saved sounds are under `saved/`, such as `synth:saved/warm-pad`.
 
 `uv run list-sounds` prints every name a song can use, with a description of each. Choose sounds

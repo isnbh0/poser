@@ -17,6 +17,8 @@ from poser.adapters.pedalboard.formats import (
     SavedFormat,
 )
 from poser.adapters.pedalboard.sources import (
+    SourceScan,
+    combine,
     describe,
     saved_dir,
     scan,
@@ -67,12 +69,13 @@ def test_walk_finds_nested_files_and_skips_others(tmp_path: Path) -> None:
     top = write(root / "Top.fxp")
     write(root / "Bass" / ".Hidden.fxp")
     write(root / ".cache" / "Inside.fxp")
-    write(root / "Bass" / "Notes.txt")
+    notes = write(root / "Bass" / "Notes.txt")
     upper = write(root / "Pads" / "Wide.FXP")
     inner = write(root / "Dir.fxp" / "inner.fxp")
 
-    assert walk(root, {FXP}) == {
+    assert walk(root) == {
         "Bass/Deep.fxp": deep,
+        "Bass/Notes.txt": notes,
         "Top.fxp": top,
         "Pads/Wide.FXP": upper,
         "Dir.fxp/inner.fxp": inner,
@@ -86,7 +89,7 @@ def test_walk_follows_symlinked_folders_without_looping(tmp_path: Path) -> None:
     (root / "Pack").symlink_to(pack)
     (pack / "loop").symlink_to(root)
 
-    assert list(walk(root, {FXP})) == ["Pack/Lead.fxp"]
+    assert list(walk(root)) == ["Pack/Lead.fxp"]
 
 
 def test_walk_raises_for_an_unreadable_folder(tmp_path: Path) -> None:
@@ -95,7 +98,7 @@ def test_walk_raises_for_an_unreadable_folder(tmp_path: Path) -> None:
     locked.chmod(0)
     try:
         with pytest.raises(PresetError, match="cannot read presets folder"):
-            walk(tmp_path / "presets", {FXP})
+            walk(tmp_path / "presets")
     finally:
         locked.chmod(0o755)
 
@@ -117,6 +120,48 @@ def test_scan_names_files_by_source_and_path_in_exact_case(tmp_path: Path) -> No
     assert "presets/Bass/Deep.fxp" not in found.files
     assert found.problems == ()
     assert found.unavailable == frozenset()
+    assert found.ignored == {}
+
+
+def test_scan_source_notes_unclaimed_files(tmp_path: Path) -> None:
+    root = tmp_path / "presets"
+    write(root / "Deep.fxp", fxp_bytes(b"x"))
+    write(root / "Notes.txt")
+    write(root / "Sound.vital")
+    found = scan(config(tmp_path, presets=root), tmp_path / "sounds", FORMATS)
+
+    assert list(found.files) == ["presets/Deep"]
+    assert found.ignored == {
+        Identifier("presets"): "source 'presets' holds 1 .txt, 1 .vital poser cannot read"
+        " (it reads: .fxp, .json)"
+    }
+    assert found.problems == ()
+
+
+def test_scan_source_without_strays_has_no_notes(tmp_path: Path) -> None:
+    root = tmp_path / "presets"
+    write(root / "Bass" / "Deep.fxp", fxp_bytes(b"x"))
+    write_saved(saved_dir(config(tmp_path), tmp_path / "sounds") / "pad.json")
+    found = scan(config(tmp_path, presets=root), tmp_path / "sounds", FORMATS)
+
+    assert found.files
+    assert found.ignored == {}
+
+
+def test_combine_merges_ignored() -> None:
+    first = SourceScan({}, (), frozenset(), {}, {}, {Identifier("presets"): "presets hold strays"})
+    second = SourceScan({}, (), frozenset(), {}, {}, {Identifier("bank"): "bank holds strays"})
+
+    merged = combine(first, second)
+
+    assert merged.ignored == {
+        Identifier("presets"): "presets hold strays",
+        Identifier("bank"): "bank holds strays",
+    }
+    assert combine(second, first).ignored == {
+        Identifier("presets"): "presets hold strays",
+        Identifier("bank"): "bank holds strays",
+    }
 
 
 def test_scan_reports_a_name_two_formats_share(tmp_path: Path) -> None:

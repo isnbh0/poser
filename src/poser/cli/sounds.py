@@ -59,10 +59,12 @@ def list_main(argv: list[str] | None = None) -> int:
 
     entries: list[SoundEntry] = []
     problems: list[str] = []
+    notes: list[str] = []
     for name, instrument in instruments.items():
         listing = instrument.sounds()
         entries += listing.entries
         problems += [f"{name}: {problem}" for problem in listing.problems]
+        notes += [f"note: {name}: {note}" for note in listing.notes]
     problems += old_layout_problems(Path(args.sounds_dir))
 
     if args.json:
@@ -72,6 +74,8 @@ def list_main(argv: list[str] | None = None) -> int:
         rows: list[tuple[str, ...]] = [("SOUND", "DESCRIPTION")]
         rows += [(str(entry.ref), entry.description) for entry in entries]
         print("\n".join(align_rows(rows)))
+    for note in notes:
+        fail(LIST_PROG, note)
     for problem in problems:
         fail(LIST_PROG, problem)
     return EXIT_SOME_FAILED if problems else EXIT_ALL_PASS

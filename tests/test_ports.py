@@ -38,6 +38,12 @@ def test_types_refuse_what_their_rules_forbid() -> None:
         ResolvedSound(REF, "", Json.of(None))
     with pytest.raises(ValueError, match="detail"):
         SoundFailure(SoundFailureStatus.LOAD_FAILED, "")
+    with pytest.raises(ValueError, match="notes"):
+        SoundListing(
+            (SoundEntry(REF, "the default sound"),),
+            (),
+            (0,),  # ty: ignore[invalid-argument-type]
+        )
     with pytest.raises(ValueError, match="detail"):
         RenderFailure(RenderFailureStatus.CRASHED, "")
     with pytest.raises(ValueError, match="detail"):
@@ -78,7 +84,8 @@ def test_failure_types_take_only_their_own_status_family() -> None:
 def test_collection_fields_are_tuples_that_later_changes_cannot_reach() -> None:
     entries = [SoundEntry(REF, "the default sound")]
     problems = ["broken.fxp could not be read"]
-    listing = SoundListing(entries, problems)  # ty: ignore[invalid-argument-type]
+    notes = ["presets hold 1 .txt poser cannot read"]
+    listing = SoundListing(entries, problems, notes)  # ty: ignore[invalid-argument-type]
     defects = [Identifier("loud")]
     result = SectionResult(Json.of(None), defects)  # ty: ignore[invalid-argument-type]
     sections = [FakeSection("one")]
@@ -98,16 +105,24 @@ def test_collection_fields_are_tuples_that_later_changes_cannot_reach() -> None:
 
     entries.append(SoundEntry(SoundRef(FAKE, "pad"), "a pad"))
     problems.clear()
+    notes.append("more strays appeared")
     defects.append(Identifier("quiet"))
     sections.append(FakeSection("two"))
     peaks.append(-8.0)
 
     assert listing.entries == (SoundEntry(REF, "the default sound"),)
     assert listing.problems == ("broken.fxp could not be read",)
+    assert listing.notes == ("presets hold 1 .txt poser cannot read",)
     assert result.defects == (Identifier("loud"),)
     assert [section.name for section in tools.sections] == ["one"]
     assert check.note_peaks_dbfs == (-6.0, -7.0)
-    for value in (listing.entries, listing.problems, result.defects, tools.sections):
+    for value in (
+        listing.entries,
+        listing.problems,
+        listing.notes,
+        result.defects,
+        tools.sections,
+    ):
         assert isinstance(value, tuple)
     assert isinstance(check.note_peaks_dbfs, tuple)
 

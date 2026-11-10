@@ -6,12 +6,13 @@ presets; the saved source holds the sounds `save-sound` keeps, directly in
 `<sounds dir>/<instrument>/`.
 
 Lookups go through a scan, never `Path.exists`, because a case-insensitive volume would match a
-name that differs in case.
+name that differs in case. A configured source's files that no configured format claims are
+reported per source, never silently skipped.
 """
 
 import os
-from collections import defaultdict
-from collections.abc import Collection, Mapping
+from collections import Counter, defaultdict
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -33,6 +34,8 @@ class SourceScan:
     # The problem behind each source in `unavailable`, and each name left out of `files`.
     source_problems: Mapping[Identifier, str] = field(default_factory=dict)
     name_problems: Mapping[str, str] = field(default_factory=dict)
+    # Per source, the sentence naming the files no configured format claims.
+    ignored: Mapping[Identifier, str] = field(default_factory=dict)
 
 
 def combine(*scans: SourceScan) -> SourceScan:
@@ -43,12 +46,13 @@ def combine(*scans: SourceScan) -> SourceScan:
         unavailable=frozenset().union(*(scan.unavailable for scan in scans)),
         source_problems={key: text for scan in scans for key, text in scan.source_problems.items()},
         name_problems={key: text for scan in scans for key, text in scan.name_problems.items()},
+        ignored={key: text for scan in scans for key, text in scan.ignored.items()},
     )
 
 
-def walk(directory: Path, suffixes: Collection[Suffix]) -> dict[str, Path]:
-    """Map the relative POSIX path of every file under `directory` whose suffix, ignoring case,
-    is in `suffixes` to its path. Raises PresetError for a folder it cannot read.
+def walk(directory: Path) -> dict[str, Path]:
+    """Map the relative POSIX path of every non-hidden file under `directory` to its path; callers
+    bucket the files by suffix. Raises PresetError for a folder it cannot read.
 
     Symlinked folders count, since a user may link a preset pack in, and link loops stop. Hidden
     files and folders are skipped.
@@ -68,7 +72,7 @@ def walk(directory: Path, suffixes: Collection[Suffix]) -> dict[str, Path]:
         dirs[:] = sorted(d for d in dirs if not d.startswith("."))
         for name in sorted(names):
             path = Path(folder, name)
-            if name.startswith(".") or path.suffix.lower() not in suffixes or not path.is_file():
+            if name.startswith(".") or not path.is_file():
                 continue
             files[path.relative_to(directory).as_posix()] = path
     return files
@@ -79,10 +83,30 @@ def scan_source(
 ) -> SourceScan:
     """Scan one source's directory, which must exist, with `formats`."""
     try:
-        found = walk(directory, set(formats))
+        found = walk(directory)
     except PresetError as error:
         return unavailable_source(source, str(error))
-    return name_files(source, found, formats)
+    readable = {str(fmt.suffix) for fmt in formats.values()}
+    claimed = {rel: path for rel, path in found.items() if path.suffix.lower() in readable}
+    scan = name_files(source, claimed, formats)
+    counts: Counter[str] = Counter(
+        path.suffix.lower() or "(no suffix)" for rel, path in found.items() if rel not in claimed
+    )
+    if not counts:
+        return scan
+    listed = ", ".join(f"{n} {sfx}" for sfx, n in sorted(counts.items()))
+    sentence = (
+        f"source {source!r} holds {listed} poser cannot read"
+        f" (it reads: {', '.join(sorted(readable))})"
+    )
+    return SourceScan(
+        scan.files,
+        scan.problems,
+        scan.unavailable,
+        scan.source_problems,
+        scan.name_problems,
+        {source: sentence},
+    )
 
 
 def unavailable_source(source: Identifier, problem: str) -> SourceScan:

@@ -164,7 +164,8 @@ class PedalboardInstrument:
                 entries.append(SoundEntry(self._ref(name), describe(name, path, fmt)))
             except PresetError as error:
                 problems.append(f"{name}: {error}")
-        return SoundListing(tuple(entries), tuple(problems))
+        notes = tuple(scan.ignored[key] for key in sorted(scan.ignored))
+        return SoundListing(tuple(entries), tuple(problems), notes)
 
     def resolve(self, ref: SoundRef) -> ResolvedSound | SoundFailure:
         state: bytes | None = None
@@ -180,6 +181,8 @@ class PedalboardInstrument:
                 detail = f"{self._config.name!r} has no sound {ref.name!r}"
                 if problem := scan.name_problems.get(ref.name):
                     detail = f"{detail}; {problem}"
+                elif note := scan.ignored.get(source):
+                    detail = f"{detail}; {note}"
                 return SoundFailure(SoundFailureStatus.UNKNOWN_SOUND, detail)
             path, fmt = found
             try:

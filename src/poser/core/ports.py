@@ -180,12 +180,16 @@ class SoundListing:
 
     entries: tuple[SoundEntry, ...]  # Sounds a song can name, the default sound first.
     problems: tuple[str, ...]  # Files or sources that could not be listed.
+    # Files the sounds' sources hold that poser cannot read.
+    notes: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         entries = _tuple_of("SoundListing", "entries", self.entries, SoundEntry)
         object.__setattr__(self, "entries", entries)
         problems = _tuple_of("SoundListing", "problems", self.problems, str)
         object.__setattr__(self, "problems", problems)
+        notes = _tuple_of("SoundListing", "notes", self.notes, str)
+        object.__setattr__(self, "notes", notes)
 
 
 @dataclass(frozen=True)

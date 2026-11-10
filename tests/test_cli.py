@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 import pytest
+from helpers import fxp_bytes
 from workspaces import CommandWorkspace, make_workspace, write_script_song, write_song
 
 from poser.adapters.wav import WavAudioFiles
@@ -406,6 +407,73 @@ def test_list_json(workspace: CommandWorkspace, capsys: pytest.CaptureFixture[st
         {"sound": "synth:lead", "description": "lead preset"},
         {"sound": "synth:pad", "description": "pad preset"},
     ]
+
+
+PEDALBOARD_CONFIG = """
+[instruments.serum]
+adapter = "pedalboard"
+path = "/Library/Audio/Plug-Ins/VST3/Serum.vst3"
+
+[instruments.serum.sources]
+presets = "presets"
+"""
+
+
+def pedalboard_workspace(tmp_path: Path) -> None:
+    """A workspace on the pedalboard adapter, whose sounds scan needs no plugin."""
+    (tmp_path / "presets").mkdir()
+    (tmp_path / "poser.toml").write_text(PEDALBOARD_CONFIG.lstrip())
+
+
+def test_list_notes_unclaimed_source_files_without_failing(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    pedalboard_workspace(tmp_path)
+    (tmp_path / "presets" / "One.fxp").write_bytes(fxp_bytes(b"x"))
+    (tmp_path / "presets" / "Notes.txt").write_bytes(b"stray")
+
+    assert sounds.list_main([]) == EXIT_ALL_PASS
+
+    rows = [
+        ("SOUND", "DESCRIPTION"),
+        ("serum", "default patch"),
+        ("serum:presets/One", "preset"),
+    ]
+    note = "list-sounds: note: serum: source 'presets' holds 1 .txt poser cannot read"
+    captured = capsys.readouterr()
+    assert captured.out == "\n".join(align_rows(rows)) + "\n"
+    assert note in captured.err
+
+    assert sounds.list_main(["--json"]) == EXIT_ALL_PASS
+
+    captured = capsys.readouterr()
+    assert json.loads(captured.out) == [
+        {"sound": "serum", "description": "default patch"},
+        {"sound": "serum:presets/One", "description": "preset"},
+    ]
+    assert note in captured.err
+
+
+def test_list_notes_do_not_hide_a_problem(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    pedalboard_workspace(tmp_path)
+    (tmp_path / "presets" / "One.fxp").write_bytes(fxp_bytes(b"x"))
+    (tmp_path / "presets" / "Notes.txt").write_bytes(b"stray")
+    (tmp_path / "sounds" / "serum").mkdir(parents=True)
+    (tmp_path / "sounds" / "serum" / "bad.json").write_bytes(b'{"description": "x"}')
+
+    assert sounds.list_main([]) == EXIT_SOME_FAILED
+
+    captured = capsys.readouterr()
+    assert "SOUND" in captured.out
+    assert (
+        "list-sounds: serum: saved/bad: must hold exactly the keys ['description', 'state']"
+        in captured.err
+    )
+    assert (
+        "list-sounds: note: serum: source 'presets' holds 1 .txt poser cannot read" in captured.err
+    )
 
 
 def test_list_reports_one_instrument_s_problem_and_the_old_layout(
