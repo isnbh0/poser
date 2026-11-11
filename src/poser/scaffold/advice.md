@@ -12,5 +12,6 @@ verified draft when the limitation is disclosed.
 
 Compare a revision against an earlier record, and treat a band or bar difference under 1 dB as
 possible render noise. Compare relative band levels between nodes and versions, not against
-an absolute target. Keep the mix peak at or below -1 dBFS by lowering track `gain`.
+an absolute target. Keep the mix peak at or below -1 dBFS by lowering track `gain` for a `Song`,
+or the appropriate leaf-node `gain_db` for a `Graph`; upstream node faders do not scale outgoing audio.
 For `upstream_failed`, fix the named upstream and render again; for `stale_stem`, render again.
