@@ -20,10 +20,10 @@ from poser.core.report import (
     Levels,
     Measurements,
     MixReport,
+    NodeReport,
     Report,
     SectionData,
     SectionError,
-    TrackReport,
 )
 from poser.core.song import Note, Song, SongError, Track
 from poser.core.sounds import SoundEntry, SoundRef, parse_sound_ref
@@ -64,12 +64,14 @@ def _mix(**changes: object) -> dict[str, object]:
     return {**fields, **changes}
 
 
-def _track_report(**changes: object) -> dict[str, object]:
+def _node_report(**changes: object) -> dict[str, object]:
     fields: dict[str, object] = {
         "name": "lead",
         "status": AnalysisStatus.ANALYZED,
-        "track_key": KEY,
+        "node_key": KEY,
         "sound_key": KEY,
+        "kind": "track",
+        "upstream": (),
     }
     return {**fields, **changes}
 
@@ -374,12 +376,15 @@ def test_section_data_and_error() -> None:
     _bad(SectionError, 1, None)
 
 
-def test_track_report() -> None:
-    report = _make(TrackReport, **_track_report(defects=[Defect.SILENT]))
+def test_node_report() -> None:
+    report = _make(NodeReport, **_node_report(defects=[Defect.SILENT]))
     assert report.defects == (Defect.SILENT,)
     assert dict(report.sections) == {}
     for changes in (
         {"status": "analyzed"},
+        {"kind": "magnet"},
+        {"upstream": ("lead", 1)},
+        {"upstream": "lead"},
         {"defects": (AnalysisStatus.ANALYZED,)},
         {"defects": ("silent",)},
         {"gain_db": math.nan},
@@ -390,7 +395,7 @@ def test_track_report() -> None:
         {"sections": {"loudness": "ok"}},
         {"sections": {"bad name": SectionError(1, "failed")}},
     ):
-        _bad(TrackReport, **_track_report(**changes))
+        _bad(NodeReport, **_node_report(**changes))
 
 
 def test_mix_report() -> None:
@@ -408,12 +413,12 @@ def test_mix_report() -> None:
 
 
 def test_report() -> None:
-    track = _make(TrackReport, **_track_report())
-    report = _make(Report, "demo", 1, KEY, [track], None)
-    assert report.tracks == (track,)
-    _bad(Report, "demo", 1, KEY, [track, "lead"], None)
+    node = _make(NodeReport, **_node_report())
+    report = _make(Report, "demo", 1, KEY, [node], None)
+    assert report.nodes == (node,)
+    _bad(Report, "demo", 1, KEY, [node, "lead"], None)
     _bad(Report, "demo", 1, KEY, "lead", None)
-    _bad(Report, "demo", 1, KEY, (track,), {"path": "mix.wav"})
+    _bad(Report, "demo", 1, KEY, (node,), {"path": "mix.wav"})
 
 
 def test_collections_are_immutable_copies() -> None:
@@ -430,29 +435,29 @@ def test_collections_are_immutable_copies() -> None:
 
     sections = {Identifier("loudness"): SectionError(1, "failed")}
     defects = [Defect.SILENT]
-    track = _make(
-        TrackReport,
-        **_track_report(bands_db=bands, bar_dbfs=bars, defects=defects, sections=sections),
+    node = _make(
+        NodeReport,
+        **_node_report(bands_db=bands, bar_dbfs=bars, defects=defects, sections=sections),
     )
     mix = _make(MixReport, **_mix(defects=defects, sections=sections))
-    tracks = [track]
-    report = _make(Report, "demo", 1, KEY, tracks, mix)
-    snapshot = (dict(track.bands_db or {}), track.bar_dbfs, dict(track.sections))
+    nodes = [node]
+    report = _make(Report, "demo", 1, KEY, nodes, mix)
+    snapshot = (dict(node.bands_db or {}), node.bar_dbfs, dict(node.sections))
     sections[Identifier("other")] = SectionError(1, "failed")
     defects.append(Defect.CLIPPING)
     bands["bass"] = 0.0
-    tracks.append(track)
-    assert (dict(track.bands_db or {}), track.bar_dbfs, dict(track.sections)) == snapshot
-    assert track.defects == (Defect.SILENT,)
+    nodes.append(node)
+    assert (dict(node.bands_db or {}), node.bar_dbfs, dict(node.sections)) == snapshot
+    assert node.defects == (Defect.SILENT,)
     assert mix.defects == (Defect.SILENT,)
     assert list(mix.sections) == ["loudness"]
-    assert report.tracks == (track,)
-    for value in (track, mix):
+    assert report.nodes == (node,)
+    for value in (node, mix):
         assert isinstance(value.defects, tuple)
         assert isinstance(value.sections, MappingProxyType)
         with pytest.raises(TypeError):
             value.sections["x"] = SectionError(1, "failed")  # ty: ignore[invalid-assignment]
-    assert isinstance(track.bands_db, MappingProxyType)
+    assert isinstance(node.bands_db, MappingProxyType)
     assert isinstance(mix.bands_db, MappingProxyType)
     with pytest.raises(TypeError):
         mix.bands_db["sub"] = 0.0  # ty: ignore[invalid-assignment]

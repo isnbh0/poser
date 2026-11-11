@@ -1,8 +1,8 @@
 """Analysis: mixing a song's current stems, measuring them, and keeping the report as a record.
 
-Stems come from the song's track names, never from a listing, so a stem left by a removed or
-renamed track cannot enter the mix. Every analysis that runs to the end keeps a record, even a
-failed one; the latest results are written only when every track analyzed.
+Stems come from the song's node names, never from a listing, so a stem left by a removed or
+renamed node cannot enter the mix. Every analysis that runs to the end keeps a record, even a
+failed one; the latest results are written only when every node analyzed.
 """
 
 import hashlib
@@ -15,7 +15,8 @@ from typing import cast
 import numpy as np
 
 from poser.core.audio import Audio, measure_peak_dbfs, stem_samples
-from poser.core.cache import StampProblem, track_key
+from poser.core.cache import StampProblem, node_key
+from poser.core.graph import Graph, Node
 from poser.core.names import Identifier, SongId, TrackName
 from poser.core.ports import (
     AudioFileError,
@@ -33,18 +34,18 @@ from poser.core.ports import (
     SoundFailure,
     Visualizer,
 )
-from poser.core.rendering import require_stem_format, resolve_track
+from poser.core.rendering import require_stem_format, resolve_node
 from poser.core.report import (
     BAR_BEATS,
     MIX_NAME,
     AnalysisStatus,
     Measurements,
     MixReport,
+    NodeReport,
     Report,
     SectionData,
     SectionError,
     SectionReport,
-    TrackReport,
     bar_dbfs,
     mix_defects,
     report_to_data,
@@ -106,18 +107,20 @@ def read_stem(
     audio_files: AudioFiles,
     frames: int,
 ) -> Audio:
-    """Read a track's stem and confirm it matches the song. Raises StaleStemError when it does not.
+    """Read a node's stem and confirm it matches the song. Raises StaleStemError when it does not.
 
-    `keys` are the track's current `track_key` and `sound_key`. Its stamp must still describe the
+    `keys` are the node's current `node_key` and `sound_key`. Its stamp must still describe the
     stem file and record both.
     """
     stamp = store.read_stamp(track)
     if isinstance(stamp, StampProblem):
         raise StaleStemError(stamp.value)
-    if stamp.track_key != keys[0]:
-        raise StaleStemError("song changed since this stem was rendered")
+    # The sound is checked first, because the node key digests it and would mask which input
+    # changed.
     if stamp.sound_key != keys[1]:
         raise StaleStemError("sound changed since this stem was rendered")
+    if stamp.track_key != keys[0]:
+        raise StaleStemError("song changed since this stem was rendered")
     try:
         return audio_files.read(store.stem_path(track), frames)
     except AudioFileError as error:
@@ -162,39 +165,54 @@ def _analyze(
     record_writer: RecordWriter,
     tools: AnalysisTools,
 ) -> Report:
+    graph = song.graph()
     frames = stem_samples(song)
     sound_keys: dict[TrackName, str] = {}
     stems: dict[TrackName, Audio] = {}
-    failures: dict[TrackName, TrackReport] = {}
-    for track in song.tracks:
-        name = track.track_name
-        key = track_key(song, track)
+    failures: dict[TrackName, NodeReport] = {}
+    # Report rows stay positionally aligned with the graph's nodes, which compilation sets to
+    # song order.
+    for _track, node in zip(song.tracks, graph.nodes, strict=True):
+        name = TrackName(node.name)
+        # Without a resolved sound there is no identity to digest, so the key digests None.
+        key = node_key(graph, node, None, ())
         if not store.stem_path(name).is_file():
-            failures[name] = TrackReport(
-                track.name, AnalysisStatus.MISSING_STEM, key, None, gain_db=track.gain
+            failures[name] = NodeReport(
+                node.name,
+                AnalysisStatus.MISSING_STEM,
+                key,
+                None,
+                node.kind,
+                _upstream(graph, node),
+                gain_db=node.gain_db,
             )
             continue
-        resolved = resolve_track(track, instruments)
+        resolved = resolve_node(node, instruments)
         if isinstance(resolved, SoundFailure):
-            failures[name] = TrackReport(
-                track.name,
+            failures[name] = NodeReport(
+                node.name,
                 AnalysisStatus.STALE_STEM,
                 key,
                 None,
-                gain_db=track.gain,
+                node.kind,
+                _upstream(graph, node),
+                gain_db=node.gain_db,
                 detail=resolved.detail,
             )
             continue
         sound_keys[name] = resolved.sound_key
+        key = node_key(graph, node, resolved.sound_key, ())
         try:
             stems[name] = read_stem(store, name, (key, resolved.sound_key), audio_files, frames)
         except StaleStemError as error:
-            failures[name] = TrackReport(
-                track.name,
+            failures[name] = NodeReport(
+                node.name,
                 AnalysisStatus.STALE_STEM,
                 key,
                 resolved.sound_key,
-                gain_db=track.gain,
+                node.kind,
+                _upstream(graph, node),
+                gain_db=node.gain_db,
                 detail=str(error),
             )
 
@@ -206,11 +224,11 @@ def _analyze(
     complete = not failures
     suffix = tools.visualizer.suffix
 
-    tracks: list[TrackReport] = []
-    for track in song.tracks:
-        name = track.track_name
+    nodes: list[NodeReport] = []
+    for track, node in zip(song.tracks, graph.nodes, strict=True):
+        name = TrackName(node.name)
         if name in failures:
-            tracks.append(failures[name])
+            nodes.append(failures[name])
             continue
         audio = stems[name]
         measurements = measure(audio, song, tools.measurer)
@@ -218,14 +236,16 @@ def _analyze(
         image = None
         if complete:
             image = store.image_path(name, suffix)
-            tools.visualizer.draw(audio, image, track.name)
-        tracks.append(
-            TrackReport(
-                track.name,
+            tools.visualizer.draw(audio, image, node.name)
+        nodes.append(
+            NodeReport(
+                node.name,
                 AnalysisStatus.ANALYZED,
-                track_key(song, track),
+                node_key(graph, node, sound_keys[name], ()),
                 sound_keys[name],
-                gain_db=track.gain,
+                node.kind,
+                _upstream(graph, node),
+                gain_db=node.gain_db,
                 peak_dbfs=measurements.peak_dbfs,
                 integrated_lufs=measurements.integrated_lufs,
                 clipped_samples=measurements.clipped_samples,
@@ -240,7 +260,8 @@ def _analyze(
     mix = None
     if complete:
         inputs = tuple(
-            MixInput(track.track_name, stems[track.track_name], track.gain) for track in song.tracks
+            MixInput(TrackName(node.name), stems[TrackName(node.name)], node.gain_db)
+            for node in graph.nodes
         )
         mixed = tools.mixer.mix(inputs, frames)
         if mixed.frames != frames:
@@ -263,28 +284,33 @@ def _analyze(
         )
 
     report = Report(
-        song=song_name, run=record.run, song_sha256=song_sha256, tracks=tuple(tracks), mix=mix
+        song=song_name, run=record.run, song_sha256=song_sha256, nodes=tuple(nodes), mix=mix
     )
     if complete:
         store.report_path().write_text(report_json(report), encoding="utf-8")
 
     # The record's report points at the record's own copies of the images.
     kept = tuple(
-        report_track
-        if report_track.spectrogram is None
+        report_node
+        if report_node.spectrogram is None
         else replace(
-            report_track,
-            spectrogram=str(store.keep_image(record, track.track_name, suffix)),
+            report_node,
+            spectrogram=str(store.keep_image(record, TrackName(node.name), suffix)),
         )
-        for track, report_track in zip(song.tracks, report.tracks, strict=True)
+        for node, report_node in zip(graph.nodes, report.nodes, strict=True)
     )
     kept_mix = (
         None
         if report.mix is None
         else replace(report.mix, spectrogram=str(store.keep_image(record, None, suffix)))
     )
-    store.finish_record(record, report_json(replace(report, tracks=kept, mix=kept_mix)))
+    store.finish_record(record, report_json(replace(report, nodes=kept, mix=kept_mix)))
     return report
+
+
+def _upstream(graph: Graph, node: Node) -> tuple[str, ...]:
+    """Return the names of the nodes whose wires feed this node, in wire order."""
+    return tuple(wire.from_name for wire in graph.wires if wire.to_name == node.name)
 
 
 def _sections(

@@ -27,7 +27,10 @@ def test_demo_song_renders_aligned_audible_stems(tmp_path: Path) -> None:
 
     results = real_render(tmp_path, song, "songs/demo.yaml")
 
-    assert [result.track for result in results] == [track.name for track in song.tracks]
+    # Render order is the graph's topological order, not the report's song order.
+    assert [result.track for result in results] == [
+        node.name for node in song.graph().topological()
+    ]
     for result in results:
         assert result.status is StemStatus.RENDERED, result.detail
         assert result.stem is not None

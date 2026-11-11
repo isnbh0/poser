@@ -1,5 +1,6 @@
 """The signal graph: nodes and wires as one value, its laws enforced in its only constructor."""
 
+import heapq
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from typing import Literal
@@ -115,6 +116,35 @@ class Graph:
 
     def seconds(self, beat: float) -> float:
         return beat * 60 / self.bpm
+
+    def topological(self) -> tuple[Node, ...]:
+        """Return the nodes so each follows the nodes its wires come from, ties broken by name.
+
+        Kahn's algorithm, always taking the ready node whose name sorts first, so the order is
+        the same for every equal graph. A feedback cycle has no topological position, so its
+        nodes follow the rest, by name.
+        """
+        by_name = {node.name: node for node in self.nodes}
+        incoming: dict[str, int] = dict.fromkeys(by_name, 0)
+        outgoing: dict[str, list[str]] = {name: [] for name in by_name}
+        for wire in self.wires:
+            incoming[wire.to_name] += 1
+            outgoing[wire.from_name].append(wire.to_name)
+        ready = [name for name, count in incoming.items() if count == 0]
+        heapq.heapify(ready)
+        ordered: list[Node] = []
+        while ready:
+            name = heapq.heappop(ready)
+            ordered.append(by_name[name])
+            for target in outgoing[name]:
+                incoming[target] -= 1
+                if incoming[target] == 0:
+                    heapq.heappush(ready, target)
+        if len(ordered) < len(by_name):
+            # Nodes the cycle holds have no topological position; they follow, by name.
+            placed = {node.name for node in ordered}
+            ordered += [by_name[name] for name in sorted(set(by_name) - placed)]
+        return tuple(ordered)
 
 
 def _gain_problems(gain_db: object, where: str) -> list[str]:

@@ -5,7 +5,8 @@ from typing import cast
 
 from poser.core.audio import sample_at, stem_samples
 from poser.core.jsonvalue import JsonValue, json_object
-from poser.core.song import CONTROL_MAX, ControlChange, Song, Track, is_int
+from poser.core.rules import CONTROL_MAX, ControlChange, Timed, is_int
+from poser.core.song import Song
 
 
 def _check_int(owner: str, field: str, value: object, low: int, high: int | None) -> None:
@@ -107,8 +108,8 @@ def _ramp_events(song: Song, start: ControlChange, end: ControlChange) -> list[C
     ]
 
 
-def _control_events(song: Song, track: Track) -> list[Control]:
-    """Return a track's controller changes as events in time order.
+def _control_events(song: Song, timed: Timed) -> list[Control]:
+    """Return a member's controller changes as events in time order.
 
     Each controller holds its first value from the start of the song, as automation does in a
     DAW, so a change at a note's start is already in place when the note begins. Linear segments
@@ -117,14 +118,14 @@ def _control_events(song: Song, track: Track) -> list[Control]:
     """
     events: list[Control] = []
     seen: set[int] = set()
-    for index, change in enumerate(track.cc):
+    for index, change in enumerate(timed.cc):
         events.append(Control(sample_at(song, change.beat), change.control, change.value))
         if change.control not in seen:
             seen.add(change.control)
             events.append(Control(0, change.control, change.value))
         if change.shape == "linear":
-            # `Track` guarantees a later change to the same controller.
-            target = next(c for c in track.cc[index + 1 :] if c.control == change.control)
+            # The constructor guarantees a later change to the same controller.
+            target = next(c for c in timed.cc[index + 1 :] if c.control == change.control)
             events.extend(_ramp_events(song, change, target))
     events.sort(key=lambda event: event.sample)
 
@@ -144,20 +145,20 @@ def _control_events(song: Song, track: Track) -> list[Control]:
     return kept
 
 
-def perform(song: Song, track: Track) -> Performance:
-    """Return what the track's instrument plays, over the song's stem length.
+def perform(song: Song, timed: Timed) -> Performance:
+    """Return what the member's instrument plays, over the song's stem length.
 
     Times snap to whole samples, so float error, as in beats 0.1 + 0.2 against 0.3, cannot place
     a note-off just after the note-on it should precede. A note ends at least one sample after it
     starts.
     """
     events: list[Event] = []
-    for note in track.notes:
+    for note in timed.notes:
         start = sample_at(song, note.beat)
         end = max(sample_at(song, note.beat + note.length), start + 1)
         events.append(NoteOn(start, note.pitch, note.velocity))
         events.append(NoteOff(end, note.pitch))
-    events.extend(_control_events(song, track))
+    events.extend(_control_events(song, timed))
     events.sort(key=lambda event: (event.sample, _rank(event)))
     return Performance(stem_samples(song), tuple(events))
 

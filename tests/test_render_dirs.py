@@ -141,6 +141,6 @@ def test_analysis_reads_the_stems_render_wrote(
     assert analyze.main(["songs/x.yaml", "--json"]) == EXIT_ALL_PASS
 
     report = json.loads(capsys.readouterr().out)
-    assert [track["status"] for track in report["tracks"]] == ["analyzed"]
+    assert [node["status"] for node in report["nodes"]] == ["analyzed"]
     song_dir = workspace.renders / "songs" / "x.yaml"
     assert report["mix"]["path"] == str(song_dir / "latest" / "mix.wav")

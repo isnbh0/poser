@@ -50,8 +50,8 @@ def test_render_prints_the_table(
 
     rows = [
         ("TRACK", "STATUS", "CACHED", "PEAK DBFS", "STEM"),
-        ("lead", "rendered", "-", "-6.0", str(stem(workspace, "lead"))),
         ("bass", "rendered", "-", "-6.0", str(stem(workspace, "bass"))),
+        ("lead", "rendered", "-", "-6.0", str(stem(workspace, "lead"))),
     ]
     assert out(capsys) == "\n".join(align_rows(rows)) + "\n"
     assert stem(workspace, "lead").is_file()
@@ -78,19 +78,19 @@ def test_render_json_holds_rendered_cached_and_failed_tracks(
             "cached": True,
         },
         {
-            "track": "pad",
-            "status": "rendered",
-            "peak_dbfs": pytest.approx(-6.0, abs=0.1),
-            "stem": str(stem(workspace, "pad")),
-            "detail": None,
-            "cached": False,
-        },
-        {
             "track": "odd",
             "status": "unknown_sound",
             "peak_dbfs": None,
             "stem": None,
             "detail": "no sound named 'nope'",
+            "cached": False,
+        },
+        {
+            "track": "pad",
+            "status": "rendered",
+            "peak_dbfs": pytest.approx(-6.0, abs=0.1),
+            "stem": str(stem(workspace, "pad")),
+            "detail": None,
             "cached": False,
         },
     ]
@@ -249,8 +249,8 @@ def test_analyze_prints_the_report_and_keeps_a_record(
     report = json.loads(out(capsys))
     assert report["song"] == "tune"
     assert report["run"] == 1
-    (track,) = report["tracks"]
-    assert track["sections"] == {"probe": {"version": 1, "data": {"probe": True}, "defects": []}}
+    (node,) = report["nodes"]
+    assert node["sections"] == {"probe": {"version": 1, "data": {"probe": True}, "defects": []}}
     assert report["mix"]["sections"]["probe"]["defects"] == []
     assert workspace.module.MIXES
     assert (workspace.renders / SONG / "history" / "1").is_dir()

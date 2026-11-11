@@ -25,11 +25,11 @@ from fakes import (
 
 from poser.core.analysis import AnalysisTools, analyze_song, measure
 from poser.core.audio import Audio, measure_peak_dbfs, stem_samples, write_raw_audio
-from poser.core.cache import Stamp, track_key
+from poser.core.cache import Stamp, node_key
 from poser.core.jsonvalue import Json
 from poser.core.names import Identifier, SongId, TrackName
 from poser.core.ports import Instrument, Mixer, MixInput, ReportSection, SectionInput, SectionResult
-from poser.core.rendering import render_song
+from poser.core.rendering import ResolvedNode, render_song, resolve_node
 from poser.core.report import (
     BANDS,
     AnalysisStatus,
@@ -131,6 +131,21 @@ def tree(directory: Path) -> list[str]:
     return sorted(path.relative_to(directory).as_posix() for path in directory.rglob("*"))
 
 
+def node_key_of(song: Song, index: int, setup: Setup, *, resolve: bool) -> str:
+    """The key the report records for the song's index'th node.
+
+    Analysis resolves the sound only when a stem exists to read, so without one it digests None.
+    """
+    graph = song.graph()
+    node = graph.nodes[index]
+    identity = None
+    if resolve:
+        resolved = resolve_node(node, setup.instruments)
+        if isinstance(resolved, ResolvedNode):
+            identity = resolved.sound_key
+    return node_key(graph, node, identity, ())
+
+
 # Measuring
 
 
@@ -191,12 +206,12 @@ def test_full_analysis_writes_latest_results_and_a_record(tmp_path: Path) -> Non
 
     assert report.run == 1
     assert report.song == "demo"
-    assert len(report.tracks) == 2
-    assert all(track.status is AnalysisStatus.ANALYZED for track in report.tracks)
+    assert len(report.nodes) == 2
+    assert all(node.status is AnalysisStatus.ANALYZED for node in report.nodes)
     assert not report_failed(report)
     assert report.mix is not None
     assert report.mix.path == str(setup.store.mix_path())
-    images = [track.spectrogram for track in report.tracks] + [report.mix.spectrogram]
+    images = [node.spectrogram for node in report.nodes] + [report.mix.spectrogram]
     assert images == [str(path) for path in setup.latest()[2:]]
     for path in setup.latest():
         assert path.is_file()
@@ -214,11 +229,11 @@ def test_full_analysis_writes_latest_results_and_a_record(tmp_path: Path) -> Non
         "song.json",
     ]
     kept = json.loads((record / "report.json").read_text())
-    kept_images = [track["spectrogram"] for track in kept["tracks"]] + [kept["mix"]["spectrogram"]]
+    kept_images = [node["spectrogram"] for node in kept["nodes"]] + [kept["mix"]["spectrogram"]]
     assert kept_images == [
         str(record / "images" / name) for name in ("lead.png", "bass.png", "[mix].png")
     ]
-    assert {**kept, "tracks": None, "mix": None} == {**latest, "tracks": None, "mix": None}
+    assert {**kept, "nodes": None, "mix": None} == {**latest, "nodes": None, "mix": None}
 
 
 def test_mix_is_the_gain_weighted_sum_of_the_stems(tmp_path: Path) -> None:
@@ -228,7 +243,7 @@ def test_mix_is_the_gain_weighted_sum_of_the_stems(tmp_path: Path) -> None:
 
     mix = setup.audio_files.read(setup.store.mix_path(), stem_samples(make_song()))
     assert np.allclose(mix.samples, 0.5 * 10 ** (-6 / 20) + 0.2)
-    lead, bass = report.tracks
+    lead, bass = report.nodes
     assert lead.gain_db == -6.0
     assert lead.peak_dbfs == pytest.approx(20 * np.log10(0.5))
     assert bass.gain_db == 0.0
@@ -248,15 +263,12 @@ def test_stray_stem_does_not_enter_the_mix(tmp_path: Path) -> None:
 def test_report_keys_are_the_stamp_keys(tmp_path: Path) -> None:
     setup = Setup(tmp_path)
 
-    lead, bass = setup.analyze().tracks
+    lead, bass = setup.analyze().nodes
 
-    for report_track, name in ((lead, LEAD), (bass, BASS)):
+    for report_node, name in ((lead, LEAD), (bass, BASS)):
         stamp = setup.store.read_stamp(name)
         assert isinstance(stamp, Stamp)
-        assert (report_track.track_key, report_track.sound_key) == (
-            stamp.track_key,
-            stamp.sound_key,
-        )
+        assert (report_node.node_key, report_node.sound_key) == (stamp.track_key, stamp.sound_key)
 
 
 def spoil(setup: Setup, case: str) -> Song:
@@ -314,10 +326,11 @@ FRAMES = stem_samples(make_song())
         ("stem_changed", AnalysisStatus.STALE_STEM, "stem changed after it was rendered"),
         ("stem_and_song_changed", AnalysisStatus.STALE_STEM, "stem changed after it was rendered"),
         ("song_changed", AnalysisStatus.STALE_STEM, "song changed since this stem was rendered"),
+        # The node key digests the sound, so a changed sound is named before the song is.
         (
             "song_and_sound_changed",
             AnalysisStatus.STALE_STEM,
-            "song changed since this stem was rendered",
+            "sound changed since this stem was rendered",
         ),
         ("sound_changed", AnalysisStatus.STALE_STEM, "sound changed since this stem was rendered"),
         (
@@ -340,17 +353,21 @@ def test_unusable_stem_fails_the_run_and_removes_earlier_results(
 
     report = setup.analyze(song)
 
-    lead, bass = report.tracks
+    lead, bass = report.nodes
     assert lead.status is AnalysisStatus.ANALYZED
     assert lead.spectrogram is None
     assert bass.status is status
     assert bass.detail == detail
-    assert bass.track_key == track_key(song, song.tracks[1])
+    assert bass.node_key == node_key_of(
+        song, 1, setup, resolve=case not in {"missing", "missing_and_unresolved"}
+    )
     if case in {"missing", "missing_and_unresolved", "unresolved", "unknown_instrument"}:
         assert bass.sound_key is None
     else:
         assert bass.sound_key is not None
     assert bass.gain_db == 0.0
+    assert bass.kind == "track"
+    assert bass.upstream == ()
     assert (bass.peak_dbfs, bass.integrated_lufs, bass.bands_db, bass.bar_dbfs) == (None,) * 4
     assert report.mix is None
     assert report_failed(report)
@@ -409,7 +426,7 @@ class DictSection(FakeSection):
         return cast("SectionResult", {"value": 1})
 
 
-def test_section_data_reaches_every_track_and_the_mix(tmp_path: Path) -> None:
+def test_section_data_reaches_every_node_and_the_mix(tmp_path: Path) -> None:
     section = FakeSection("tempo", {"steady": True})
     setup = Setup(tmp_path, [section])
 
@@ -417,7 +434,7 @@ def test_section_data_reaches_every_track_and_the_mix(tmp_path: Path) -> None:
 
     assert report.mix is not None
     expected = {"tempo": SectionData(1, Json.of({"steady": True}), ())}
-    assert [dict(track.sections) for track in report.tracks] == [expected, expected]
+    assert [dict(node.sections) for node in report.nodes] == [expected, expected]
     assert dict(report.mix.sections) == expected
     assert [request.track for request in section.seen] == [*make_song().tracks, None]
     assert section.parts == ["track", "track", "mix"]
@@ -446,7 +463,7 @@ def test_failing_sections_are_recorded_and_the_others_still_run(tmp_path: Path) 
     report = setup.analyze()
 
     assert report.mix is not None
-    for sections_seen in [*(track.sections for track in report.tracks), report.mix.sections]:
+    for sections_seen in [*(node.sections for node in report.nodes), report.mix.sections]:
         assert sections_seen["raising"] == SectionError(2, "RuntimeError: boom")
         assert sections_seen["dict"] == SectionError(
             1, "TypeError: returned dict, not a SectionResult"
@@ -487,14 +504,14 @@ def test_section_cannot_change_what_later_sections_and_the_report_see(
     report = setup.analyze()
 
     assert report.mix is not None
-    for sections in [*(track.sections for track in report.tracks), report.mix.sections]:
+    for sections in [*(node.sections for node in report.nodes), report.mix.sections]:
         assert sections["acting"] == SectionError(1, error)
     lead_stem = setup.audio_files.read(setup.store.stem_path(LEAD), FRAMES)
     assert np.array_equal(later.seen[0].audio.samples, lead_stem.samples)
     assert [request.measurements for request in later.seen] == [
         request.measurements for request in alone.seen
     ]
-    for kept, fresh in zip([*report.tracks, report.mix], [*plain.tracks, plain.mix], strict=True):
+    for kept, fresh in zip([*report.nodes, report.mix], [*plain.nodes, plain.mix], strict=True):
         assert fresh is not None
         assert (kept.peak_dbfs, kept.bands_db, kept.bar_dbfs) == (
             fresh.peak_dbfs,
@@ -512,7 +529,17 @@ def test_kept_section_json_cannot_change_the_report(tmp_path: Path) -> None:
     assert isinstance(data, dict)
     data["beats"] = []
 
-    assert report.tracks[0].sections["tempo"] == SectionData(1, Json.of({"beats": [1, 2]}), ())
+    assert report.nodes[0].sections["tempo"] == SectionData(1, Json.of({"beats": [1, 2]}), ())
+
+
+def test_report_nodes_stay_aligned_with_the_graph(tmp_path: Path) -> None:
+    setup = Setup(tmp_path)
+
+    report = setup.analyze()
+
+    for report_node, node in zip(report.nodes, make_song().graph().nodes, strict=True):
+        assert report_node.name == node.name
+        assert report_node.kind == node.kind
 
 
 # Defects
@@ -524,9 +551,9 @@ def test_silent_stem_reports_null_loudness_and_a_silent_defect(tmp_path: Path) -
 
     report = setup.analyze(song)
 
-    (track,) = report.tracks
-    assert track.integrated_lufs is None
-    assert track.defects == (Defect.SILENT,)
+    (node,) = report.nodes
+    assert node.integrated_lufs is None
+    assert node.defects == (Defect.SILENT,)
     assert report.mix is not None
     assert report.mix.defects == (Defect.SILENT,)
     assert report_failed(report)
@@ -537,7 +564,7 @@ def test_silent_track_in_an_audible_mix_fails(tmp_path: Path) -> None:
 
     report = setup.analyze()
 
-    assert [track.defects for track in report.tracks] == [(), (Defect.SILENT,)]
+    assert [node.defects for node in report.nodes] == [(), (Defect.SILENT,)]
     assert report.mix is not None
     assert report.mix.defects == ()
     assert report_failed(report)
@@ -548,7 +575,7 @@ def test_mix_over_full_scale_is_a_clipping_defect(tmp_path: Path) -> None:
 
     report = setup.analyze()
 
-    assert [track.defects for track in report.tracks] == [(), ()]
+    assert [node.defects for node in report.nodes] == [(), ()]
     assert report.mix is not None
     assert report.mix.defects == (Defect.CLIPPING, Defect.HEADROOM)
     assert report.mix.clipped_samples == 2 * FRAMES
@@ -560,7 +587,7 @@ def test_stem_over_full_scale_is_not_a_defect(tmp_path: Path) -> None:
 
     report = setup.analyze()
 
-    lead, bass = report.tracks
+    lead, bass = report.nodes
     assert lead.clipped_samples == 2 * FRAMES
     assert lead.defects == bass.defects == ()
     assert report.mix is not None

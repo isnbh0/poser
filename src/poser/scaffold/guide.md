@@ -104,15 +104,15 @@ every track. `--force` re-renders every track. Add `--json` for a machine-readab
 Exit codes, for both `render-song` and `analyze-song`:
 
 - 0: everything passed.
-- 1: from `render-song`, a track did not end `rendered`; from `analyze-song`, a track or the mix
+- 1: from `render-song`, a track did not end `rendered`; from `analyze-song`, a node or the mix
   failed. The report says which.
 - 2: the song or `poser.toml` could not be read; the message names the problem.
 - 3: another run holds this song's lock; wait and rerun.
 
 ## Reading the analysis
 
-`uv run analyze-song songs/<name>.py --json` mixes the stems with each track's `gain` and prints
-the report, which names the files it wrote: the mix, and a spectrogram per track and for the mix.
+`uv run analyze-song songs/<name>.py --json` mixes the stems with each node's `gain` and prints
+the report, which names the files it wrote: the mix, and a spectrogram per node and for the mix.
 Every analysis keeps a numbered record, even a failed one, holding the song as analyzed and that
 run's report and images. Report fields whose meaning is not obvious from their names:
 
@@ -120,32 +120,32 @@ run's report and images. Report fields whose meaning is not obvious from their n
 |---|---|
 | `run` | This analysis's record number |
 | `song_sha256` | Digest of the song version analyzed; equal digests mean the same song |
-| `track_key` | Digest of the track's render inputs: everything but `gain`, including the song's length |
+| `node_key` | Digest of the node's render inputs: everything but `gain`, including the song's length and the sound it resolved to |
 | `sound_key` | Digest of the sound itself; it changes when a preset or saved sound file changes |
-| `gain_db` | The track's `gain` |
+| `gain_db` | The node's `gain` |
 | `peak_dbfs` | Highest sample level, in dB relative to full scale |
 | `integrated_lufs` | Loudness over the whole song |
 | `bands_db` | Level in each frequency band, relative and uncalibrated |
 | `bar_dbfs` | RMS level of each 4-beat span, up to the song's last beat |
-| `detail` | Why a track has no measurements |
+| `detail` | Why a node has no measurements |
 | `sections` | Extra analysis from configured report sections, by name; each has a `version` and either `data` with its own `defects`, or an `error` |
 
-Track measurements are of the stem before `gain`; mix measurements are after it. Band levels are
-relative, so compare them between tracks and versions, not against a target.
+Node measurements are of the stem before `gain`; mix measurements are after it. Band levels are
+relative, so compare them between nodes and versions, not against a target.
 
 The bands are `sub` 20–60 Hz, `bass` 60–250 Hz, `low_mid` 250–500 Hz, `mid` 500–2000 Hz,
 `high_mid` 2000–6000 Hz, and `high` 6000–20000 Hz.
 
 Track statuses from `render-song`: `rendered`, `silent`, `unknown_sound`, `load_failed`,
-`crashed`, and `timed_out`. Track statuses from `analyze-song`: `analyzed`, `missing_stem`, and
+`crashed`, and `timed_out`. Node statuses from `analyze-song`: `analyzed`, `missing_stem`, and
 `stale_stem`, which means the stem no longer matches the song or its sound; `detail` says why, and
 rendering again fixes it.
 
-Defects fail the analysis: `silent`, for a track or the mix; `clipping`, for mix samples beyond
+Defects fail the analysis: `silent`, for a node or the mix; `clipping`, for mix samples beyond
 full scale; and `headroom`, for a mix peak above -1 dBFS. A section's defects and errors also
 fail the analysis.
 
-`run` and `song_sha256` tell versions apart; `track_key` and `sound_key` show which tracks
+`run` and `song_sha256` tell versions apart; `node_key` and `sound_key` show which nodes
 changed.
 
 ## Commands

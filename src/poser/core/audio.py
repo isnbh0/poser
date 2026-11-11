@@ -8,6 +8,8 @@ from typing import cast, final
 import numpy as np
 from numpy.lib.format import read_array_header_1_0, read_array_header_2_0, read_magic
 
+from poser.core.graph import Graph
+from poser.core.rules import _last_beat
 from poser.core.song import Song, song_last_beat
 
 SAMPLE_RATE = 48000
@@ -32,6 +34,11 @@ def song_duration_s(song: Song) -> float:
     ignores messages after the end, so changes must fall within.
     """
     return song.seconds(song_last_beat(song)) + TAIL_S
+
+
+def graph_duration_s(graph: Graph) -> float:
+    """Return the length shared by every stem of a graph: its last beat plus the tail."""
+    return graph.seconds(_last_beat(graph.nodes)) + TAIL_S
 
 
 def expected_samples(duration_s: float) -> int:

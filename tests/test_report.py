@@ -16,10 +16,10 @@ from poser.core.report import (
     Defect,
     Measurements,
     MixReport,
+    NodeReport,
     Report,
     SectionData,
     SectionError,
-    TrackReport,
     bar_dbfs,
     mix_defects,
     report_failed,
@@ -41,12 +41,14 @@ def measurements(peak_dbfs: float = -6.0, clipped_samples: int = 0) -> Measureme
     )
 
 
-def track(**changes: object) -> TrackReport:
-    clean = TrackReport(
+def node(**changes: object) -> NodeReport:
+    clean = NodeReport(
         name="lead",
         status=AnalysisStatus.ANALYZED,
-        track_key=KEY,
+        node_key=KEY,
         sound_key=KEY,
+        kind="track",
+        upstream=(),
         gain_db=-3.0,
         peak_dbfs=-6.0,
         integrated_lufs=-14.0,
@@ -72,8 +74,8 @@ def mix(**changes: object) -> MixReport:
     return replace(clean, **changes)
 
 
-def report(tracks: tuple[TrackReport, ...] = (), mix_report: MixReport | None = None) -> Report:
-    return Report(song="song", run=1, song_sha256=KEY, tracks=tracks or (track(),), mix=mix_report)
+def report(nodes: tuple[NodeReport, ...] = (), mix_report: MixReport | None = None) -> Report:
+    return Report(song="song", run=1, song_sha256=KEY, nodes=nodes or (node(),), mix=mix_report)
 
 
 SECTION_DEFECT = {Identifier("tempo"): SectionData(1, Json.of({}), (Identifier("drift"),))}
@@ -85,20 +87,20 @@ SECTION_CLEAN = {Identifier("tempo"): SectionData(1, Json.of({"bpm": 120}))}
     ("value", "failed"),
     [
         (report(mix_report=mix()), False),
-        (report(tracks=(track(sections=SECTION_CLEAN),), mix_report=mix()), False),
+        (report((node(sections=SECTION_CLEAN),), mix()), False),
         (report(), True),
         (
             report(
-                tracks=(track(status=AnalysisStatus.STALE_STEM, detail="song changed"),),
-                mix_report=mix(),
+                (node(status=AnalysisStatus.STALE_STEM, detail="song changed"),),
+                mix(),
             ),
             True,
         ),
-        (report(tracks=(track(defects=(Defect.SILENT,)),), mix_report=mix()), True),
+        (report((node(defects=(Defect.SILENT,)),), mix()), True),
         (report(mix_report=mix(defects=(Defect.HEADROOM,))), True),
-        (report(tracks=(track(sections=SECTION_DEFECT),), mix_report=mix()), True),
+        (report((node(sections=SECTION_DEFECT),), mix()), True),
         (report(mix_report=mix(sections=SECTION_DEFECT)), True),
-        (report(tracks=(track(sections=SECTION_ERROR),), mix_report=mix()), True),
+        (report((node(sections=SECTION_ERROR),), mix()), True),
         (report(mix_report=mix(sections=SECTION_ERROR)), True),
     ],
     ids=[
@@ -118,10 +120,12 @@ def test_report_failed(value: Report, failed: bool) -> None:
     assert report_failed(value) is failed
 
 
-TRACK_KEYS = {
+NODE_KEYS = {
     "name",
     "status",
-    "track_key",
+    "kind",
+    "upstream",
+    "node_key",
     "sound_key",
     "gain_db",
     "peak_dbfs",
@@ -149,58 +153,74 @@ MIX_KEYS = {
 
 def test_report_to_data_has_the_documented_keys_and_shapes() -> None:
     value = report(
-        tracks=(track(sections=SECTION_DEFECT, defects=(Defect.SILENT,)),),
-        mix_report=mix(sections=SECTION_ERROR, defects=(Defect.CLIPPING,)),
+        (node(sections=SECTION_DEFECT, defects=(Defect.SILENT,)),),
+        mix(sections=SECTION_ERROR, defects=(Defect.CLIPPING,)),
     )
 
     data = report_to_data(value)
 
     assert isinstance(data, dict)
-    assert set(data) == {"song", "run", "song_sha256", "tracks", "mix"}
-    tracks = data["tracks"]
-    assert isinstance(tracks, list)
-    (track_data,) = tracks
+    assert set(data) == {"song", "run", "song_sha256", "nodes", "mix"}
+    nodes = data["nodes"]
+    assert isinstance(nodes, list)
+    (node_data,) = nodes
     mix_data = data["mix"]
-    assert isinstance(track_data, dict)
+    assert isinstance(node_data, dict)
     assert isinstance(mix_data, dict)
-    assert set(track_data) == TRACK_KEYS
+    assert set(node_data) == NODE_KEYS
     assert set(mix_data) == MIX_KEYS
-    for part in (track_data, mix_data):
+    assert "tracks" not in data
+    assert node_data["kind"] == "track"
+    assert node_data["upstream"] == []
+    for part in (node_data, mix_data):
         assert isinstance(part["defects"], list)
         assert isinstance(part["bar_dbfs"], list)
         assert isinstance(part["bands_db"], dict)
         assert isinstance(part["sections"], dict)
-    assert track_data["status"] == "analyzed"
-    assert track_data["defects"] == ["silent"]
-    assert track_data["sections"] == {"tempo": {"version": 1, "data": {}, "defects": ["drift"]}}
+    assert node_data["status"] == "analyzed"
+    assert node_data["defects"] == ["silent"]
+    assert node_data["sections"] == {"tempo": {"version": 1, "data": {}, "defects": ["drift"]}}
     assert mix_data["defects"] == ["clipping"]
     assert mix_data["sections"] == {"tempo": {"version": 1, "error": "no beat found"}}
     assert json.loads(json.dumps(data, allow_nan=False)) == data
 
 
+def test_a_report_with_upstream_nodes_names_them_in_json() -> None:
+    value = report((node(upstream=("bass", "drums")),))
+
+    data = report_to_data(value)
+
+    assert isinstance(data, dict)
+    nodes = data["nodes"]
+    assert isinstance(nodes, list)
+    (node_data,) = nodes
+    assert isinstance(node_data, dict)
+    assert node_data["upstream"] == ["bass", "drums"]
+
+
 def test_changing_report_data_leaves_the_report_unchanged() -> None:
-    value = report(tracks=(track(sections=SECTION_CLEAN),), mix_report=mix())
+    value = report((node(sections=SECTION_CLEAN),), mix())
     expected = report_to_data(value)
     data = report_to_data(value)
     assert isinstance(data, dict)
-    tracks = data["tracks"]
-    assert isinstance(tracks, list)
-    track_data = tracks[0]
-    assert isinstance(track_data, dict)
+    nodes = data["nodes"]
+    assert isinstance(nodes, list)
+    node_data = nodes[0]
+    assert isinstance(node_data, dict)
 
     for key in ("bands_db", "sections"):
-        part = track_data[key]
+        part = node_data[key]
         assert isinstance(part, dict)
         part.clear()
     for key in ("bar_dbfs", "defects"):
-        part = track_data[key]
+        part = node_data[key]
         assert isinstance(part, list)
         part.append(0.0)
-    tracks.clear()
+    nodes.clear()
 
     assert report_to_data(value) == expected
-    assert value.tracks[0].bands_db == BANDS_DB
-    assert value.tracks[0].bar_dbfs == (-12.0, -13.0)
+    assert value.nodes[0].bands_db == BANDS_DB
+    assert value.nodes[0].bar_dbfs == (-12.0, -13.0)
 
 
 def sine(frequency: float, seconds: float, amplitude: float = 1.0) -> np.ndarray:

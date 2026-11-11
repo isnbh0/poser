@@ -10,6 +10,7 @@ from typing import cast
 import numpy as np
 
 from poser.core.audio import SAMPLE_RATE, SILENCE_DBFS
+from poser.core.graph import NODE_KINDS, NodeKind
 from poser.core.jsonvalue import Json, JsonValue
 from poser.core.names import Identifier
 from poser.core.song import is_int, is_number
@@ -180,15 +181,17 @@ def _no_sections() -> Mapping[str, SectionReport]:
 
 
 @dataclass(frozen=True)
-class TrackReport:
-    """One track's analysis. The keys are the ones a fresh stem of the track would carry, so two
-    reports show which tracks changed between song versions. `sound_key` is None when the sound
-    no longer resolves."""
+class NodeReport:
+    """One node's analysis. The keys are the ones a fresh stem of the node would carry, so two
+    reports show which nodes changed between song versions. `sound_key` is None when the sound is
+    not resolved, and `node_key` then digests no sound."""
 
     name: str
     status: AnalysisStatus
-    track_key: str
+    node_key: str
     sound_key: str | None
+    kind: NodeKind
+    upstream: tuple[str, ...]
     gain_db: float = 0.0
     peak_dbfs: float | None = None
     integrated_lufs: float | None = None
@@ -202,18 +205,21 @@ class TrackReport:
 
     def __post_init__(self) -> None:
         if not isinstance(self.status, AnalysisStatus):
-            raise ValueError(f"TrackReport.status must be an AnalysisStatus, got {self.status!r}")
-        _finite("TrackReport", "gain_db", self.gain_db)
-        _finite("TrackReport", "peak_dbfs", self.peak_dbfs, optional=True)
-        _finite("TrackReport", "integrated_lufs", self.integrated_lufs, optional=True)
-        _clipped("TrackReport", self.clipped_samples, optional=True)
+            raise ValueError(f"NodeReport.status must be an AnalysisStatus, got {self.status!r}")
+        if self.kind not in NODE_KINDS:
+            raise ValueError(f"NodeReport.kind must be one of {NODE_KINDS}, got {self.kind!r}")
+        _finite("NodeReport", "gain_db", self.gain_db)
+        _finite("NodeReport", "peak_dbfs", self.peak_dbfs, optional=True)
+        _finite("NodeReport", "integrated_lufs", self.integrated_lufs, optional=True)
+        _clipped("NodeReport", self.clipped_samples, optional=True)
         if self.bands_db is not None:
-            object.__setattr__(self, "bands_db", _bands("TrackReport", self.bands_db))
+            object.__setattr__(self, "bands_db", _bands("NodeReport", self.bands_db))
         if self.bar_dbfs is not None:
-            object.__setattr__(self, "bar_dbfs", _bars("TrackReport", self.bar_dbfs))
-        defects = _members("TrackReport", "defects", self.defects, Defect)
+            object.__setattr__(self, "bar_dbfs", _bars("NodeReport", self.bar_dbfs))
+        defects = _members("NodeReport", "defects", self.defects, Defect)
         object.__setattr__(self, "defects", defects)
-        object.__setattr__(self, "sections", _sections("TrackReport", self.sections))
+        object.__setattr__(self, "upstream", _members("NodeReport", "upstream", self.upstream, str))
+        object.__setattr__(self, "sections", _sections("NodeReport", self.sections))
 
 
 @dataclass(frozen=True)
@@ -246,7 +252,7 @@ class Report:
     song: str
     run: int
     song_sha256: str
-    tracks: tuple[TrackReport, ...]
+    nodes: tuple[NodeReport, ...]
     mix: MixReport | None
 
     def __post_init__(self) -> None:
@@ -256,7 +262,7 @@ class Report:
             raise ValueError(f"Report.run must be a positive int, got {self.run!r}")
         if not isinstance(self.song_sha256, str):
             raise ValueError(f"Report.song_sha256 must be a str, got {self.song_sha256!r}")
-        object.__setattr__(self, "tracks", _members("Report", "tracks", self.tracks, TrackReport))
+        object.__setattr__(self, "nodes", _members("Report", "nodes", self.nodes, NodeReport))
         if not (self.mix is None or isinstance(self.mix, MixReport)):
             raise ValueError(f"Report.mix must be a MixReport or None, got {self.mix!r}")
 
@@ -277,22 +283,24 @@ def _sections_to_data(sections: Mapping[str, SectionReport]) -> JsonValue:
     return {str(name): _section_to_data(section) for name, section in sections.items()}
 
 
-def _track_to_data(track: TrackReport) -> JsonValue:
+def _node_to_data(node: NodeReport) -> JsonValue:
     return {
-        "name": track.name,
-        "status": str(track.status),
-        "track_key": track.track_key,
-        "sound_key": track.sound_key,
-        "gain_db": track.gain_db,
-        "peak_dbfs": track.peak_dbfs,
-        "integrated_lufs": track.integrated_lufs,
-        "clipped_samples": track.clipped_samples,
-        "bands_db": None if track.bands_db is None else dict(track.bands_db),
-        "bar_dbfs": None if track.bar_dbfs is None else list(track.bar_dbfs),
-        "spectrogram": track.spectrogram,
-        "defects": [str(defect) for defect in track.defects],
-        "detail": track.detail,
-        "sections": _sections_to_data(track.sections),
+        "name": node.name,
+        "status": str(node.status),
+        "kind": node.kind,
+        "upstream": list(node.upstream),
+        "node_key": node.node_key,
+        "sound_key": node.sound_key,
+        "gain_db": node.gain_db,
+        "peak_dbfs": node.peak_dbfs,
+        "integrated_lufs": node.integrated_lufs,
+        "clipped_samples": node.clipped_samples,
+        "bands_db": None if node.bands_db is None else dict(node.bands_db),
+        "bar_dbfs": None if node.bar_dbfs is None else list(node.bar_dbfs),
+        "spectrogram": node.spectrogram,
+        "defects": [str(defect) for defect in node.defects],
+        "detail": node.detail,
+        "sections": _sections_to_data(node.sections),
     }
 
 
@@ -316,7 +324,7 @@ def report_to_data(report: Report) -> JsonValue:
         "song": report.song,
         "run": report.run,
         "song_sha256": report.song_sha256,
-        "tracks": [_track_to_data(track) for track in report.tracks],
+        "nodes": [_node_to_data(node) for node in report.nodes],
         "mix": None if report.mix is None else _mix_to_data(report.mix),
     }
 
@@ -353,15 +361,15 @@ def _section_failed(section: SectionReport) -> bool:
 
 
 def report_failed(report: Report) -> bool:
-    """Return whether the analysis failed: no mix, a track not analyzed, or any defect or section
-    error on a track or the mix."""
+    """Return whether the analysis failed: no mix, a node not analyzed, or any defect or section
+    error on a node or the mix."""
     if report.mix is None or report.mix.defects:
         return True
     if any(_section_failed(section) for section in report.mix.sections.values()):
         return True
     return any(
-        track.status is not AnalysisStatus.ANALYZED
-        or track.defects
-        or any(_section_failed(section) for section in track.sections.values())
-        for track in report.tracks
+        node.status is not AnalysisStatus.ANALYZED
+        or node.defects
+        or any(_section_failed(section) for section in node.sections.values())
+        for node in report.nodes
     )

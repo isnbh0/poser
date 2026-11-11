@@ -10,18 +10,24 @@ import pytest
 from fakes import (
     BadOutput,
     FakeInstrument,
+    FakeMeasurer,
+    FakeMixer,
+    FakeRecordWriter,
     FakeRenderStore,
     FakeSongStore,
     FakeSound,
+    FakeVisualizer,
     NpyAudioFiles,
 )
 
-from poser.core import rendering
-from poser.core.cache import Stamp, StampProblem, sound_key, track_key
+from poser.core import cache, rendering
+from poser.core.analysis import AnalysisTools, analyze_song
+from poser.core.cache import Stamp, StampProblem, node_key, sound_key
+from poser.core.graph import Node
 from poser.core.names import Identifier, SongId, TrackName
 from poser.core.performance import perform
 from poser.core.ports import Instrument, RenderFailure, SongBusyError, SoundFailure
-from poser.core.rendering import ResolvedTrack, TrackResult, render_song, resolve_track
+from poser.core.rendering import ResolvedNode, TrackResult, render_song, resolve_node
 from poser.core.song import Note, Song, Track
 from poser.core.statuses import RenderFailureStatus, SoundFailureStatus, StemStatus
 
@@ -76,30 +82,36 @@ def same(seen: list[object], expected: list[object]) -> bool:
     return len(seen) == len(expected) and all(a is b for a, b in zip(seen, expected, strict=True))
 
 
-def test_track_of_an_unconfigured_instrument_is_unknown_sound() -> None:
-    track = Track("lead", "other", NOTE)
-    result = resolve_track(track, {Identifier("fake"): make_instrument()})
+def by_name(results: list[TrackResult]) -> dict[TrackName, TrackResult]:
+    """One render's results keyed by the node's name, so tests need no render order."""
+    return {result.track: result for result in results}
+
+
+def test_node_of_an_unconfigured_instrument_is_unknown_sound() -> None:
+    node = Node("lead", "track", sound="other", notes=NOTE)
+    result = resolve_node(node, {Identifier("fake"): make_instrument()})
     assert result == SoundFailure(
         SoundFailureStatus.UNKNOWN_SOUND, "no instrument 'other' in poser.toml"
     )
 
 
-def test_sound_failure_passes_through_resolve_track() -> None:
+def test_sound_failure_passes_through_resolve_node() -> None:
     failure = SoundFailure(SoundFailureStatus.LOAD_FAILED, "the preset is corrupt")
     instrument = make_instrument(broken=FakeSound(sound_failure=failure))
-    result = resolve_track(Track("lead", "fake:broken", NOTE), {instrument.name: instrument})
+    node = Node("lead", "track", sound="fake:broken", notes=NOTE)
+    result = resolve_node(node, {instrument.name: instrument})
     assert result is failure
 
 
 def test_sound_key_changes_with_adapter_id_version_and_identity() -> None:
-    track = Track("lead", "fake", NOTE)
+    node = Node("lead", "track", sound="fake", notes=NOTE)
 
     def key(adapter_id: str = "fake", version: str = "1", identity: str = "one") -> str:
         instrument = FakeInstrument(
             "fake", {None: FakeSound(identity=identity)}, version, adapter_id
         )
-        resolved = resolve_track(track, {instrument.name: instrument})
-        assert isinstance(resolved, ResolvedTrack)
+        resolved = resolve_node(node, {instrument.name: instrument})
+        assert isinstance(resolved, ResolvedNode)
         assert resolved.sound_key == sound_key(adapter_id, version, identity)
         return resolved.sound_key
 
@@ -108,11 +120,48 @@ def test_sound_key_changes_with_adapter_id_version_and_identity() -> None:
     assert key() == keys[0]
 
 
+def test_sound_identity_is_in_the_node_key() -> None:
+    """The audit's counterexample: a changed preset changes the key with no song input touched."""
+    graph = make_song().graph()
+    node = graph.nodes[0]
+
+    def key(identity: str) -> str:
+        instrument = FakeInstrument("fake", {None: FakeSound(identity=identity)})
+        resolved = resolve_node(node, {instrument.name: instrument})
+        assert isinstance(resolved, ResolvedNode)
+        return node_key(graph, node, resolved.sound_key, ())
+
+    assert key("one") != key("two")
+
+
+def test_upstream_keys_are_in_the_node_key() -> None:
+    """Forward contract for P3+: an upstream entry changes the key of every node it feeds."""
+    graph = make_song().graph()
+    node = graph.nodes[0]
+    base = node_key(graph, node, None, ())
+
+    fed = node_key(graph, node, None, ((base, "audio", 0.0),))
+
+    assert fed != base
+    assert fed != node_key(graph, node, None, ((base, "control", 0.0),))
+    assert fed != node_key(graph, node, None, ((base, "audio", -6.0),))
+
+
+def test_a_gain_only_edit_changes_no_node_key() -> None:
+    quiet = make_song().graph()
+    loud = make_song(gain=-6.0).graph()
+
+    assert [node_key(quiet, node, None, ()) for node in quiet.nodes] == [
+        node_key(loud, node, None, ()) for node in loud.nodes
+    ]
+
+
 def test_render_writes_stamped_stems_and_reports_their_peaks(tmp_path: Path) -> None:
     setup = Setup(tmp_path)
     song = make_song()
 
-    lead, bass = setup.render(song)
+    results = by_name(setup.render(song))
+    lead, bass = results[LEAD], results[BASS]
 
     assert same(statuses([lead, bass]), [StemStatus.RENDERED] * 2)
     assert lead.stem == setup.store.stem_path(LEAD)
@@ -120,7 +169,10 @@ def test_render_writes_stamped_stems_and_reports_their_peaks(tmp_path: Path) -> 
     assert not lead.cached
     stamp = setup.store.read_stamp(LEAD)
     assert isinstance(stamp, Stamp)
-    assert stamp.track_key == track_key(song, song.tracks[0])
+    graph = song.graph()
+    resolved = resolve_node(graph.nodes[0], setup.instruments)
+    assert isinstance(resolved, ResolvedNode)
+    assert stamp.track_key == node_key(graph, graph.nodes[0], resolved.sound_key, ())
     assert stamp.status is StemStatus.RENDERED
     audio = setup.audio_files.read(
         setup.store.stem_path(BASS), perform(song, song.tracks[1]).samples
@@ -146,12 +198,15 @@ def test_cached_silent_track_stays_silent(tmp_path: Path) -> None:
     setup = Setup(tmp_path, make_instrument(quiet=FakeSound(identity="quiet", amplitude=0.0)))
     song = make_song(bass="fake:quiet")
 
-    first = setup.render(song)
-    second = setup.render(song)
+    first = by_name(setup.render(song))
+    second = by_name(setup.render(song))
 
     for results in (first, second):
-        assert same(statuses(results), [StemStatus.RENDERED, StemStatus.SILENT])
-    assert second[1].cached
+        assert [results[LEAD].status, results[BASS].status] == [
+            StemStatus.RENDERED,
+            StemStatus.SILENT,
+        ]
+    assert second[BASS].cached
 
 
 def test_force_renders_every_track(tmp_path: Path) -> None:
@@ -169,10 +224,15 @@ def test_only_changed_tracks_render_again(tmp_path: Path) -> None:
     setup.render(make_song())
     changed = make_song(bass="fake")
 
-    results = setup.render(changed)
+    results = by_name(setup.render(changed))
 
-    assert [result.cached for result in results] == [True, False]
-    assert [request.sound.ref.name for request in setup.instrument.renders] == [None, "pad", None]
+    assert [results[LEAD].cached, results[BASS].cached] == [True, False]
+    # Nodes render in topological order, so the pad plays before the default sound each pass.
+    assert [request.sound.ref.name for request in setup.instrument.renders] == [
+        "pad",
+        None,
+        None,
+    ]
 
 
 def test_gain_edit_reuses_every_stem(tmp_path: Path) -> None:
@@ -190,9 +250,9 @@ def test_changed_sound_identity_renders_again(tmp_path: Path) -> None:
     setup.render(make_song())
     setup.instrument = make_instrument(pad=FakeSound("a pad", "pad, edited", 0.2))
 
-    results = setup.render(make_song())
+    results = by_name(setup.render(make_song()))
 
-    assert [result.cached for result in results] == [True, False]
+    assert [results[LEAD].cached, results[BASS].cached] == [True, False]
 
 
 def test_changed_stem_or_spoiled_stamp_renders_again(tmp_path: Path) -> None:
@@ -226,7 +286,8 @@ def test_render_failure_passes_through_and_leaves_no_stem(
         pad=FakeSound("a pad", "pad, now failing", render_failure=failure)
     )
 
-    lead, bass = setup.render(make_song())
+    results = by_name(setup.render(make_song()))
+    lead, bass = results[LEAD], results[BASS]
 
     assert lead.status is StemStatus.RENDERED
     assert bass == TrackResult(BASS, status, detail="the worker failed")
@@ -239,7 +300,8 @@ def test_unresolved_sound_removes_the_earlier_stem_and_stamp(tmp_path: Path) -> 
     setup = Setup(tmp_path)
     setup.render(make_song())
 
-    lead, bass = setup.render(make_song(bass="fake:gone"))
+    results = by_name(setup.render(make_song(bass="fake:gone")))
+    lead, bass = results[LEAD], results[BASS]
 
     assert lead.cached
     assert bass.status is SoundFailureStatus.UNKNOWN_SOUND
@@ -252,7 +314,8 @@ def test_unresolved_sound_removes_the_earlier_stem_and_stamp(tmp_path: Path) -> 
 def test_unusable_output_is_crashed_and_leaves_no_stem(tmp_path: Path, bad: BadOutput) -> None:
     setup = Setup(tmp_path, make_instrument(pad=FakeSound("a pad", "pad", 0.2, bad_output=bad)))
 
-    lead, bass = setup.render(make_song())
+    results = by_name(setup.render(make_song()))
+    lead, bass = results[LEAD], results[BASS]
 
     assert lead.status is StemStatus.RENDERED
     assert bass.status is RenderFailureStatus.CRASHED
@@ -296,10 +359,14 @@ def test_requests_carry_the_performance_to_a_path_that_is_gone_afterwards(tmp_pa
     statuses_seen = statuses(setup.render(song))
 
     crashed = RenderFailureStatus.CRASHED
-    assert same(statuses_seen, [StemStatus.RENDERED, crashed, crashed])
+    # Nodes render in the graph's topological order: bass, drums, lead.
+    assert same(statuses_seen, [crashed, crashed, StemStatus.RENDERED])
     requests = setup.instrument.renders
+    assert [request.sound.ref.name for request in requests] == ["pad", "dead", None]
     assert [request.performance for request in requests] == [
-        perform(song, track) for track in song.tracks
+        perform(song, song.tracks[1]),
+        perform(song, song.tracks[2]),
+        perform(song, song.tracks[0]),
     ]
     assert len({request.audio_path for request in requests}) == 3
     assert not [request.audio_path for request in requests if request.audio_path.exists()]
@@ -366,3 +433,58 @@ def test_track_result_dataclass_replace_keeps_its_rules() -> None:
         TrackResult(LEAD, RenderFailureStatus.CRASHED, detail="no", cached=True)
     with pytest.raises(ValueError, match="has no detail"):
         dataclasses.replace(result, detail="no")
+
+
+def test_stems_are_byte_identical_across_the_render_format_bump(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A format bump changes only cache keys: one re-render, then stems the machine cannot tell
+    apart, and after that every stamp reports cached again."""
+    setup = Setup(tmp_path)
+    song = make_song()
+    monkeypatch.setattr(cache, "RENDER_FORMAT", 2)
+    setup.render(song)
+    before = {name: setup.store.stem_path(name).read_bytes() for name in (LEAD, BASS)}
+
+    monkeypatch.setattr(cache, "RENDER_FORMAT", 3)
+    bumped = by_name(setup.render(song))
+
+    assert [result.cached for result in bumped.values()] == [False, False]
+    assert {name: setup.store.stem_path(name).read_bytes() for name in (LEAD, BASS)} == before
+
+    again = by_name(setup.render(song))
+
+    assert [result.cached for result in again.values()] == [True, True]
+
+
+def test_topological_order_is_deterministic_and_ties_break_by_name() -> None:
+    first = make_song().graph().topological()
+    second = make_song().graph().topological()
+
+    assert [node.name for node in first] == ["bass", "lead"]
+    assert [node.name for node in first] == [node.name for node in second]
+
+
+def test_render_order_is_topological_and_report_order_is_song_order(tmp_path: Path) -> None:
+    """C4: the two orders are separate contracts, so they are asserted separately."""
+    song = make_song()
+    instrument = make_instrument()
+    instruments = {instrument.name: instrument}
+    renders = FakeRenderStore(tmp_path / "renders")
+    store = renders.song(SONG_ID)
+    audio_files = NpyAudioFiles()
+    tools = AnalysisTools(FakeMixer(), FakeMeasurer(), FakeVisualizer())
+
+    rendered = render_song(
+        song, renders, SONG_ID, instruments, audio_files, timeout_s=10.0, force=False
+    )
+    report = analyze_song(
+        song, "demo", renders, SONG_ID, instruments, audio_files, FakeRecordWriter(), tools
+    )
+
+    graph = song.graph()
+    assert [result.track for result in rendered] == [node.name for node in graph.topological()]
+    assert [result.track for result in rendered] == ["bass", "lead"]
+    assert [node.name for node in report.nodes] == [node.name for node in graph.nodes]
+    assert [node.name for node in report.nodes] == ["lead", "bass"]
+    assert store.stem_path(BASS).is_file()

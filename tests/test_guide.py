@@ -130,7 +130,7 @@ def test_statuses_and_defects_are_named() -> None:
 def test_report_fields_exist() -> None:
     fields = {
         field.name
-        for cls in (report.Report, report.TrackReport, report.MixReport)
+        for cls in (report.Report, report.NodeReport, report.MixReport)
         for field in dataclasses.fields(cls)
     }
     names = set(first_column("Reading the analysis"))
@@ -138,7 +138,7 @@ def test_report_fields_exist() -> None:
     assert {
         "run",
         "song_sha256",
-        "track_key",
+        "node_key",
         "sound_key",
         "bands_db",
         "bar_dbfs",
@@ -260,8 +260,8 @@ def test_python_example_renders_without_defects(tmp_path: Path) -> None:
 
     result = real_analyze(tmp_path, example, "example0/example.py")
 
-    for track in result.tracks:
-        assert track.status is report.AnalysisStatus.ANALYZED, track.detail
-        assert track.defects == ()
+    for node in result.nodes:
+        assert node.status is report.AnalysisStatus.ANALYZED, node.detail
+        assert node.defects == ()
     assert result.mix is not None
     assert result.mix.defects == (), result.mix.peak_dbfs

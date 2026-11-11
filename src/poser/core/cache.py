@@ -2,26 +2,42 @@
 
 import math
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 
-from poser.core.audio import NUM_CHANNELS, SAMPLE_RATE, STEM_BIT_DEPTH, TAIL_S, song_duration_s
+from poser.core.audio import (
+    NUM_CHANNELS,
+    SAMPLE_RATE,
+    STEM_BIT_DEPTH,
+    TAIL_S,
+    graph_duration_s,
+)
+from poser.core.graph import Graph, Node
 from poser.core.jsonvalue import digest
-from poser.core.song import Song, Track
 from poser.core.statuses import StemStatus
 
 # Raise whenever rendering code changes what a stem contains for the same inputs, so every
 # existing stamp stops matching.
-RENDER_FORMAT = 2
+RENDER_FORMAT = 3
 
 _KEY = re.compile(r"[0-9a-f]{64}")
 
 
-def track_key(song: Song, track: Track) -> str:
-    """Return a digest of everything from the song that reaches the track's instrument.
+def node_key(
+    graph: Graph,
+    node: Node,
+    resolved_identity: str | None,
+    upstream_keys: Sequence[tuple[str, str, float]],
+) -> str:
+    """Return a digest of everything from the graph that reaches the node's inputs.
 
-    Gain is left out, because it applies only at mixdown. The song's duration is in, because every
-    stem shares it. Numbers are normalized so that `1` and `1.0` give the same key.
+    Gain is left out, because it applies only at mixdown. The graph's tempo and horizon are in,
+    because every stem shares them. `resolved_identity` is the node's resolved sound as
+    `sound_key` digests it, or None while the sound does not resolve. `upstream_keys` carries
+    each feeding wire's upstream node key, wire kind, and wire gain, in render order, so a
+    changed input changes every key downstream of it; the list is empty while no node accepts
+    wires. Numbers are normalized so that `1` and `1.0` give the same key.
     """
     return digest(
         {
@@ -30,18 +46,19 @@ def track_key(song: Song, track: Track) -> str:
             "channels": NUM_CHANNELS,
             "bit_depth": STEM_BIT_DEPTH,
             "tail_s": TAIL_S,
-            "bpm": float(song.bpm),
-            "duration_s": song_duration_s(song),
-            "name": track.name,
-            "sound": track.sound,
+            "bpm": float(graph.bpm),
+            "duration_s": graph_duration_s(graph),
+            "name": node.name,
+            "sound": resolved_identity,
             "notes": [
                 [float(note.beat), int(note.pitch), float(note.length), int(note.velocity)]
-                for note in track.notes
+                for note in node.notes
             ],
             "cc": [
                 [float(change.beat), int(change.control), int(change.value), change.shape]
-                for change in track.cc
+                for change in node.cc
             ],
+            "upstream": [[key, kind, float(gain_db)] for key, kind, gain_db in upstream_keys],
         }
     )
 

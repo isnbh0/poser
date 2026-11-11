@@ -1,4 +1,5 @@
-"""Rendering: turning each track of a song into a stem, reusing stems whose inputs are unchanged.
+"""Rendering: turning each node of a song's graph into a stem, reusing stems whose inputs are
+unchanged.
 
 The instrument writes raw audio to a temporary file the core owns. The core alone makes it
 `Audio`, decides whether it is `rendered` or `silent`, writes the stem, and stamps it, so no
@@ -9,9 +10,11 @@ import tempfile
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from typing import cast
 
 from poser.core.audio import SILENCE_DBFS, AudioProblem, measure_peak_dbfs, read_raw_audio
-from poser.core.cache import Stamp, sound_key, track_key
+from poser.core.cache import Stamp, node_key, sound_key
+from poser.core.graph import Graph, Node
 from poser.core.names import Identifier, SongId, TrackName
 from poser.core.performance import perform
 from poser.core.ports import (
@@ -24,13 +27,14 @@ from poser.core.ports import (
     SongStore,
     SoundFailure,
 )
-from poser.core.song import Song, Track, is_number
+from poser.core.song import Song, is_number
+from poser.core.sounds import parse_sound_ref
 from poser.core.statuses import RenderFailureStatus, RenderStatus, SoundFailureStatus, StemStatus
 
 
 @dataclass(frozen=True)
-class ResolvedTrack:
-    """A track's instrument, its resolved sound, and the sound's cache key."""
+class ResolvedNode:
+    """A node's instrument, its resolved sound, and the sound's cache key."""
 
     instrument: Instrument
     sound: ResolvedSound
@@ -38,7 +42,7 @@ class ResolvedTrack:
 
     def __post_init__(self) -> None:
         if not isinstance(self.sound, ResolvedSound):
-            raise ValueError(f"ResolvedTrack.sound must be a ResolvedSound, got {self.sound!r}")
+            raise ValueError(f"ResolvedNode.sound must be a ResolvedSound, got {self.sound!r}")
 
 
 @dataclass(frozen=True)
@@ -76,11 +80,12 @@ class TrackResult:
                 raise ValueError(f"TrackResult with status {self.status} cannot be cached")
 
 
-def resolve_track(
-    track: Track, instruments: Mapping[Identifier, Instrument]
-) -> ResolvedTrack | SoundFailure:
-    """Resolve a track's sound through its instrument, or return why it cannot be used."""
-    ref = track.sound_ref
+def resolve_node(
+    node: Node, instruments: Mapping[Identifier, Instrument]
+) -> ResolvedNode | SoundFailure:
+    """Resolve a track node's sound through its instrument, or return why it cannot be used."""
+    # The node's constructor checked that a track node's sound parses as a reference.
+    ref = parse_sound_ref(cast("str", node.sound))
     instrument = instruments.get(ref.instrument)
     if instrument is None:
         return SoundFailure(
@@ -90,7 +95,7 @@ def resolve_track(
     if isinstance(sound, SoundFailure):
         return sound
     key = sound_key(instrument.adapter_id, instrument.adapter_version, sound.identity)
-    return ResolvedTrack(instrument, sound, key)
+    return ResolvedNode(instrument, sound, key)
 
 
 def require_stem_format(renders: RenderStore, audio_files: AudioFiles) -> None:
@@ -112,25 +117,27 @@ def render_song(
     timeout_s: float,
     force: bool,
 ) -> list[TrackResult]:
-    """Render each track whose inputs changed since its stem was written, or every track if forced.
+    """Render each node whose inputs changed since its stem was written, or every node if forced.
 
-    Raises SongBusyError when another run holds the song's lock, and ValueError when the store's
-    stem suffix differs from the audio files'.
+    Nodes render in the graph's topological order. Raises SongBusyError when another run holds
+    the song's lock, and ValueError when the store's stem suffix differs from the audio files'.
     """
     require_stem_format(renders, audio_files)
     store = renders.song(song_id)
+    graph = song.graph()
     with store.lock():
         # Results from older stems must not survive a render.
         store.clear_latest()
         return [
-            _render_track(song, track, store, instruments, audio_files, timeout_s, force=force)
-            for track in song.tracks
+            _render_node(song, graph, node, store, instruments, audio_files, timeout_s, force=force)
+            for node in graph.topological()
         ]
 
 
-def _render_track(
+def _render_node(
     song: Song,
-    track: Track,
+    graph: Graph,
+    node: Node,
     store: SongStore,
     instruments: Mapping[Identifier, Instrument],
     audio_files: AudioFiles,
@@ -138,23 +145,24 @@ def _render_track(
     *,
     force: bool,
 ) -> TrackResult:
-    name = track.track_name
-    resolved = resolve_track(track, instruments)
+    name = TrackName(node.name)
+    resolved = resolve_node(node, instruments)
     if isinstance(resolved, SoundFailure):
-        # A track whose sound cannot be resolved leaves no stem or stamp for later steps.
+        # A node whose sound cannot be resolved leaves no stem or stamp for later steps.
         store.discard(name)
         return TrackResult(name, resolved.status, detail=resolved.detail)
 
-    keys = (track_key(song, track), resolved.sound_key)
+    # The stamp's key is compared alone: the resolved sound is digested into the node key.
+    key = node_key(graph, node, resolved.sound_key, ())
     if not force:
         stamp = store.read_stamp(name)
-        if isinstance(stamp, Stamp) and (stamp.track_key, stamp.sound_key) == keys:
+        if isinstance(stamp, Stamp) and stamp.track_key == key:
             return TrackResult(
                 name, stamp.status, stamp.peak_dbfs, store.stem_path(name), cached=True
             )
 
     # Computed before anything is removed, so a failure here keeps the old stem and stamp.
-    performance = perform(song, track)
+    performance = perform(song, node)
     # Only a stem written in this run can be stamped.
     store.discard(name)
     with tempfile.TemporaryDirectory() as directory:
@@ -174,5 +182,5 @@ def _render_track(
     audio_files.write(stem, audio)
     peak = measure_peak_dbfs(audio.samples)
     status = StemStatus.SILENT if peak < SILENCE_DBFS else StemStatus.RENDERED
-    store.write_stamp(name, Stamp(*keys, status, peak))
+    store.write_stamp(name, Stamp(key, resolved.sound_key, status, peak))
     return TrackResult(name, status, peak, stem)

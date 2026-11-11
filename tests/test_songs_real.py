@@ -22,8 +22,8 @@ def test_song_renders_without_defects(path: Path, tmp_path: Path) -> None:
 
     report = real_analyze(tmp_path, song, f"songs/{path.name}")
 
-    for track in report.tracks:
-        assert track.status is AnalysisStatus.ANALYZED, f"{track.name}: {track.detail}"
-        assert track.defects == (), track.name
+    for node in report.nodes:
+        assert node.status is AnalysisStatus.ANALYZED, f"{node.name}: {node.detail}"
+        assert node.defects == (), node.name
     assert report.mix is not None
     assert report.mix.defects == (), report.mix.peak_dbfs

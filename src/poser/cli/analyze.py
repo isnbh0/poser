@@ -23,10 +23,10 @@ from poser.core.loading import load_song
 from poser.core.ports import ConfigError, SongBusyError
 from poser.core.report import (
     MixReport,
+    NodeReport,
     Report,
     SectionError,
     SectionReport,
-    TrackReport,
     report_failed,
 )
 from poser.core.song import SongError
@@ -54,9 +54,9 @@ def format_table(report: Report) -> str:
     def number(value: float | None) -> str:
         return "-" if value is None else f"{value:.1f}"
 
-    def row(name: str, status: str, values: TrackReport | MixReport) -> tuple[str, ...]:
+    def row(name: str, status: str, values: NodeReport | MixReport) -> tuple[str, ...]:
         clipped = "-" if values.clipped_samples is None else str(values.clipped_samples)
-        gain = number(values.gain_db) if isinstance(values, TrackReport) else "-"
+        gain = number(values.gain_db) if isinstance(values, NodeReport) else "-"
         return (
             name,
             status,
@@ -69,12 +69,12 @@ def format_table(report: Report) -> str:
 
     rows = [("NAME", "STATUS", "GAIN DB", "PEAK DBFS", "LUFS", "CLIPPED", "DEFECTS")]
     details: list[str] = []
-    for track in report.tracks:
-        rows.append(row(track.name, str(track.status), track))
-        if track.detail:
-            details.append(f"{track.name}: {track.detail}")
-        details += section_details(track.name, track.sections)
-    # Brackets cannot appear in a track name, so this row cannot be mistaken for a track.
+    for node in report.nodes:
+        rows.append(row(node.name, str(node.status), node))
+        if node.detail:
+            details.append(f"{node.name}: {node.detail}")
+        details += section_details(node.name, node.sections)
+    # Brackets cannot appear in a node name, so this row cannot be mistaken for a node.
     if report.mix is None:
         rows.append(("[mix]", "not_written", "-", "-", "-", "-", "-"))
     else:

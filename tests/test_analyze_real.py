@@ -21,12 +21,12 @@ def test_demo_song_mixes_and_analyzes(tmp_path: Path) -> None:
 
     report = real_analyze(tmp_path, song, "songs/demo.yaml")
 
-    for track in report.tracks:
-        assert track.status is AnalysisStatus.ANALYZED, track.detail
-        assert Defect.SILENT not in track.defects
+    for node in report.nodes:
+        assert node.status is AnalysisStatus.ANALYZED, node.detail
+        assert Defect.SILENT not in node.defects
     assert report.mix is not None
     assert report.mix.defects == ()
-    assert all(track.sound_key is not None for track in report.tracks)
+    assert all(node.sound_key is not None for node in report.nodes)
     assert report.mix.integrated_lufs is not None
     assert math.isfinite(report.mix.integrated_lufs)
     with ReadableAudioFile(report.mix.path) as mix:  # ty: ignore[no-matching-overload]
