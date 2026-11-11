@@ -18,6 +18,7 @@ from poser.core.graph import Graph, Node, Wire
 from poser.core.jsonvalue import Json
 from poser.core.names import Identifier, NodeName, SongId, Suffix
 from poser.core.performance import Performance
+from poser.core.piano_roll import PianoRoll
 from poser.core.report import Levels, Measurements
 from poser.core.song import Song, is_int, is_number
 from poser.core.sounds import SoundEntry, SoundRef
@@ -89,6 +90,15 @@ class RecordWriter(Protocol):
 
         Returns the same text on every call and for equal songs or graphs.
         """
+        ...
+
+
+@runtime_checkable
+class PianoRollDrawer(Protocol):
+    """Draw authored note data to an explicit PNG path, without publication policy."""
+
+    def draw(self, roll: PianoRoll, path: Path) -> None:
+        """Write a complete PNG to `path`."""
         ...
 
 

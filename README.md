@@ -116,6 +116,9 @@ exposure. Owner instructions and custom instrument notes remain untouched.
 
 ## Commands
 
+- `uv run piano-roll <song> --output <path.png>`: draw authored notes without plugins or audio;
+  use `--replace` to atomically replace an existing PNG. Load only trusted Python songs.
+
 - `uv run init-workspace --setup surge`: write the selected reference setup and guide into a directory.
 - `uv run check-instruments`: check instrument loading and note output; report exact sample-value
   equality with no tolerance separately as informational repeatability. `REPEATABLE no` alone

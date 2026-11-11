@@ -94,6 +94,9 @@ def test_modes_keep_reference_and_adapter_options_identical(tmp_path: Path) -> N
     assert "humanize" in required
     assert "## Pedalboard instruments" in required
     assert "headroom" in required
+    assert "## Piano roll" in required
+    assert "--replace" in required
+    assert "Input aliases, symlinks" in required
     # All required content remains byte-identical aside from the visible mode marker.
     stripped = guided.replace("Advice: on", "Advice: off")
     for block in [GuideBlock((SCAFFOLD_DIR / "advice.md").read_text(), True), *on.guide_blocks()]:

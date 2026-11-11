@@ -43,6 +43,7 @@ from poser.core.ports import (
     Instrument,
     Measurer,
     Mixer,
+    PianoRollDrawer,
     RecordWriter,
     RenderStore,
     ReportSection,
@@ -82,6 +83,7 @@ BUILTINS: Mapping[str, Mapping[str, str]] = MappingProxyType(
         "measurer": MappingProxyType({"standard": "poser.adapters.measuring:create"}),
         "visualizer": MappingProxyType({"spectrogram": "poser.adapters.spectrogram:create"}),
         "sections": MappingProxyType[str, str]({}),
+        "piano_roll_drawer": MappingProxyType[str, str]({}),
     }
 )
 # Each `[adapters]` key and its default, in the order `guide_parts` follows. A tuple is a list key.
@@ -483,6 +485,21 @@ class Composition:
             return tuple(built)
 
         return self._cached("song_formats", build)
+
+    def piano_roll_drawer(self) -> PianoRollDrawer:
+        """The fixed PNG capability; deliberately not a configurable adapter key."""
+        spec = AdapterSpec("poser.adapters.piano_roll:build_piano_roll_drawer")
+        return self._cached(
+            "piano_roll_drawer",
+            lambda: self._make(
+                "piano_roll_drawer",
+                "piano_roll_drawer",
+                spec,
+                PianoRollDrawer,
+                self._options(spec),
+                self._context,
+            ),
+        )
 
     def record_writer(self) -> RecordWriter:
         def build() -> RecordWriter:
