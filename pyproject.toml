@@ -38,6 +38,7 @@ build-backend = "uv_build"
 [dependency-groups]
 dev = [
     "pytest>=9.2.0",
+    "poser-scsynth",
 ]
 lint = [
     "ruff>=0.17.4",
@@ -47,6 +48,12 @@ lint = [
 
 [tool.uv]
 default-groups = ["dev", "lint"]
+
+[tool.uv.sources]
+poser-scsynth = { workspace = true }
+
+[tool.uv.workspace]
+members = ["packages/poser-scsynth"]
 
 [tool.ruff]
 line-length = 100

@@ -1,0 +1,19 @@
+[project]
+name = "poser-scsynth"
+version = "0.1.0"
+description = "A poser instrument adapter that renders sounds through SuperCollider's scsynth"
+authors = [
+    { name = "John Choi", email = "5154439+isnbh0@users.noreply.github.com" }
+]
+readme = "README.md"
+license = "GPL-3.0-or-later"
+license-files = ["LICENSE"]
+requires-python = ">=3.13"
+dependencies = [
+    "numpy>=2.5.4",
+    "scipy>=1.18.1",
+]
+
+[build-system]
+requires = ["uv_build>=0.13.6,<0.14.0"]
+build-backend = "uv_build"

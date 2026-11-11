@@ -2,6 +2,12 @@ version = 1
 revision = 5
 requires-python = ">=3.13"
 
+[manifest]
+members = [
+    "poser",
+    "poser-scsynth",
+]
+
 [[package]]
 name = "colorama"
 version = "0.4.6"
@@ -496,6 +502,7 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "poser-scsynth" },
     { name = "pytest" },
 ]
 lint = [
@@ -516,11 +523,29 @@ requires-dist = [
 ]
 
 [package.metadata.requires-dev]
-dev = [{ name = "pytest", specifier = ">=9.2.0" }]
+dev = [
+    { name = "poser-scsynth", editable = "packages/poser-scsynth" },
+    { name = "pytest", specifier = ">=9.2.0" },
+]
 lint = [
     { name = "ruff", specifier = ">=0.17.4" },
     { name = "ty", specifier = ">=0.0.98" },
     { name = "types-pyyaml", specifier = ">=6.0.12.20261103" },
+]
+
+[[package]]
+name = "poser-scsynth"
+version = "0.1.0"
+source = { editable = "packages/poser-scsynth" }
+dependencies = [
+    { name = "numpy" },
+    { name = "scipy" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "numpy", specifier = ">=2.5.4" },
+    { name = "scipy", specifier = ">=1.18.1" },
 ]
 
 [[package]]
