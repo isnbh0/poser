@@ -13,7 +13,8 @@ from helpers import REPO_DIR, SCAFFOLD_DIR, SURGE_DIR, real_analyze, real_compos
 import poser
 from poser.adapters.song_formats import SONG_FORMATS
 from poser.compose import read_config
-from poser.core import music, report, song
+from poser.core import analysis, music, report, song
+from poser.core.graph import Graph, Node, Wire
 from poser.core.guide import FIRST_INSTRUMENT_PLACEHOLDER
 from poser.core.loading import load_song
 from poser.core.ports import ResolvedSound
@@ -102,6 +103,19 @@ def test_guide_is_short_and_claude_imports_studio_instructions() -> None:
 
 def test_python_examples_load(tmp_path: Path) -> None:
     assert python_songs(tmp_path)
+
+
+def test_dry_wet_branch_has_two_mix_leaves() -> None:
+    graph = Graph(
+        bpm=100,
+        nodes=(
+            Node("lead", "track", sound="surge", notes=music.notes([60], 0, 1, 100)),
+            Node("wet", "effect", effect="reverb"),
+            Node("dry", "effect", effect="sum"),
+        ),
+        wires=(Wire("lead", "wet", "audio"), Wire("lead", "dry", "audio")),
+    )
+    assert {node.name for node in analysis._leaves(graph)} == {"wet", "dry"}
 
 
 def test_yaml_examples_parse() -> None:

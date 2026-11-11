@@ -92,16 +92,17 @@ Music helpers, from `poser`; their docstrings give the parameters:
 
 ## Routing
 
-With the script format enabled, direct wiring is opt-in: `build()` may return a `Graph` of named `Node`s joined
-by `Wire`s, instead of a `Song`. An effect node names a recipe from `poser.toml` exactly like a
-track's `effects` list; a track node stays a source and takes no wires, and a node may feed any
-number of nodes. A wire carries audio, scaled by its `gain_db` for sends, or `control`, at most
-one per node and only into a recipe that documents a control input, such as a sidechain duck.
+With the script format enabled, `build()` may return a `Graph` of named `Node`s joined by `Wire`s.
+An effect node names a recipe from `poser.toml`; a track node is a source and takes no wires.
+A node may feed many nodes. A wire carries audio, scaled by `gain_db`, or `control`, at most one
+per node and only into a recipe that documents a control input, such as a sidechain duck.
 
-The mix is the sum of the nodes nothing feeds from, each at its own `gain`. A bus is an effect
-node fed by sends, each scaled by its wire's `gain_db`, fading its group at the bus's own `gain`.
+The mix sums nodes nothing feeds from, each at its own `gain_db`. A bus is an effect node fed by
+sends, each scaled by its wire's `gain_db`, fading its group at the bus's own `gain_db`.
 Routing a track's output into an effect removes the track's dry sound from the mix unless a dry
-branch is authored — fan the track out to both the effect and the mix to keep it.
+branch is authored. For example, wire the track to both a wet effect node and a passthrough
+`sum` effect node (configured in `poser.toml` with `builtin = "sum"`). Leave both nodes without
+outgoing wires; the mix includes both their outputs. The mix itself is not a wire target.
 
 ## Feedback
 
@@ -120,8 +121,7 @@ it. A bare instrument name is that instrument's default sound, and each instrume
 names. Choose sounds by the role each track plays. This workspace's instruments are under
 "Instruments here".
 
-`list-sounds` exits 0 when every sound is listed (notes about unreadable files may print), 1
-when a source has a problem its message names, and 2 when `poser.toml` could not be read.
+`list-sounds` exits 0 when all sounds are listed, 1 for a source problem, and 2 for unreadable config.
 
 ## Rendering
 
@@ -177,8 +177,7 @@ Defects fail the analysis: `silent`, for a node or the mix; `clipping`, for mix 
 full scale; and `headroom`, for a mix peak above -1 dBFS. A section's defects and errors also
 fail the analysis.
 
-`run` and `song_sha256` tell versions apart; `node_key` and `sound_key` show which nodes
-changed.
+`run` and `song_sha256` tell versions apart; `node_key` and `sound_key` show which nodes changed.
 
 ## Commands
 
@@ -189,8 +188,9 @@ changed.
 - `uv run save-sound`: for owners, not agents; only for instruments supporting capture.
 - `uv run init-workspace --setup surge`: makes a new workspace; not needed here.
 
-Edit `AGENTS.md` for studio preferences, instrument `guide` notes in `poser.toml` for instrument
-instructions, and adapter guides for backend-specific guidance. `POSER.md` is generated.
+Edit `AGENTS.md` for studio preferences and instrument `guide` notes in `poser.toml` for
+instrument instructions. `POSER.md` is generated from these instrument notes and poser and adapter
+guides; adapter maintainers own their backend-specific guides.
 
 ## Judging a revision
 

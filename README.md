@@ -2,41 +2,18 @@
 
 [![check](https://github.com/isnbh0/poser/actions/workflows/check.yml/badge.svg)](https://github.com/isnbh0/poser/actions/workflows/check.yml)
 
-You write a song as code, in Python or YAML. poser renders each track through a real VST3 or
-Audio Unit instrument via [pedalboard](https://github.com/spotify/pedalboard), mixes the stems,
-and writes a JSON report and spectrograms, so that an agent, or a person, can revise the song.
+Write a song as code in Python or YAML. poser renders its tracks through instrument backends,
+mixes the stems, and produces reports and spectrograms for a person or agent to use in revisions.
+Backends include VST3 and Audio Unit instruments through [pedalboard](https://github.com/spotify/pedalboard)
+and [scsynth](packages/poser-scsynth/README.md).
 
-## Requirements
+## Create your studio
 
-- macOS
-- Python 3.13 or later
-- [uv](https://docs.astral.sh/uv/)
-- At least one VST3 or Audio Unit instrument
+A studio is your own project for songs, instruments, and renders. Follow the [setup guide](docs/setup.md)
+to create and verify one yourself, or copy the [agent bootstrap prompt](docs/bootstrap.md) to have
+an agent help. Both routes use the same procedure and the Surge XT reference setup.
 
-Initialization requires an explicit reference setup. The `surge` setup uses the free Surge XT
-VST3; see the [Surge setup guide](src/poser/reference_setups/surge/README.md) for installation
-and default locations. If the plugin is not found in the checked locations, initialization fails
-without creating a workspace or falling back to another instrument. Install Surge with appropriate
-permission, or retry with `--plugin-path PATH` for an existing installation. Use `--presets-path
-PATH` to select a custom factory-preset directory; presets are optional. After initialization,
-run `uv run check-instruments` to verify the instrument can render.
-
-## Start a workspace
-
-```bash
-uv init --bare --python 3.13 my-studio && cd my-studio
-uv add git+https://github.com/isnbh0/poser
-uv run init-workspace --setup surge
-uv run check-instruments
-uv run render-song songs/demo.yaml
-uv run analyze-song songs/demo.yaml
-```
-
-`init-workspace` writes `poser.toml`, a demo song, editable studio instructions in `AGENTS.md`,
-a generated composing reference in `POSER.md`, and a `CLAUDE.md` pointing to `AGENTS.md`. The other
-commands find the workspace by walking up from the working directory to the nearest
-`poser.toml`. Songs are named by their path in the workspace, and their results are kept under
-`renders/`.
+## Surge demo
 
 The demo is two Surge XT tracks; its mix and a spectrogram per track land under
 `renders/songs/demo.yaml/latest/`. Play `mix.wav` to hear the song, and see its shape at a
@@ -109,7 +86,7 @@ a built-in name, an import path, or a table with `use` and options:
 
 Edit `AGENTS.md` for studio preferences and each instrument's `guide` in `poser.toml` for
 instrument notes. `POSER.md` is generated from poser's core guide, instrument notes, and adapter
-guides; edit adapter guides for backend-specific guidance. Run `uv run update-guide` after changing
+guides; adapter maintainers supply the backend-specific guidance. Run `uv run update-guide` after changing
 `poser.toml`, and `uv run update-guide --check` to see whether the reference is current. The command
 writes only `POSER.md`, and refuses to replace one it did not generate. `CLAUDE.md` points to
 `AGENTS.md`.

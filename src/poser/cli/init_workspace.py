@@ -12,7 +12,7 @@ from poser.compose import Composition, parse_config
 from poser.core.ports import AdapterContext, ConfigError
 from poser.reference_setups.dispatch import SETUPS, prepare
 
-REPO_README = "https://github.com/isnbh0/poser/blob/main/README.md"
+SETUP_GUIDE = "https://github.com/isnbh0/poser/blob/main/docs/setup.md"
 SETUP_README = (
     "https://github.com/isnbh0/poser/blob/main/src/poser/reference_setups/surge/README.md"
 )
@@ -62,7 +62,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = _Parser(
         prog="init-workspace",
         description="Initialize a workspace using a reference setup. "
-        f"See {REPO_README} and {SETUP_README}.",
+        f"See {SETUP_GUIDE} and {SETUP_README}.",
         epilog="Example: uv run init-workspace --setup surge",
     )
     parser.add_argument("directory", nargs="?", type=Path, default=Path())

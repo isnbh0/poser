@@ -1,9 +1,13 @@
 """The files that make poser a releasable package: license, metadata, README, and type marker."""
 
 import re
+import shlex
+import subprocess
 import tomllib
 from importlib import metadata
 from importlib.resources import files
+from pathlib import Path
+from urllib.parse import unquote, urlsplit
 
 from helpers import REPO_DIR
 
@@ -30,6 +34,98 @@ def test_readme_commands_are_project_scripts() -> None:
 
     assert set(commands) == set(PROJECT["scripts"])
     assert {"check-instruments", "update-guide"} <= set(commands)
+
+
+ONBOARDING = (
+    REPO_DIR / "README.md",
+    REPO_DIR / "docs/setup.md",
+    REPO_DIR / "docs/bootstrap.md",
+    REPO_DIR / "src/poser/reference_setups/surge/README.md",
+    REPO_DIR / "packages/poser-scsynth/README.md",
+)
+
+
+def test_onboarding_local_links_resolve_to_project_files() -> None:
+    result = subprocess.run(
+        ["git", "ls-files", "--cached", "--others", "--exclude-standard"],  # noqa: S607
+        cwd=REPO_DIR,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    project_files = set(result.stdout.splitlines())
+    for document in ONBOARDING:
+        links = re.findall(r"!?\[[^]]*\]\(([^)]+)\)", document.read_text())
+        for link in links:
+            parsed = urlsplit(link)
+            if parsed.scheme or parsed.netloc or not parsed.path:
+                continue
+            target = (document.parent / unquote(parsed.path)).resolve()
+            assert target.is_file(), (document, link)
+            assert str(target.relative_to(REPO_DIR)) in project_files, (document, link)
+
+
+def test_onboarding_commands_and_shared_guide_link() -> None:
+    setup = (REPO_DIR / "docs/setup.md").read_text()
+    bootstrap = (REPO_DIR / "docs/bootstrap.md").read_text()
+    assert PROJECT["urls"]["Repository"] + "/blob/main/docs/setup.md" in bootstrap
+    assert "../src/poser/reference_setups/surge/README.md" in setup
+    for document in ONBOARDING:
+        commands = re.findall(r"uv run ([\w-]+)", document.read_text())
+        assert set(commands) <= set(PROJECT["scripts"]), document
+    blocks = re.findall(r"```bash\n(.*?)```", setup, re.DOTALL)
+    assert len(blocks) == 1
+    lexer = shlex.shlex(blocks[0], posix=True, punctuation_chars="&")
+    lexer.whitespace_split = True
+    tokens = list(lexer)
+    commands: list[list[str]] = [[]]
+    for part in tokens:
+        if part == "&&":
+            commands.append([])
+        else:
+            commands[-1].append(part)
+    assert ["uv", "run", "init-workspace", "--setup", "surge"] in commands
+    for name in ("check-instruments", "render-song", "analyze-song"):
+        assert any(command[:3] == ["uv", "run", name] for command in commands)
+
+
+def test_setup_command_chain_stops_and_retains_working_directory(tmp_path: Path) -> None:
+    setup = (REPO_DIR / "docs/setup.md").read_text()
+    (block,) = re.findall(r"```bash\n(.*?)```", setup, re.DOTALL)
+    fake_uv = """uv() {
+    printf 'uv %s\\n' "$*"
+    if [ "$1" = init ]; then
+        [ "$1" = "$FAIL" ] && return 1
+        [ "$FAIL" = cd ] || mkdir my-studio
+    fi
+    [ "$2" = init-workspace ] && [ "$FAIL" = workspace ] && return 1
+    return 0
+}
+"""
+    for failure in ("init", "cd", "workspace", "none"):
+        parent = tmp_path / failure
+        parent.mkdir()
+        script = f"FAIL={failure}\n{fake_uv}\n{block}\nprintf 'cwd=%s\\n' \"$PWD\"\n"
+        result = subprocess.run(
+            ["/bin/sh", "-c", script], cwd=parent, capture_output=True, text=True, check=True
+        )
+        lines = result.stdout.splitlines()
+        in_studio = failure in ("workspace", "none")
+        assert lines[-1] == f"cwd={parent / 'my-studio' if in_studio else parent}"
+        assert any("check-instruments" in line for line in lines) == (failure == "none")
+        assert any("uv add" in line for line in lines) == in_studio
+
+
+def test_scsynth_readme_config_supplies_engine_path(tmp_path: Path) -> None:
+    from poser_scsynth.config import from_options
+
+    text = (REPO_DIR / "packages/poser-scsynth/README.md").read_text()
+    (example,) = re.findall(r"```toml\n(.*?)```", text, re.DOTALL)
+    options = tomllib.loads(example)["instruments"]["sc"]
+    assert options.pop("adapter") == "poser_scsynth.instrument:create"
+    config = from_options("sc", options, tmp_path)
+    assert config.scsynth is not None
+    assert config.scsynth.name == "scsynth"
 
 
 def test_installed_entry_points_load() -> None:

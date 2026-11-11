@@ -1,6 +1,6 @@
 # Developing poser
 
-poser renders songs written as code through VST instruments and measures the result. This guide is
+poser renders songs written as code through instrument backends and measures the result. This guide is
 for changing poser itself. A studio's `AGENTS.md` is copied once from
 `src/poser/scaffold/agents.md` and belongs to its owner. `update-guide` generates `POSER.md` from
 the core guide, `src/poser/scaffold/guide.md`, instrument notes in `poser.toml`, and adapter guides.

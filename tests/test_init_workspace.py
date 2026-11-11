@@ -15,6 +15,7 @@ from poser.core.guide import GENERATED, compose_guide
 from poser.core.loading import load_song
 from poser.core.ports import ConfigError
 from poser.core.song import Song, SongError
+from poser.reference_setups.surge import prepare as surge
 
 
 @pytest.fixture
@@ -54,6 +55,8 @@ def test_success_writes_current_guide_and_loadable_demo(
     surge = config["instruments"]["surge"]
     assert surge["path"] == str(plugin.resolve())
     assert surge["sources"]["presets"] == str(presets.resolve())
+    for name in ("poser.toml", "songs/demo.yaml", "AGENTS.md", "CLAUDE.md", "POSER.md"):
+        assert (target / name).is_file()
     assert (target / "songs/demo.yaml").read_bytes() == demo
     assert files("poser.reference_setups.surge").joinpath("demo.yaml").read_bytes() == demo
     assert find_workspace(target / "songs") == Workspace(target.resolve())
@@ -123,7 +126,7 @@ def test_missing_selection_and_unknown_setup_do_not_write(
         with pytest.raises(SystemExit) as error:
             init_workspace.main(command)
         assert error.value.code == 2
-        assert "surge" in capsys.readouterr().err
+        assert "uv run init-workspace --setup surge" in capsys.readouterr().err
         assert not target.exists()
 
 
@@ -132,9 +135,23 @@ def test_help_links_to_current_documents(capsys: pytest.CaptureFixture[str]) -> 
         init_workspace.main(["--help"])
     assert error.value.code == 0
     output = capsys.readouterr().out
-    assert "surge" in output
-    assert "README.md" in output
+    assert init_workspace.SETUP_GUIDE in output
+    assert init_workspace.SETUP_README in "".join(output.split())
+    for option in ("--setup", "--plugin-path", "--presets-path"):
+        assert option in output
     assert files("poser.reference_setups.surge").joinpath("README.md").is_file()
+
+
+def test_missing_plugin_diagnostic_links_to_recovery(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(surge, "PLUGIN_PATHS", ())
+    target = tmp_path / "studio"
+    assert init_workspace.main([str(target), "--setup", "surge"]) == 2
+    diagnostic = capsys.readouterr().err
+    assert surge.DOC_URL in diagnostic
+    assert "--plugin-path" in diagnostic
+    assert not target.exists()
 
 
 def test_bad_overrides_do_not_mutate_existing_project(
