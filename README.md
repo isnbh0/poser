@@ -12,13 +12,10 @@ and [scsynth](packages/poser-scsynth/README.md).
 A studio is your own project for songs, instruments, and renders. Follow the [setup guide](docs/setup.md)
 to create and verify one yourself, or copy the [agent bootstrap prompt](docs/bootstrap.md) to have
 an agent help. Both routes use the same procedure: the free Surge XT reference setup on macOS,
-with optional continuation to your first song. If you already requested a composition, continue
-after successful setup without asking for authorization to compose again. This platform scope describes the reference setup,
+with optional continuation to your first song. This platform scope describes the reference setup,
 not every poser backend.
 
-The [optional showcase](docs/showcase.md) is separate creative material, not a setup prerequisite.
-For evaluation, see [advice ablation](docs/ablation.md); do not add it to a composing model's
-required reading path.
+Hear an example and get its source in the [optional showcase](docs/showcase.md).
 
 ## Surge demo
 
@@ -145,37 +142,16 @@ take `--sounds-dir` or `--output-dir`, to work outside a workspace or on another
 
 ## Verified delivery
 
-Use `export-song` when claiming a poser-verified matching delivery. Render/analyze remain available
-for iteration. Export owns one loaded song and one lock across render, analysis, and publication;
-failed execution or analysis publishes no bundle. The unused destination receives `source/`,
-`audio/`, `images/`, `report.json`, and schema-version-1 `manifest.json`. It is not mutable `latest`.
-A collision is refused, never replaced. Exit codes: 0 published; 1 execution, analysis, changed
-input, or I/O failure; 2 invalid arguments/configuration; 3 song contention. `--json` reports the
-outcome and diagnostics, with bundle paths only on success. `--force` bypasses render caching,
-not safety checks. Configuration, sounds, and output path options work as for render/analyze.
+Use `uv run export-song <song> --destination <new-directory>` for a matching delivery.
+Export renders and analyzes one loaded song under one lock, then publishes editable `source/`,
+`audio/`, `images/`, `report.json`, and a hash manifest only on success. Existing destinations
+are never replaced; later renders do not change the bundle. Declare local source dependencies
+with repeatable `--include <source-relative-file>`.
 
-The manifest binds source and artifact SHA-256 hashes to the analysis run and serialized-song
-`song_sha256`; that last digest is not a raw source-file hash. Configuration and role-labeled
-source/configuration-root `uv.lock` digests (or absence) are evidence, not proof of the executing
-Python environment. Configuration itself and plugin/preset binaries are not bundled. Includes
-resolve from the source root, not implicitly from the configuration directory. With all path
-options explicit the source root is the invocation directory; otherwise it is the discovered or
-configured workspace. Destination and explicit path options resolve from the invocation directory.
-Unsafe includes, source escapes, and overlap with inputs or store-mutated roots are refused.
-Legacy stores without declared protected roots cannot perform verified export.
-
-Guidance evidence records `configured_advice` separately from the observed guide: `current`,
-`stale`, or `unavailable`, with raw digest and recognized mode when available. Stale/missing guides
-do not block audio export; changes during export yield unavailable evidence. This cannot prove
-what a model read. Source/configuration/lockfile changes instead prevent publication.
-
-Schema-owned report/manifest artifact paths remain valid when the bundle moves. Section payloads
-are opaque JSON, preserved without copying or interpreting embedded paths; when present the
-manifest declares `section_payload_portability: "opaque_not_verified"`. Hashes cover bundled
-artifacts other than the manifest itself. Export always records `listening: "not_auditioned"`;
-actual audition belongs in separate evidence. It cannot sandbox Python, detect every external
-input or undeclared import, prevent external change-and-revert races, or make plugins deterministic.
-Prior historical reports require a new export run; they do not retain matching historical audio.
+Render/analyze remain useful for iteration. Export verifies correspondence, not musical quality,
+a complete reproducible environment, or actual listening. Label unauditioned work honestly.
+See the [export contract](docs/setup.md#export-contract) for exit codes, path rules, manifest
+fields, and evidence boundaries.
 
 ## Adapters of your own
 
@@ -214,8 +190,8 @@ share. In a uv workspace, make the workspace a package (`[tool.uv] package = tru
 `make check` runs format, lint, types, and the tests that need no plugins. `make test-real` loads
 real plugins; it reads a `poser.toml` at the repository root, so copy
 `src/poser/reference_setups/surge/poser.toml` there and edit its paths first. [AGENTS.md](AGENTS.md) describes
-the layout and rules. The [publication checklist](docs/publication-checks.md) separates local checks
-from conditional public acquisition, fresh-install, and listening acceptance.
+the layout and rules. See the [publication checklist](docs/publication-checks.md) before release.
+For controlled composition experiments, see [advice ablation](docs/ablation.md).
 
 ## License
 

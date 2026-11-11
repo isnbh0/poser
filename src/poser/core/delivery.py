@@ -6,13 +6,12 @@ Only schema-owned artifact locations are portable; section payloads remain opaqu
 
 import hashlib
 import json
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import ClassVar
 
 from poser.core.analysis import AnalysisTools, _analyze, report_json
-from poser.core.guide import observed_advice
 from poser.core.jsonvalue import JsonValue
 from poser.core.loading import load_song
 from poser.core.names import Identifier, SongId
@@ -61,67 +60,6 @@ class InputSnapshot:
             return self == self.capture(self.path, optional=True)
         except (OSError, ValueError):
             return False
-
-
-@dataclass(frozen=True)
-class GuideEvidence:
-    path: Path
-    observed: bytes | None
-    availability: str | None
-    evidence: Mapping[str, JsonValue]
-
-    def final(self) -> dict[str, JsonValue]:
-        observed, availability = _read_guide(self.path)
-        if observed != self.observed or availability != self.availability:
-            return {"state": "unavailable", "reason": "changed_during_export"}
-        return dict(self.evidence)
-
-
-def _read_guide(path: Path) -> tuple[bytes | None, str | None]:
-    try:
-        return path.read_bytes(), None
-    except OSError as error:
-        return None, f"{type(error).__name__}: {error}"
-
-
-def capture_guide(path: Path, expected: Callable[[], str]) -> GuideEvidence:
-    """Observe before execution; comparison failure is evidence, not an audio failure."""
-    observed, availability = _read_guide(path)
-    if observed is None:
-        return GuideEvidence(
-            path,
-            observed,
-            availability,
-            {
-                "state": "unavailable",
-                "reason": availability,
-            },
-        )
-    digest = sha256(observed)
-    try:
-        expected_bytes = expected().encode("utf-8")
-    except Exception as error:  # noqa: BLE001 -- unavailable guide comparison is explicit evidence.
-        return GuideEvidence(
-            path,
-            observed,
-            availability,
-            {
-                "state": "unavailable",
-                "reason": f"cannot compose guide: {error}",
-                "sha256": digest,
-            },
-        )
-    mode = observed_advice(observed.decode("utf-8", errors="replace"))
-    return GuideEvidence(
-        path,
-        observed,
-        availability,
-        {
-            "state": "current" if observed == expected_bytes else "stale",
-            "sha256": digest,
-            "observed_advice": mode,
-        },
-    )
 
 
 @dataclass(frozen=True)
@@ -232,14 +170,14 @@ def capture_inputs(
     )
     if any(item.path.is_relative_to(destination) for item in inputs):
         raise DestinationError("destination contains a captured input")
-    # Absence is guide evidence too: publication must not turn that input into a directory.
+    # Preserve the workspace guide namespace even when its file is absent.
     guide_path = configuration_root / "POSER.md"
     if any(
         _overlap(candidate, guide)
         for candidate in (requested_destination, destination)
         for guide in (guide_path, guide_path.resolve())
     ):
-        raise DestinationError("destination overlaps captured guide evidence: POSER.md")
+        raise DestinationError("destination overlaps workspace guide: POSER.md")
     if any(configuration.path.is_relative_to(root) for root in reserved):
         raise ValueError("configuration is in reserved .poser-init namespace")
     return DeliveryInputs(
@@ -312,8 +250,8 @@ class PublishedDelivery:
         if not manifest.is_file() or sha256(manifest.read_bytes()) != self.manifest_sha256:
             raise ValueError("published delivery requires its verified manifest")
         data = json.loads(manifest.read_bytes())
-        if not isinstance(data, dict) or data.get("schema_version") != 1:
-            raise ValueError("published delivery requires schema version 1")
+        if not isinstance(data, dict) or data.get("schema_version") != 2:
+            raise ValueError("published delivery requires schema version 2")
         required_fields = {
             "schema_version",
             "song_id",
@@ -326,7 +264,6 @@ class PublishedDelivery:
             "lockfiles",
             "poser_version",
             "listening",
-            "guidance",
         }
         if not required_fields.issubset(data) or data["listening"] != "not_auditioned":
             raise ValueError("published delivery manifest is incomplete")
@@ -409,8 +346,6 @@ def result_to_data(result: DeliveryResult) -> dict[str, JsonValue]:
 def _bundle(
     inputs: DeliveryInputs,
     report: Report,
-    configured_advice: bool,  # noqa: FBT001
-    guide: GuideEvidence,
     poser_version: str,
     song_id: SongId,
 ) -> dict[Path, bytes]:
@@ -460,7 +395,7 @@ def _bundle(
     if configuration_bytes is None:
         raise ValueError("configuration snapshot has no bytes")
     manifest: dict[str, JsonValue] = {
-        "schema_version": 1,
+        "schema_version": 2,
         "song_id": str(song_id),
         "run": report.run,
         "song_sha256": report.song_sha256,
@@ -480,7 +415,6 @@ def _bundle(
         ],
         "poser_version": poser_version,
         "listening": "not_auditioned",
-        "guidance": {"configured_advice": configured_advice, "guide": guide.final()},
     }
     if any(node.sections for node in report.nodes) or report.mix.sections:
         manifest["section_payload_portability"] = "opaque_not_verified"
@@ -499,9 +433,7 @@ def export_song(
     record_writer: RecordWriter,
     tools: AnalysisTools,
     writer: DeliveryWriter,
-    guide: GuideEvidence,
     *,
-    configured_advice: bool,
     poser_version: str,
     timeout_s: float,
     force: bool,
@@ -540,17 +472,10 @@ def export_song(
                 return AnalysisFailed(f"analysis run {report.run} failed")
             if not Path(report.mix.path).is_file():
                 return AnalysisFailed(f"reported mix is missing: {report.mix.path}")
-            files = _bundle(inputs, report, configured_advice, guide, poser_version, song_id)
+            files = _bundle(inputs, report, poser_version, song_id)
             with writer.stage(inputs.destination, files) as staged:
                 if changed := inputs.changed():
                     return InputsChanged(f"inputs changed: {', '.join(map(str, changed))}")
-                # A guide may change during staging. Rebuild evidence before staging again.
-                final_guide = guide.final()
-                manifest = json.loads(files[Path("manifest.json")])
-                if manifest["guidance"]["guide"] != final_guide:
-                    return _publish_changed_guide(
-                        inputs, report, writer, files, manifest, final_guide
-                    )
                 staged.publish()
             return PublishedDelivery(
                 inputs.destination, sha256(files[Path("manifest.json")]), report
@@ -565,24 +490,3 @@ def export_song(
         return DeliveryIOFailed(str(error))
     except Exception as error:  # noqa: BLE001 -- execution failures are explicit export outcomes.
         return ExecutionFailed(f"{type(error).__name__}: {error}")
-
-
-def _publish_changed_guide(
-    inputs: DeliveryInputs,
-    report: Report,
-    writer: DeliveryWriter,
-    files: dict[Path, bytes],
-    manifest: dict[str, object],
-    evidence: dict[str, JsonValue],
-) -> DeliveryResult:
-    # Replacing the entire guidance object avoids inspecting opaque report-section data.
-    guidance = manifest["guidance"]
-    if not isinstance(guidance, dict):
-        raise ValueError("invalid guidance manifest")
-    guidance["guide"] = evidence
-    files[Path("manifest.json")] = (json.dumps(manifest, indent=2) + "\n").encode()
-    with writer.stage(inputs.destination, files) as staged:
-        if changed := inputs.changed():
-            return InputsChanged(f"inputs changed: {', '.join(map(str, changed))}")
-        staged.publish()
-    return PublishedDelivery(inputs.destination, sha256(files[Path("manifest.json")]), report)

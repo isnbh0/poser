@@ -6,7 +6,6 @@ from importlib.metadata import version
 from pathlib import Path
 
 from poser.cli.common import RENDER_TIMEOUT_S, fail
-from poser.cli.guide import workspace_guide
 from poser.cli.workspace import WorkspaceError, fill_path_options, song_id
 from poser.compose import Composition, delivery_writer, parse_config
 from poser.core.delivery import (
@@ -17,7 +16,6 @@ from poser.core.delivery import (
     DestinationRefused,
     InputSnapshot,
     InvalidInput,
-    capture_guide,
     capture_inputs,
     export_song,
     result_to_data,
@@ -57,7 +55,6 @@ def _run(args: argparse.Namespace) -> DeliveryResult:
         record_writer = composition.record_writer()
         tools = composition.analysis_tools()
         writer = delivery_writer()
-        guide = capture_guide(config_path.parent / "POSER.md", lambda: workspace_guide(composition))
     except (WorkspaceError, ConfigError, ValueError, UnicodeError) as error:
         return InvalidInput(str(error))
     except OSError as error:
@@ -73,8 +70,6 @@ def _run(args: argparse.Namespace) -> DeliveryResult:
         record_writer,
         tools,
         writer,
-        guide,
-        configured_advice=config.guidance.advice,
         poser_version=version("poser"),
         timeout_s=RENDER_TIMEOUT_S,
         force=args.force,

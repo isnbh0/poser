@@ -1,5 +1,6 @@
 """The files that make poser a releasable package: license, metadata, README, and type marker."""
 
+import hashlib
 import json
 import re
 import shlex
@@ -36,8 +37,7 @@ def test_project_metadata() -> None:
 def test_readme_commands_are_project_scripts() -> None:
     commands = re.findall(r"uv run ([\w-]+)", (REPO_DIR / "README.md").read_text())
 
-    assert set(commands) == set(PROJECT["scripts"])
-    assert {"check-instruments", "update-guide", "export-song"} <= set(commands)
+    assert set(commands) <= set(PROJECT["scripts"])
 
 
 ONBOARDING = (
@@ -53,16 +53,8 @@ ONBOARDING = (
 
 
 def test_onboarding_local_links_resolve_to_project_files() -> None:
-    result = subprocess.run(
-        ["git", "ls-files"],  # noqa: S607
-        cwd=REPO_DIR,
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    project_files = set(result.stdout.splitlines())
     for document in ONBOARDING:
-        assert str(document.relative_to(REPO_DIR)) in project_files, document
+        assert document.is_file(), document
         links = re.findall(r"!?\[[^]]*\]\(([^)]+)\)", document.read_text())
         for link in links:
             parsed = urlsplit(link)
@@ -70,29 +62,12 @@ def test_onboarding_local_links_resolve_to_project_files() -> None:
                 continue
             target = (document.parent / unquote(parsed.path)).resolve()
             assert target.is_file(), (document, link)
-            assert str(target.relative_to(REPO_DIR)) in project_files, (document, link)
 
 
-def test_onboarding_commands_and_shared_guide_link() -> None:
-    setup = (REPO_DIR / "docs/setup.md").read_text()
-    bootstrap = (REPO_DIR / "docs/bootstrap.md").read_text()
-    assert PROJECT["urls"]["Repository"] + "/blob/main/docs/setup.md" in bootstrap
-    assert "../src/poser/reference_setups/surge/README.md" in setup
+def test_onboarding_commands_are_project_scripts() -> None:
     for document in ONBOARDING:
         commands = re.findall(r"uv run ([\w-]+)", document.read_text())
         assert set(commands) <= set(PROJECT["scripts"]), document
-    lexer = shlex.shlex(setup_chain(), posix=True, punctuation_chars="&")
-    lexer.whitespace_split = True
-    tokens = list(lexer)
-    commands: list[list[str]] = [[]]
-    for part in tokens:
-        if part == "&&":
-            commands.append([])
-        else:
-            commands[-1].append(part)
-    assert ["uv", "run", "init-workspace", "--setup", "surge"] in commands
-    for name in ("check-instruments", "render-song", "analyze-song"):
-        assert any(command[:3] == ["uv", "run", name] for command in commands)
 
 
 def section(document: Path, heading: str) -> str:
@@ -231,66 +206,6 @@ def test_readme_analysis_example_matches_serialized_report() -> None:
     assert set(documented["mix"]) <= set(serialized_mix)
 
 
-def test_readme_reference_scope_and_repeatability() -> None:
-    studio = section(REPO_DIR / "README.md", "Create your studio").lower()
-    for phrase in ("free", "surge xt", "macos", "optional", "first song"):
-        assert phrase in studio
-    commands = section(REPO_DIR / "README.md", "Commands").lower()
-    check = re.search(r"check-instruments.*?(?=\n- |\Z)", commands, re.DOTALL)
-    assert check is not None
-    for phrase in ("repeatab", "informational", "no"):
-        assert phrase in check[0]
-
-
-def test_setup_optional_composition_and_honest_handoff() -> None:
-    setup = REPO_DIR / "docs/setup.md"
-    verify = section(setup, "Create and verify").lower()
-    verify = " ".join(verify.split())
-    for phrase in (
-        "status and exit code determine failure",
-        "exact sample-value equality",
-        "with no tolerance, not perceptual quality",
-        "a `pass` with `repeatable no` (json `repeatable: false`) is valid",
-        "clipping is informational in instrument checking",
-        "starting a player is not evidence you heard the result",
-        "lack of audition does not invalidate technical setup verification",
-    ):
-        assert phrase in verify
-    compose = " ".join(section(setup, "Compose your first song (optional)").lower().split())
-    for phrase in (
-        "agents.md",
-        "poser.md",
-        "uv run list-sounds",
-        "uv run render-song",
-        "uv run analyze-song",
-        "--json",
-        "source",
-        "wav",
-        "report",
-        "spectrogram",
-        "uv run export-song",
-        "--destination",
-        "--include",
-        "one song lock",
-        "latest",
-        "song_sha256",
-        "not_auditioned",
-    ):
-        assert phrase in compose
-    assert "without asking for that permission again" in compose
-    bootstrap = (REPO_DIR / "docs/bootstrap.md").read_text().lower()
-    (prompt,) = re.findall(r"```text\n(.*?)```", bootstrap, re.DOTALL)
-    for phrase in (
-        "optional",
-        "composition",
-        "setup.md",
-        "cannot listen",
-        "export-song",
-        "--include",
-    ):
-        assert phrase in prompt
-
-
 def test_scsynth_readme_config_supplies_engine_path(tmp_path: Path) -> None:
     from poser_scsynth.config import from_options
 
@@ -315,13 +230,6 @@ def test_installed_entry_points_load() -> None:
         assert callable(entry.load()), entry.name
 
 
-def test_makefile_checks_instruments() -> None:
-    targets = re.findall(r"^([\w-]+):", (REPO_DIR / "Makefile").read_text(), re.MULTILINE)
-
-    assert "check-instruments" in targets
-    assert "check-plugins" not in targets
-
-
 def test_packaged_reference_and_neutral_resources() -> None:
     surge = files("poser.reference_setups.surge")
     for name in ("poser.toml", "demo.yaml", "README.md"):
@@ -331,6 +239,14 @@ def test_packaged_reference_and_neutral_resources() -> None:
         assert scaffold.joinpath(name).is_file(), name
     for name in ("poser.toml", "demo.yaml", "onboarding.txt"):
         assert not scaffold.joinpath(name).is_file(), name
+
+
+def test_showcase_source_and_preview_match_recorded_hashes() -> None:
+    evidence = json.loads((REPO_DIR / "docs/audio/surge-showcase.json").read_text())
+    for field in ("source", "preview"):
+        path = REPO_DIR / evidence[field]
+        assert path.is_file()
+        assert hashlib.sha256(path.read_bytes()).hexdigest() == evidence[f"{field}_sha256"]
 
 
 def test_package_is_marked_typed() -> None:

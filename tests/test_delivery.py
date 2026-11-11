@@ -26,8 +26,7 @@ from poser.adapters.delivery import FileDeliveryWriter
 from poser.adapters.filestore import FileRenderStore, FileSongStore
 from poser.adapters.song_formats import ScriptSongFormat, YamlSongFormat
 from poser.cli import export
-from poser.cli.guide import workspace_guide
-from poser.compose import Composition, WorkspaceConfig, load
+from poser.compose import Composition, WorkspaceConfig
 from poser.core.analysis import AnalysisTools
 from poser.core.delivery import (
     AnalysisFailed,
@@ -39,13 +38,11 @@ from poser.core.delivery import (
     PublishedDelivery,
     RenderFailed,
     SongBusy,
-    capture_guide,
     capture_inputs,
     export_song,
     result_to_data,
     sha256,
 )
-from poser.core.guide import GENERATED
 from poser.core.names import Identifier, SongId, Suffix
 from poser.core.ports import (
     AdapterContext,
@@ -80,7 +77,7 @@ class Harness:
         self.instrument = FakeInstrument("fake", {None: FakeSound(amplitude=0.2)})
         self.tools = AnalysisTools(FakeMixer(), FakeMeasurer(), SvgVisualizer())
         self.guide_path = root / "POSER.md"
-        self.guide_text = f"{GENERATED}\nAdvice: off\nreference\n"
+        self.guide_text = "workspace reference\n"
         self.guide_path.write_text(self.guide_text)
         self.includes: tuple[Path, ...] = ()
         self.writer: DeliveryWriter = FileDeliveryWriter()
@@ -94,7 +91,6 @@ class Harness:
             self.destination,
             self.store,
         )
-        evidence = capture_guide(self.guide_path, lambda: self.guide_text)
         if mutation is not None:
             mutation()
         return export_song(
@@ -108,8 +104,6 @@ class Harness:
             FakeRecordWriter(),
             self.tools,
             self.writer,
-            evidence,
-            configured_advice=False,
             poser_version="test",
             timeout_s=10,
             force=True,
@@ -147,14 +141,8 @@ def test_bundle_hashes_portability_opaque_sections_and_later_runs(harness: Harne
     assert data["lockfiles"] == [
         {"roles": ["source-root", "configuration-root"], "state": "absent", "sha256": None}
     ]
-    assert data["guidance"] == {
-        "configured_advice": False,
-        "guide": {
-            "state": "current",
-            "sha256": sha256(harness.guide_path.read_bytes()),
-            "observed_advice": False,
-        },
-    }
+    assert data["schema_version"] == 2
+    assert "guidance" not in data
     report = json.loads(original[Path("report.json")])
     assert report["mix"]["path"] == "audio/mix.npy"
     assert report["mix"]["spectrogram"] == "images/mix.svg"
@@ -379,66 +367,21 @@ def test_destination_preflight(harness: Harness, where: str) -> None:
     assert not harness.instrument.renders
 
 
-@pytest.mark.parametrize(
-    ("observed", "state", "mode"),
-    [
-        ("on", "stale", True),
-        ("off", "current", False),
-        ("foreign", "stale", None),
-        ("old", "stale", None),
-        ("missing", "unavailable", None),
-    ],
-)
-def test_guidance_evidence(harness: Harness, observed: str, state: str, mode: bool | None) -> None:
-    if observed == "missing":
-        harness.guide_path.unlink()
-    elif observed == "foreign":
-        harness.guide_path.write_text("foreign\nAdvice: off\n")
-    elif observed == "old":
-        harness.guide_path.write_text(f"{GENERATED}\nold reference\n")
-    else:
-        harness.guide_path.write_text(f"{GENERATED}\nAdvice: {observed}\nreference\n")
+@pytest.mark.parametrize("change", ["modify", "delete"])
+def test_guide_changes_do_not_restage(harness: Harness, change: str) -> None:
+    stages: list[str] = []
+
+    def mutate() -> None:
+        stages.append(change)
+        if change == "delete":
+            harness.guide_path.unlink()
+        else:
+            harness.guide_path.write_text("changed")
+
+    harness.writer = HookWriter(mutate)
     assert isinstance(harness.run(), PublishedDelivery)
-    guidance = json.loads(manifest(harness.destination))["guidance"]
-    assert guidance["configured_advice"] is False
-    assert guidance["guide"]["state"] == state
-    if observed == "missing":
-        assert "sha256" not in guidance["guide"]
-        assert "observed_advice" not in guidance["guide"]
-    else:
-        assert guidance["guide"]["observed_advice"] is mode
-        assert guidance["guide"]["sha256"] == sha256(harness.guide_path.read_bytes())
-
-
-def test_comparison_unavailable_and_guide_changed(harness: Harness) -> None:
-    def unavailable() -> str:
-        raise OSError("resource unavailable")
-
-    evidence = capture_guide(harness.guide_path, unavailable).final()
-    assert evidence["state"] == "unavailable"
-    assert "resource unavailable" in str(evidence["reason"])
-    assert "observed_advice" not in evidence
-    harness.writer = HookWriter(lambda: harness.guide_path.write_text("changed"))
-    assert isinstance(harness.run(), PublishedDelivery)
-    assert json.loads(manifest(harness.destination))["guidance"]["guide"] == {
-        "state": "unavailable",
-        "reason": "changed_during_export",
-    }
-
-
-def test_unreadable_guide_is_unavailable(harness: Harness, monkeypatch: pytest.MonkeyPatch) -> None:
-    original = Path.read_bytes
-
-    def read(path: Path) -> bytes:
-        if path == harness.guide_path:
-            raise PermissionError("injected")
-        return original(path)
-
-    monkeypatch.setattr(Path, "read_bytes", read)
-    assert isinstance(harness.run(), PublishedDelivery)
-    evidence = json.loads(manifest(harness.destination))["guidance"]["guide"]
-    assert evidence["state"] == "unavailable"
-    assert "sha256" not in evidence
+    assert stages == [change]
+    assert "guidance" not in json.loads(manifest(harness.destination))
 
 
 def test_success_constructor_refuses_missing_publication(harness: Harness) -> None:
@@ -610,28 +553,51 @@ def test_absent_guide_destination_refused_before_builder(
     assert not guide.exists()
 
 
-def test_cli_current_on_guide_and_collision_json(
+@pytest.mark.parametrize("guide_state", ["missing", "broken", "present"])
+def test_cli_never_reads_or_composes_guide_and_collision_json(
     cli_workspace: CommandWorkspace,
     capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    guide_state: str,
 ) -> None:
     song = write_song(cli_workspace.root / "song.yaml", ("lead", "synth"))
-    composition = load(cli_workspace.config, cli_workspace.root / "sounds", cli_workspace.renders)
-    (cli_workspace.root / "POSER.md").write_text(workspace_guide(composition))
+    guide = cli_workspace.root / "POSER.md"
+    if guide_state == "broken":
+        guide.write_bytes(b"\xff\xfe")
+    elif guide_state == "present":
+        guide.write_text("workspace reference")
+    original_read = Path.read_bytes
+    reads: list[Path] = []
+    compositions: list[str] = []
+
+    def read(path: Path) -> bytes:
+        if path == guide:
+            reads.append(path)
+            raise PermissionError("guide must not be read")
+        return original_read(path)
+
+    def compose(self: Composition) -> str:
+        compositions.append("called")
+        raise RuntimeError("guide composition is broken")
+
+    monkeypatch.setattr(Path, "read_bytes", read)
+    monkeypatch.setattr(Composition, "guide_blocks", compose)
     args = [str(song), "--destination", "bundle", "--json"]
     assert export.main(args) == 0
     first = json.loads(capsys.readouterr().out)
     assert first["outcome"] == "published"
-    evidence = json.loads(manifest(cli_workspace.root / "bundle"))["guidance"]
-    assert evidence["configured_advice"] is True
-    assert evidence["guide"]["state"] == "current"
-    assert evidence["guide"]["observed_advice"] is True
+    assert "guidance" not in json.loads(manifest(cli_workspace.root / "bundle"))
+    assert reads == []
+    assert compositions == []
     assert export.main(args) == 2
     second = json.loads(capsys.readouterr().out)
     assert second["outcome"] == "refused_destination"
     assert "bundle" not in second
 
 
-@pytest.mark.parametrize("corruption", ["empty", "run", "digest", "missing_mix", "report"])
+@pytest.mark.parametrize(
+    "corruption", ["empty", "schema", "run", "digest", "missing_mix", "report"]
+)
 def test_success_constructor_rejects_forbidden_bundle_states(
     harness: Harness,
     corruption: str,
@@ -641,6 +607,8 @@ def test_success_constructor_rejects_forbidden_bundle_states(
     data = json.loads(manifest(harness.destination))
     if corruption == "empty":
         data = {"artifacts": {}}
+    elif corruption == "schema":
+        data["schema_version"] = 1
     elif corruption == "run":
         data["run"] += 1
     elif corruption == "digest":

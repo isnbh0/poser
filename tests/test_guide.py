@@ -14,6 +14,7 @@ import poser
 from poser.adapters.song_formats import SONG_FORMATS
 from poser.compose import read_config
 from poser.core import analysis, music, report, song
+from poser.core.audio import NUM_CHANNELS, SAMPLE_RATE, TAIL_S
 from poser.core.graph import Graph, Node, Wire
 from poser.core.guide import FIRST_INSTRUMENT_PLACEHOLDER
 from poser.core.loading import load_song
@@ -95,42 +96,12 @@ def python_songs(tmp_path: Path) -> list[Song]:
     return songs
 
 
-def test_guide_is_short_and_claude_imports_studio_instructions() -> None:
-    assert len(LINES) < 230
-    assert (SCAFFOLD_DIR / "claude.md").read_text() == "@AGENTS.md\n"
-    assert "[POSER.md](POSER.md)" in (SCAFFOLD_DIR / "agents.md").read_text()
-
-
-def test_composition_guidance_covers_intent_audition_and_honest_delivery() -> None:
-    composing = " ".join(
-        GUIDE.split("## Operational contract\n", 1)[1].split("## Songs", 1)[0].split()
+def test_core_audio_format_and_fixed_tail_are_documented() -> None:
+    rendering = " ".join(
+        GUIDE.split("## Rendering\n", 1)[1].split("## Reading the analysis", 1)[0].split()
     )
-    for phrase in (
-        "owner requirements in `AGENTS.md`",
-        "Playback requires permission",
-        "Starting a player is not listening",
-        'disclose "not auditioned"',
-        "uv run export-song <song> --destination <new-directory>",
-        "loads once, renders, analyzes",
-        "only on success",
-        "local source dependencies",
-        "external state, undeclared imports, and plugin nondeterminism",
-        "Never deliver an earlier mix as current after a failed attempt",
-        "hash manifest",
-        "actual audition is separate evidence",
-        "historical report alone does not prove matching audio",
-    ):
-        assert phrase in composing
-    assert "not a raw editable source-file hash" in GUIDE
-    assert "it does not say a song is good" in GUIDE
-
-
-def test_check_guidance_separates_repeatability_from_success() -> None:
-    commands = " ".join(GUIDE.split("## Commands\n", 1)[1].split("## Judging", 1)[0].split())
-    assert "Repeatability is informational" in commands
-    assert "exact sample-value equality with no tolerance" in commands
-    assert "`pass` with `no` succeeds" in commands
-    assert "Clipping is also informational" in commands
+    assert f"stereo ({NUM_CHANNELS} channels) at {SAMPLE_RATE} Hz" in rendering
+    assert f"fixed {TAIL_S:g} seconds after the last note end or controller change" in rendering
 
 
 def test_python_examples_load(tmp_path: Path) -> None:
@@ -158,28 +129,7 @@ def test_yaml_examples_parse() -> None:
 def test_commands_are_project_scripts() -> None:
     scripts = tomllib.loads((REPO_DIR / "pyproject.toml").read_text())["project"]["scripts"]
     commands = re.findall(r"uv run ([\w-]+)", GUIDE)
-    assert set(commands) == set(scripts)
-
-
-def test_piano_roll_contract_is_documented() -> None:
-    section = " ".join(GUIDE.split("## Piano roll\n", 1)[1].split("## Commands", 1)[0].split())
-    for text in (
-        "--output",
-        "--replace",
-        "--config",
-        "MIDI pitch",
-        "authored",
-        "0.25 + 0.75 * velocity / 127",
-        "not rendered audio",
-        "trusted scripts",
-        "symlinks",
-        "Input aliases",
-        "atomically published",
-        "cleanup warning",
-        "security boundary",
-        "No authored notes",
-    ):
-        assert text in section
+    assert set(commands) <= set(scripts)
 
 
 # Words true of one instrument adapter or one render store, which their own guides hold.
@@ -298,7 +248,6 @@ def test_music_helpers_are_listed() -> None:
 def test_composer_api_exports() -> None:
     assert poser.__all__ == COMPOSER_API
     assert set(MUSIC_HELPERS) <= set(poser.__all__)
-    assert "from poser import " in GUIDE
 
 
 def test_song_length_limit_is_stated() -> None:

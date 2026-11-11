@@ -12,20 +12,6 @@ Never deliver an earlier mix as current after a failed attempt.
 When the script format is enabled, song scripts import `poser` directly, without a PEP 723
 header, in this project's environment.
 
-For a poser-verified matching delivery, use
-`uv run export-song <song> --destination <new-directory>`; render/analyze remain available for
-experiments. Export loads once, renders, analyzes, and publishes matching source, audio, report,
-images, and a hash manifest only on success. The destination must be unused and outside mutable
-stores. Repeat `--include <source-relative-file>` for declared local source dependencies.
-Export accepts `--config`, `--sounds-dir`, `--output-dir`, `--force`, and `--json`.
-Exit codes are 0 for publication, 1 for execution/analysis, changed inputs or I/O failure,
-2 for invalid arguments/configuration, and 3 for song contention.
-Hashes establish byte correspondence, not musical quality or complete Python reproducibility:
-external state, undeclared imports, and plugin nondeterminism remain outside that guarantee.
-The manifest records `listening: "not_auditioned"`; actual audition is separate evidence.
-Opaque report section payloads are preserved but their embedded paths are not verified portable.
-A historical report alone does not prove matching audio when its mix path is mutable.
-
 ## Songs
 
 Defaults are Python (`.py`, with `build()` returning a `Song`) and YAML (`.yaml` or `.yml`).
@@ -33,6 +19,17 @@ Defaults are Python (`.py`, with `build()` returning a `Song`) and YAML (`.yaml`
 If present and YAML is enabled, `songs/demo.yaml` shows that form. Both use the same song checks.
 Times are beats from 0; pitches are MIDI numbers, middle C is 60. A song's last note end or
 controller change must fall within 3600 seconds.
+
+With the script format enabled, this short song shows the form rather than a finished piece:
+
+```python
+from poser import Song, Track, notes
+
+
+def build() -> Song:
+    track = Track(name="example", sound="{first_instrument}", notes=notes([60], 0, 1, 100))
+    return Song(bpm=100, tracks=(track,))
+```
 
 | Key | Where | Type | Range |
 |---|---|---|---|
@@ -58,17 +55,6 @@ Track `effects` form a recipe chain: the first hears the track, each next hears 
 Nodes are named `<track>.<effect>`, with repeats numbered (`bass.drive.2`). Track `gain` fades
 the chain's end.
 
-With the script format enabled, this short song shows the form rather than a finished piece:
-
-```python
-from poser import Song, Track, notes
-
-
-def build() -> Song:
-    track = Track(name="example", sound="{first_instrument}", notes=notes([60], 0, 1, 100))
-    return Song(bpm=100, tracks=(track,))
-```
-
 Music helpers, from `poser`; their docstrings give the parameters:
 - `pitch` — the MIDI pitch of a note name such as `C4`, `F#3`, or `Bb2`.
 - `scale` — one octave of a mode (`MODES`, such as major, minor, dorian) from a root.
@@ -77,27 +63,6 @@ Music helpers, from `poser`; their docstrings give the parameters:
 - `notes` — notes from pitches, together as a chord or `step` beats apart as a line.
 - `swing` — notes with every off-beat moved later, for a swung feel.
 - `humanize` — notes with seeded, repeatable velocity and timing variation.
-
-## Routing
-
-With the script format enabled, `build()` may return a `Graph` of named `Node`s joined by `Wire`s.
-An effect node names a recipe from `poser.toml`; a track node is a source and takes no wires.
-A node may feed many nodes. A wire carries audio, scaled by `gain_db`, or `control`, at most one
-per node and only into a recipe that documents a control input, such as a sidechain duck.
-
-The mix sums leaf nodes at their `gain_db`. A bus is an effect fed by sends scaled by wire
-`gain_db`, fading its group at the bus's `gain_db`.
-Routing a track's output into an effect removes the track's dry sound from the mix unless a dry
-branch is authored. For example, wire the track to both a wet effect node and a passthrough
-`sum` effect node (configured in `poser.toml` with `builtin = "sum"`). Leave both nodes without
-outgoing wires; the mix includes both their outputs. The mix itself is not a wire target.
-
-## Feedback
-
-Opt into loops with `build()` returning `Graph(mode="feedback")`. Removing wires leaving `delay`
-nodes must make the graph acyclic. Each loop's `delay_samples` must be at least one render block
-(512 samples); smaller in-loop delays are refused, while off-loop delays allow any length.
-Rendering uses previous-block feedback; timing is the declared delay, without latency compensation.
 
 ## Sounds
 
@@ -111,6 +76,9 @@ A listing is not an audition or evidence of musical suitability.
 when entries are filtered out, and 2 for unreadable config or unknown instruments.
 
 ## Rendering
+
+Core audio is stereo (2 channels) at 48000 Hz. Rendering adds a fixed 2 seconds after the last
+note end or controller change, not an adaptive release tail. Long releases may be cut off.
 
 `uv run render-song <song>` writes and prints a stem path per node, caching by inputs. Only
 changed nodes render; gain-only edits render nothing. `--force` re-renders all nodes; `--json`
@@ -163,6 +131,43 @@ fail the analysis.
 
 `run` and `song_sha256` tell versions apart; `node_key` and `sound_key` show which nodes changed.
 
+## Verified delivery
+
+For a poser-verified matching delivery, use
+`uv run export-song <song> --destination <new-directory>`; render/analyze remain available for
+experiments. Export loads once, renders, analyzes, and publishes matching source, audio, report,
+images, and a hash manifest only on success. The destination must be unused and outside mutable
+stores. Repeat `--include <source-relative-file>` for declared local source dependencies.
+Export accepts `--config`, `--sounds-dir`, `--output-dir`, `--force`, and `--json`.
+Exit codes are 0 for publication, 1 for execution/analysis, changed inputs or I/O failure,
+2 for invalid arguments/configuration, and 3 for song contention.
+Hashes establish byte correspondence, not musical quality or complete Python reproducibility:
+external state, undeclared imports, and plugin nondeterminism remain outside that guarantee.
+The manifest records `listening: "not_auditioned"`; actual audition is separate evidence.
+Opaque report section payloads are preserved but their embedded paths are not verified portable.
+A historical report alone does not prove matching audio when its mix path is mutable.
+
+## Routing
+
+With the script format enabled, `build()` may return a `Graph` of named `Node`s joined by `Wire`s.
+An effect node names a recipe from `poser.toml`; a track node is a source and takes no wires.
+A node may feed many nodes. A wire carries audio, scaled by `gain_db`, or `control`, at most one
+per node and only into a recipe that documents a control input, such as a sidechain duck.
+
+The mix sums leaf nodes at their `gain_db`. A bus is an effect fed by sends scaled by wire
+`gain_db`, fading its group at the bus's `gain_db`.
+Routing a track's output into an effect removes the track's dry sound from the mix unless a dry
+branch is authored. For example, wire the track to both a wet effect node and a passthrough
+`sum` effect node (configured in `poser.toml` with `builtin = "sum"`). Leave both nodes without
+outgoing wires; the mix includes both their outputs. The mix itself is not a wire target.
+
+## Feedback
+
+Opt into loops with `build()` returning `Graph(mode="feedback")`. Removing wires leaving `delay`
+nodes must make the graph acyclic. Each loop's `delay_samples` must be at least one render block
+(512 samples); smaller in-loop delays are refused, while off-loop delays allow any length.
+Rendering uses previous-block feedback; timing is the declared delay, without latency compensation.
+
 ## Piano roll
 
 `uv run piano-roll <song> --output artifacts/piano-roll.png` writes a static PNG of authored
@@ -176,18 +181,10 @@ Configured song formats are supported, including direct graphs. Python songs exe
 `build()` code: load only trusted scripts. Use `--config path/to/poser.toml` to select a workspace
 explicitly; the song itself may be outside it. No render-store artifacts or analysis are required.
 
-The required output is the exact directory entry relative to the current directory, with a
-case-insensitive `.png` suffix. Missing parents are created. Existing destinations are refused
-unless `--replace` is supplied; replacement preserves the old artifact until the complete new PNG
-is atomically published. Input aliases, symlinks (including dangling ones), and nonregular files
-are always refused. These are checked rules, not a security boundary against hostile filesystem
-mutation; parent-directory mutation and power-loss durability are outside the guarantee.
-Concurrent replacements use last-successful-publication-wins behavior.
-
-Success prints the destination and returns 0; configuration, song, drawing, and pre-publication
-I/O errors return 2. Temporary cleanup is best-effort: a cleanup warning after publication does
-not mean the image failed, and names the residual staging file. Created parents may remain after
-failure. The command never adds the image to a render cache.
+Choose a `.png` output path; missing parents are created. Existing destinations are refused
+unless `--replace` is supplied, which preserves the old image until the new PNG is complete.
+Input aliases, symlinks, and nonregular files are refused. Success prints the destination and
+returns 0; configuration, song, drawing, and pre-publication I/O errors return 2.
 
 ## Commands
 
@@ -207,7 +204,4 @@ guides; adapter maintainers own their backend-specific guides.
 Advice selection is persistent: `[guidance] advice = false` in `poser.toml` excludes packaged
 creative/workflow advice after `uv run update-guide`; missing settings default to true.
 `uv run init-workspace --setup surge --advice off` selects it for a new studio.
-Instrument `guide` notes and legacy adapter `guide` properties are required reference, not
-semantically sanitized. Adapter authors put optional coaching in a package-data-only `advice`
-property; inline instrument `advice` is reserved and rejected. This switch does not rewrite
-owner instructions, control repository access, or erase a model's previous exposure.
+This switch leaves owner instructions and instrument notes untouched.

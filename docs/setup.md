@@ -112,12 +112,12 @@ For Surge the mix is WAV; other adapters may use another format. Later renders d
 this bundle. Failed export publishes no successful delivery; never substitute an earlier mix.
 
 The manifest records raw source/artifact hashes separately from `song_sha256` (the serialized
-loaded song digest), configuration/lockfile evidence, and guidance evidence. It always records
+loaded song digest), plus configuration/lockfile evidence. It always records
 `listening: "not_auditioned"`; actual listener evidence is separate. Export does not sandbox
 Python, discover undeclared imports/external state, copy private configuration or plugins, or
 promise deterministic audio. Opaque analysis section payloads are preserved, not made portable;
 only schema-owned artifact paths have the bundle portability guarantee. See the
-[export contract](../README.md#verified-delivery) for outcomes and evidence boundaries.
+[export contract](#export-contract) for outcomes and evidence boundaries.
 
 ## Recover from a failure
 
@@ -125,13 +125,9 @@ If initialization reports a missing plugin or invalid path, locate or install Su
 its existing location as described in the [Surge guide](../src/poser/reference_setups/surge/README.md),
 and retry `uv run init-workspace --setup surge` with any needed overrides. Failed prerequisite
 checks create no studio template files, but the Python project and dependency created earlier
-remain. Prerequisite or existing-file failures may also leave the recognized `.poser-init`
-namespace and its stable lock: initialization establishes them before checking prerequisites so
-recovery and retries always use the same lock inode. These are bookkeeping, not studio outputs.
-After interrupted publication, retry the same initializer: its retained `.poser-init`
-namespace permits recovery of its own unchanged outputs. Do not delete that namespace or its
-stable lock. If owner edits or ambiguous ownership prevent recovery, follow the named-path
-diagnostic without deleting the studio. Resolve existing-file conflicts rather than overwriting them.
+remain. After an interrupted initialization, retry the same command. Preserve `.poser-init`,
+which the initializer uses for recovery. If recovery refuses, follow the named-path diagnostic;
+resolve existing-file conflicts rather than deleting the studio or overwriting owner edits.
 
 If initialization succeeds but `check-instruments` fails, keep the studio and read the diagnostic:
 real failures include load errors, crashes, timeouts, non-finite output, silence, or missing notes,
@@ -139,3 +135,35 @@ not just a missing plugin. Do not repair or reinitialize solely because repeatab
 the installation or current `poser.toml`, run `uv run update-guide` if its inputs changed, and
 rerun `uv run check-instruments` before rendering and analyzing. Do not delete studio files or
 rerun initialization to repair an initialized studio.
+
+## Export contract
+
+Export owns one loaded song and one lock across render, analysis, and publication; failed
+execution or analysis publishes no bundle. The unused destination receives `source/`, `audio/`,
+`images/`, `report.json`, and schema-version-2 `manifest.json`. It is not mutable `latest`.
+A collision is refused, never replaced. Exit codes: 0 published; 1 execution, analysis, changed
+input, or I/O failure; 2 invalid arguments/configuration; 3 song contention. `--json` reports the
+outcome and diagnostics, with bundle paths only on success. `--force` bypasses render caching,
+not safety checks. Configuration, sounds, and output path options work as for render/analyze.
+
+The manifest binds source and artifact SHA-256 hashes to the analysis run and serialized-song
+`song_sha256`; that last digest is not a raw source-file hash. Configuration and role-labeled
+source/configuration-root `uv.lock` digests (or absence) are evidence, not proof of the executing
+Python environment. Configuration itself and plugin/preset binaries are not bundled. Includes
+resolve from the source root, not implicitly from the configuration directory. With all path
+options explicit the source root is the invocation directory; otherwise it is the discovered or
+configured workspace. Destination and explicit path options resolve from the invocation directory.
+Unsafe includes, source escapes, and overlap with inputs or store-mutated roots are refused.
+Legacy stores without declared protected roots cannot perform verified export.
+
+Source/configuration/lockfile changes prevent publication. Export does not read or compose
+`POSER.md`. Manifest schema 2 omits schema 1's `guidance` field; guide-exposure records belong to
+separate composition experiments, not audio delivery.
+
+Schema-owned report/manifest artifact paths remain valid when the bundle moves. Section payloads
+are opaque JSON, preserved without copying or interpreting embedded paths; when present the
+manifest declares `section_payload_portability: "opaque_not_verified"`. Hashes cover bundled
+artifacts other than the manifest itself. Export always records `listening: "not_auditioned"`;
+actual audition belongs in separate evidence. It cannot sandbox Python, detect every external
+input or undeclared import, prevent external change-and-revert races, or make plugins deterministic.
+Prior historical reports require a new export run; they do not retain matching historical audio.

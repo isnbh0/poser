@@ -43,9 +43,8 @@ For each trial record:
 - Editable outputs, declared dependencies, commands, diagnostics, successful exported bundles, and
   failed trial artifacts. Record listening status separately; do not assert bitwise plugin determinism.
 
-Export manifest guidance evidence is useful but insufficient: clean acceptance requires a current
-observed guide and the separately recorded actual context inventory. Configured off with a stale
-on-mode guide is not clean exposure. The package can still contain optional resources: generation
+Export does not record guide exposure. Record the actual guide and context inventory separately;
+configured off with a stale on-mode guide is not clean exposure. The package can still contain optional resources: generation
 is not filesystem access control. If unrestricted repository browsing or owner-provided coaching
 was allowed, label that exposure explicitly.
 

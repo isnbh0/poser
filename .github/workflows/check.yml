@@ -16,3 +16,28 @@ jobs:
           enable-cache: true
       - run: uv sync --locked
       - run: make check
+
+  distribution:
+    name: Plugin-free packaging (${{ matrix.artifact }})
+    runs-on: macos-latest
+    strategy:
+      matrix:
+        artifact: [wheel, sdist]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.3.3
+      - name: Build and install a clean distribution
+        env:
+          ARTIFACT: ${{ matrix.artifact }}
+        run: |
+          uv build --out-dir "$RUNNER_TEMP/poser-dist"
+          uv venv --python 3.13 "$RUNNER_TEMP/poser-venv"
+          if [ "$ARTIFACT" = wheel ]; then
+            uv pip install --python "$RUNNER_TEMP/poser-venv/bin/python" "$RUNNER_TEMP"/poser-dist/*.whl
+          else
+            uv pip install --python "$RUNNER_TEMP/poser-venv/bin/python" "$RUNNER_TEMP"/poser-dist/*.tar.gz
+          fi
+      - name: Smoke packaging only (no real plugin or audio acceptance)
+        run: |
+          cd "$RUNNER_TEMP"
+          "$RUNNER_TEMP/poser-venv/bin/python" -I "$GITHUB_WORKSPACE/scripts/check_distribution.py"
