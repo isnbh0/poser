@@ -24,6 +24,8 @@ Studio preferences belong in its `AGENTS.md`; instrument notes belong in its `po
 
 ## Rules
 
+- Include `Co-Authored-By` trailers in every AI-assisted commit, naming the actual contributing
+  models (including delegated writers) with their exact model IDs and provider noreply addresses.
 - `tests/test_guide.py` checks `src/poser/scaffold/guide.md` against the code. A change to song
   keys, report fields, statuses, bands, music helpers, or scripts updates the guide in the same
   commit. The core guide holds only text true in every workspace; text about one adapter is that
