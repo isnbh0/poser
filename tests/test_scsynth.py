@@ -516,12 +516,27 @@ def test_guide_composes_into_a_scratch_workspace(
     assert init_main(["--setup", "surge", "--plugin-path", str(plugin)]) == 0
     config = tmp_path / "poser.toml"
     config.write_text(
-        config.read_text(encoding="utf-8") + "\n[instruments.sc]\n"
+        "[instruments.sc]\n"
         'adapter = "poser_scsynth.instrument:create"\n'
-        'guide = """\nThe built-in sound is `sc:builtin/additive-voice`."""\n'
+        f'scsynth = "{tmp_path / "missing-scsynth"}"\n'
+        'guide = "The built-in sound is `sc:builtin/additive-voice`."\n'
     )
+
+    def fail(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("guide composition attempted external work")
+
+    import socket
+    import subprocess
+
+    import pedalboard
+
+    monkeypatch.setattr(subprocess, "Popen", fail)
+    monkeypatch.setattr(socket, "create_connection", fail)
+    monkeypatch.setattr(pedalboard, "load_plugin", fail)
     assert guide_main([]) == 0
     guide = (tmp_path / GUIDE_NAME).read_text(encoding="utf-8")
     assert "## scsynth instruments" in guide
     assert "sc:builtin/additive-voice" in guide
     assert "`sc` (poser_scsynth.instrument:create)" in guide
+    assert 'sound="sc"' in guide
+    assert "Surge XT" not in guide

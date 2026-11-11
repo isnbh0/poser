@@ -74,12 +74,20 @@ def main(argv: list[str] | None = None) -> int:
     workspace = Workspace(directory)
     try:
         setup = prepare(args.setup, args.plugin_path, args.presets_path)
-        targets = (GUIDE_NAME, "CLAUDE.md", CONFIG_NAME, "songs/demo.yaml", ".gitignore")
+        targets = (
+            "AGENTS.md",
+            GUIDE_NAME,
+            "CLAUDE.md",
+            CONFIG_NAME,
+            "songs/demo.yaml",
+            ".gitignore",
+        )
         _preflight(directory, targets)
         config = parse_config(setup.config, workspace.config)
         context = AdapterContext(directory, workspace.sounds_dir, workspace.renders_dir)
         guide = workspace_guide(Composition(config, context))
         outputs = {
+            "AGENTS.md": _scaffold("agents.md"),
             GUIDE_NAME: guide,
             "CLAUDE.md": _scaffold("claude.md"),
             CONFIG_NAME: setup.config,

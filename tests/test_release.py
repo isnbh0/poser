@@ -56,7 +56,7 @@ def test_packaged_reference_and_neutral_resources() -> None:
     for name in ("poser.toml", "demo.yaml", "README.md"):
         assert surge.joinpath(name).is_file(), name
     scaffold = files("poser").joinpath("scaffold")
-    for name in ("guide.md", "claude.md", "gitignore"):
+    for name in ("guide.md", "agents.md", "claude.md", "gitignore"):
         assert scaffold.joinpath(name).is_file(), name
     for name in ("poser.toml", "demo.yaml", "onboarding.txt"):
         assert not scaffold.joinpath(name).is_file(), name

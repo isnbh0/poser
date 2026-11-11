@@ -32,8 +32,8 @@ uv run render-song songs/demo.yaml
 uv run analyze-song songs/demo.yaml
 ```
 
-`init-workspace` writes `poser.toml`, a demo song, the composing guide as `AGENTS.md`, and a
-`CLAUDE.md` that points to it, so coding agents working in the workspace read the guide. The other
+`init-workspace` writes `poser.toml`, a demo song, editable studio instructions in `AGENTS.md`,
+a generated composing reference in `POSER.md`, and a `CLAUDE.md` pointing to `AGENTS.md`. The other
 commands find the workspace by walking up from the working directory to the nearest
 `poser.toml`. Songs are named by their path in the workspace, and their results are kept under
 `renders/`.
@@ -107,12 +107,12 @@ a built-in name, an import path, or a table with `use` and options:
 | `visualizer` | `"spectrogram"` |
 | `sections` | `[]` |
 
-`AGENTS.md` is written from poser's core guide, each instrument's `guide`, and the guide text of
-each adapter in use, so do not edit it; run `uv run update-guide` after changing `poser.toml`, and
-`uv run update-guide --check` to see whether it is current. Notes about one instrument belong in
-its `guide`. Other notes for agents belong in `CLAUDE.md`, after its `@AGENTS.md` line, or in files
-it links to; `update-guide` writes only `AGENTS.md`, and refuses to replace an `AGENTS.md` it did
-not write.
+Edit `AGENTS.md` for studio preferences and each instrument's `guide` in `poser.toml` for
+instrument notes. `POSER.md` is generated from poser's core guide, instrument notes, and adapter
+guides; edit adapter guides for backend-specific guidance. Run `uv run update-guide` after changing
+`poser.toml`, and `uv run update-guide --check` to see whether the reference is current. The command
+writes only `POSER.md`, and refuses to replace one it did not generate. `CLAUDE.md` points to
+`AGENTS.md`.
 
 ## Commands
 
@@ -127,7 +127,7 @@ not write.
 - `uv run save-sound <instrument> <name> --description <text>`: open an instrument's window and
   save its state as a sound when the window closes. It is for a person at the screen, not an
   agent.
-- `uv run update-guide`: write `AGENTS.md` from poser and `poser.toml`; `--check` only compares.
+- `uv run update-guide`: write `POSER.md` from poser and `poser.toml`; `--check` only compares.
 
 Every command but `init-workspace` takes `--config`, and those that use saved sounds or results
 take `--sounds-dir` or `--output-dir`, to work outside a workspace or on another one. With

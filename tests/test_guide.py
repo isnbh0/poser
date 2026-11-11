@@ -94,9 +94,10 @@ def python_songs(tmp_path: Path) -> list[Song]:
     return songs
 
 
-def test_guide_is_short_and_claude_imports_it() -> None:
+def test_guide_is_short_and_claude_imports_studio_instructions() -> None:
     assert len(LINES) < 200
     assert (SCAFFOLD_DIR / "claude.md").read_text() == "@AGENTS.md\n"
+    assert "[POSER.md](POSER.md)" in (SCAFFOLD_DIR / "agents.md").read_text()
 
 
 def test_python_examples_load(tmp_path: Path) -> None:

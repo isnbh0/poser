@@ -1,9 +1,10 @@
 # Developing poser
 
 poser renders songs written as code through VST instruments and measures the result. This guide is
-for changing poser itself. A workspace's `AGENTS.md` is composed by `update-guide` from the core
-guide, `src/poser/scaffold/guide.md`, the instrument notes in its `poser.toml`, and the guide text
-of each adapter it uses.
+for changing poser itself. A studio's `AGENTS.md` is copied once from
+`src/poser/scaffold/agents.md` and belongs to its owner. `update-guide` generates `POSER.md` from
+the core guide, `src/poser/scaffold/guide.md`, instrument notes in `poser.toml`, and adapter guides.
+Studio preferences belong in its `AGENTS.md`; instrument notes belong in its `poser.toml`.
 
 ## Layout
 

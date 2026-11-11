@@ -1,4 +1,4 @@
-"""Tests for `compose_guide`, which builds a workspace's `AGENTS.md` from its parts."""
+"""Tests for `compose_guide`, which builds a studio's `POSER.md` from its parts."""
 
 import pytest
 

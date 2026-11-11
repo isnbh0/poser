@@ -694,7 +694,7 @@ def initialized(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 def test_update_guide_check_follows_poser_toml(
     initialized: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    guide_file = initialized / "AGENTS.md"
+    guide_file = initialized / "POSER.md"
     assert guide.main(["--check"]) == EXIT_ALL_PASS
     config = initialized / "poser.toml"
     config.write_text(config.read_text().replace("factory patches", "patches"))
@@ -703,7 +703,7 @@ def test_update_guide_check_follows_poser_toml(
 
     assert guide.main(["--check"]) == EXIT_SOME_FAILED
     assert capsys.readouterr().err == (
-        "update-guide: AGENTS.md is out of date; run uv run update-guide\n"
+        "update-guide: POSER.md is out of date; run uv run update-guide\n"
     )
     assert guide_file.read_text() == before
 
@@ -714,6 +714,66 @@ def test_update_guide_check_follows_poser_toml(
     assert sorted(path.name for path in initialized.iterdir() if path.name.startswith(".")) == [
         ".gitignore"
     ]
+
+
+def test_update_guide_preserves_personal_files_and_handles_missing_reference(
+    initialized: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    agents = initialized / "AGENTS.md"
+    claude = initialized / "CLAUDE.md"
+    reference = initialized / "POSER.md"
+    agents.write_bytes(b"My composing preferences\n")
+    claude.write_bytes(b"@AGENTS.md\nPersonal note\n")
+    config = initialized / "poser.toml"
+    config.write_text(config.read_text().replace("factory patches", "personal patches"))
+    before = {p: p.read_bytes() for p in (agents, claude, reference, config)}
+    assert guide.main(["--check"]) == EXIT_SOME_FAILED
+    assert "POSER.md" in capsys.readouterr().err
+    assert {p: p.read_bytes() for p in before} == before
+    assert guide.main([]) == EXIT_ALL_PASS
+    assert agents.read_bytes() == before[agents]
+    assert claude.read_bytes() == before[claude]
+    assert b"personal patches" in reference.read_bytes()
+    reference.unlink()
+    before = {p: p.read_bytes() for p in (agents, claude, config)}
+    assert guide.main(["--check"]) == EXIT_SOME_FAILED
+    assert "run uv run update-guide" in capsys.readouterr().err
+    assert not reference.exists()
+    assert {p: p.read_bytes() for p in before} == before
+    agents.unlink()
+    assert guide.main([]) == EXIT_ALL_PASS
+    assert not agents.exists()
+    assert guide.main(["--check"]) == EXIT_ALL_PASS
+
+
+def test_update_guide_replace_failure_preserves_reference_and_cleans_temp(
+    initialized: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    reference = initialized / "POSER.md"
+    before = reference.read_bytes()
+    config = initialized / "poser.toml"
+    config.write_text(config.read_text().replace("factory patches", "changed patches"))
+
+    def fail_replace(_path: Path, _target: Path) -> Path:
+        raise OSError("injected replace failure")
+
+    monkeypatch.setattr(Path, "replace", fail_replace)
+    assert guide.main([]) == EXIT_SOME_FAILED
+    assert "injected replace failure" in capsys.readouterr().err
+    assert reference.read_bytes() == before
+    assert not list(initialized.glob(".POSER.md.*"))
+
+
+def test_update_guide_unreadable_reference(
+    initialized: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def unreadable(_path: Path) -> bool:
+        raise PermissionError("denied")
+
+    monkeypatch.setattr(guide, "written_by_update_guide", unreadable)
+    for args in ([], ["--check"]):
+        assert guide.main(args) == EXIT_SOME_FAILED
+        assert "cannot read" in capsys.readouterr().err
 
 
 def test_update_guide_without_a_workspace_or_with_a_bad_config_exits_2(
@@ -739,13 +799,13 @@ def test_update_guide_config_writes_beside_that_config(
     args = ["--setup", "surge", "--plugin-path", str(plugin)]
     other = tmp_path / "other"
     assert init_workspace.main([str(other), *args]) == 0
-    (other / "AGENTS.md").write_text(f"{GENERATED}\nold body\n")
+    (other / "POSER.md").write_text(f"{GENERATED}\nold body\n")
     here = tmp_path / "here"
     here.mkdir()
     if inside:
         assert init_workspace.main([str(here), *args]) == 0
     monkeypatch.chdir(here)
-    mine = here / "AGENTS.md"
+    mine = here / "POSER.md"
     before = mine.read_text() if inside else None
     config = ["--config", str(other / "poser.toml")]
 
@@ -753,7 +813,7 @@ def test_update_guide_config_writes_beside_that_config(
     assert guide.main(config) == EXIT_ALL_PASS
     assert guide.main([*config, "--check"]) == EXIT_ALL_PASS
 
-    assert (other / "AGENTS.md").read_text().startswith("<!-- ")
+    assert (other / "POSER.md").read_text().startswith("<!-- ")
     assert (mine.read_text() if inside else None) == before
     assert inside or not mine.exists()
 
@@ -764,7 +824,7 @@ def test_update_guide_config_writes_beside_that_config(
 def test_update_guide_refuses_to_replace_a_guide_it_did_not_write(
     initialized: Path, capsys: pytest.CaptureFixture[str], text: str
 ) -> None:
-    guide_file = initialized / "AGENTS.md"
+    guide_file = initialized / "POSER.md"
     guide_file.write_text(text)
     problem = (
         f"update-guide: {guide_file} was not written by update-guide; move it away to replace it\n"
@@ -784,7 +844,7 @@ def test_update_guide_refuses_to_replace_a_guide_it_did_not_write(
 def test_update_guide_writes_through_a_symlink_and_keeps_the_mode(
     initialized: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    link = initialized / "AGENTS.md"
+    link = initialized / "POSER.md"
     target = initialized / "docs" / "guide.md"
     target.parent.mkdir()
     target.write_text(f"{GENERATED}\nold body\n")
@@ -803,7 +863,7 @@ def test_update_guide_writes_through_a_symlink_and_keeps_the_mode(
 
 
 def test_update_guide_keeps_an_existing_guide_s_mode(initialized: Path) -> None:
-    guide_file = initialized / "AGENTS.md"
+    guide_file = initialized / "POSER.md"
     guide_file.chmod(0o640)
     guide_file.write_text(f"{GENERATED}\nold body\n")
 

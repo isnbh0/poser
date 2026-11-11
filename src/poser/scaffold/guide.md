@@ -2,23 +2,23 @@
 
 ## Composing here
 
-This project turns a song written as code into audio played by real VST instruments, then measures
-the result. Run commands from this directory. You compose by looping:
+poser renders songs through configured instruments and measures the result. Compose here by looping:
 
-1. Write or edit a song in `songs/`.
-2. Render it: `uv run render-song songs/<name>.py`.
-3. Analyze it: `uv run analyze-song songs/<name>.py --json`.
+1. Write or edit a song in a format enabled by `poser.toml`'s `adapters.song_formats`.
+2. Render it: `uv run render-song <song>`.
+3. Analyze it: `uv run analyze-song <song> --json`.
 4. Read the report, the spectrograms, and earlier history records, then revise.
 
-Song scripts import `poser` directly and need no PEP 723 header, because `render-song`
-loads them in this project's environment.
+When the script format is enabled, song scripts import `poser` directly and need no PEP 723
+header; `render-song` loads them in this project's environment.
 
 ## Songs
 
-A song is `songs/<name>.py`, whose `build()` returns a `Song`, or `songs/<name>.yaml`.
-`songs/demo.yaml` shows the YAML form; both forms use the same keys and checks.
-Times are in beats from 0, and pitches are MIDI numbers, where middle C is 60. A song must end
-within one hour: its last note end or controller change falls at most 3600 seconds in.
+Defaults are Python (`.py`, with `build()` returning a `Song`) and YAML (`.yaml` or `.yml`).
+`adapters.song_formats` can select either or other formats; consult `poser.toml` and the adapters.
+If present and YAML is enabled, `songs/demo.yaml` shows that form. Both use the same song checks.
+Times are beats from 0; pitches are MIDI numbers, middle C is 60. A song's last note end or
+controller change must fall within 3600 seconds.
 
 | Key | Where | Type | Range |
 |---|---|---|---|
@@ -46,7 +46,7 @@ first recipe hears the track, the next hears the first, and so on. A chain's nod
 `<track>.<effect>`, with a repeat taking an ordinal (`bass.drive.2`). The track's `gain` still
 fades the chain's end, so the fader works as before.
 
-A short song script, showing the form rather than a finished piece:
+With the script format enabled, this short song shows the form rather than a finished piece:
 
 ```python
 from poser import ControlChange, Song, Track, chord, degree, humanize, notes, pitch, scale
@@ -92,7 +92,7 @@ Music helpers, from `poser`; their docstrings give the parameters:
 
 ## Routing
 
-Direct wiring is opt-in: a song script's `build()` may return a `Graph` of named `Node`s joined
+With the script format enabled, direct wiring is opt-in: `build()` may return a `Graph` of named `Node`s joined
 by `Wire`s, instead of a `Song`. An effect node names a recipe from `poser.toml` exactly like a
 track's `effects` list; a track node stays a source and takes no wires, and a node may feed any
 number of nodes. A wire carries audio, scaled by its `gain_db` for sends, or `control`, at most
@@ -125,7 +125,7 @@ when a source has a problem its message names, and 2 when `poser.toml` could not
 
 ## Rendering
 
-`uv run render-song songs/<name>.py` writes one stem per node and prints each stem's path. Stems
+`uv run render-song <song>` writes one stem per node and prints each stem's path. Stems
 are cached by their inputs, so only changed nodes render, a gain-only edit renders nothing, and
 `--force` re-renders every node; `--json` prints a machine-readable report. Every node's inputs
 include the song's tempo and total length, so lengthening the song re-renders every node.
@@ -141,7 +141,7 @@ Exit codes, for both `render-song` and `analyze-song`:
 
 ## Reading the analysis
 
-`uv run analyze-song songs/<name>.py --json` mixes the stems with each node's `gain` and prints
+`uv run analyze-song <song> --json` mixes the stems with each node's `gain` and prints
 the report, which names the files it wrote: the mix, and a spectrogram per node and for the mix.
 Every analysis keeps a numbered record, even a failed one, holding the song as analyzed and that
 run's report and images. Report fields whose meaning is not obvious from their names:
@@ -185,9 +185,12 @@ changed.
 - `uv run render-song` and `uv run analyze-song`: render and analyze a song, as above.
 - `uv run list-sounds`: every sound a song can name, with a description.
 - `uv run check-instruments`: whether each instrument loads, sounds, and repeats.
-- `uv run update-guide`: rewrite this guide after `poser.toml` changes.
-- `uv run save-sound`: for the owner, who shapes a sound by hand and saves it; not for agents.
+- `uv run update-guide`: rewrite `POSER.md` after `poser.toml` changes; `--check` compares it.
+- `uv run save-sound`: for owners, not agents; only for instruments supporting capture.
 - `uv run init-workspace --setup surge`: makes a new workspace; not needed here.
+
+Edit `AGENTS.md` for studio preferences, instrument `guide` notes in `poser.toml` for instrument
+instructions, and adapter guides for backend-specific guidance. `POSER.md` is generated.
 
 ## Judging a revision
 

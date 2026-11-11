@@ -14,7 +14,7 @@ from poser.compose import load
 from poser.core.guide import GENERATED, compose_guide
 from poser.core.loading import load_song
 from poser.core.ports import ConfigError
-from poser.core.song import Song
+from poser.core.song import Song, SongError
 
 
 @pytest.fixture
@@ -63,7 +63,12 @@ def test_success_writes_current_guide_and_loadable_demo(
     assert {str(track.sound) for track in song.tracks} == {"surge"}
     composition = load(target / "poser.toml", target / "sounds", target / "renders")
     core = files("poser").joinpath("scaffold", "guide.md").read_text(encoding="utf-8")
-    text = (target / "AGENTS.md").read_text()
+    instructions = (target / "AGENTS.md").read_text()
+    assert instructions == files("poser").joinpath("scaffold", "agents.md").read_text()
+    assert "[POSER.md](POSER.md)" in instructions
+    assert not instructions.startswith(GENERATED)
+    assert (target / "CLAUDE.md").read_text() == "@AGENTS.md\n"
+    text = (target / "POSER.md").read_text()
     assert text == compose_guide(core, composition.instrument_notes(), composition.guide_parts())
     assert text.startswith(GENERATED + "\n")
     assert guide.main(["--config", str(target / "poser.toml"), "--check"]) == 0
@@ -90,8 +95,24 @@ def test_later_guide_updates_use_studio_config_not_setup_resource(
 
     monkeypatch.setattr(init_workspace, "prepare", fail)
     assert guide.main(["--config", str(config)]) == 0
-    assert "custom sounds" in (target / "AGENTS.md").read_text()
+    assert "custom sounds" in (target / "POSER.md").read_text()
     assert resource.read_bytes() == original
+
+
+def test_yaml_only_studio_gets_conditional_format_guidance(tmp_path: Path, plugin: Path) -> None:
+    target = tmp_path / "studio"
+    assert init_workspace.main(args(target, plugin)) == 0
+    config = target / "poser.toml"
+    config.write_text(config.read_text() + '\n[adapters]\nsong_formats = ["yaml"]\n')
+    assert guide.main(["--config", str(config)]) == 0
+    reference = (target / "POSER.md").read_text()
+    assert "`adapters.song_formats` can select either or other formats" in reference
+    assert "When the script format is enabled" in reference
+    assert "uv run render-song <song>" in reference
+    composition = load(config, target / "sounds", target / "renders")
+    assert isinstance(load_song(target / "songs/demo.yaml", composition.song_formats()), Song)
+    with pytest.raises(SongError, match="cannot read"):
+        load_song(target / "songs/example.py", composition.song_formats())
 
 
 def test_missing_selection_and_unknown_setup_do_not_write(
@@ -151,7 +172,9 @@ def test_merges_existing_ignore(tmp_path: Path, plugin: Path) -> None:
     assert "renders/" in text
 
 
-@pytest.mark.parametrize("existing", ["AGENTS.md", "CLAUDE.md", "poser.toml", "songs/demo.yaml"])
+@pytest.mark.parametrize(
+    "existing", ["AGENTS.md", "POSER.md", "CLAUDE.md", "poser.toml", "songs/demo.yaml"]
+)
 def test_existing_owned_output_refuses_without_changes(
     tmp_path: Path, plugin: Path, existing: str
 ) -> None:

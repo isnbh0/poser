@@ -1,4 +1,4 @@
-"""`update-guide`: write a workspace's `AGENTS.md` from poser's guide and its `poser.toml`."""
+"""`update-guide`: write a studio's `POSER.md` from poser and its `poser.toml`."""
 
 import argparse
 import os
@@ -19,7 +19,7 @@ from poser.compose import Composition
 from poser.core.guide import GENERATED, compose_guide
 from poser.core.ports import ConfigError
 
-GUIDE_NAME = "AGENTS.md"
+GUIDE_NAME = "POSER.md"
 PROG = "update-guide"
 
 

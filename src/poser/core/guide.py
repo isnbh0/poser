@@ -1,4 +1,4 @@
-"""The workspace guide: the core guide, a note per instrument, and each adapter's part."""
+"""Compose the generated POSER.md reference from core, instrument, and adapter guidance."""
 
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -6,7 +6,8 @@ from dataclasses import dataclass
 from poser.core.names import Identifier
 
 GENERATED = (
-    "<!-- Written by `uv run update-guide` from poser and poser.toml. Edit those instead. -->"
+    "<!-- Written by `uv run update-guide` from poser and poser.toml. "
+    "Edit AGENTS.md for studio instructions. -->"
 )
 INSTRUMENTS_HEADING = "## Instruments here"
 FIRST_INSTRUMENT_PLACEHOLDER = '"{first_instrument}"'
