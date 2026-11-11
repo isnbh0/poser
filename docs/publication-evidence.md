@@ -184,11 +184,12 @@ application, packaged reference, dependency, or build inputs change.
 
 ### Anonymous public Git route
 
-**Pending:** an unauthenticated direct request to `https://api.github.com/repos/isnbh0/poser`
-returned HTTP 404 on 2026-11-12. This establishes no public access through that request, not the
-reason for the response. The public Git installation and subsequent studio workflow were not run.
-They remain a post-publication owner-controlled check. A local Git install or an authenticated
-request cannot substitute for it.
+**Not tested — skipped at the owner's request:** the public Git installation and subsequent
+studio workflow were not run. The owner waived this remaining acceptance check on 2026-11-12;
+it is not a blocker for completing this verification work and is not recorded as passed.
+An earlier unauthenticated request to `https://api.github.com/repos/isnbh0/poser` returned HTTP
+404. That does not establish why access was unavailable. Clean local distribution checks do not
+establish anonymous GitHub installation.
 
 ### Fresh Surge installation
 
