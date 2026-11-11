@@ -66,11 +66,16 @@ BPM, BEAT, LENGTH = 60, 1, 8
 
 
 def build() -> Song:
-    return Song(bpm=BPM, tracks=(Track(
-        name="probe",
-        sound="surge:presets/Sequences/Gate Chord",
-        notes=notes([60], BEAT, LENGTH, 100),
-    ),))
+    return Song(
+        bpm=BPM,
+        tracks=(
+            Track(
+                name="probe",
+                sound="surge:presets/Sequences/Gate Chord",
+                notes=notes([60], BEAT, LENGTH, 100),
+            ),
+        ),
+    )
 ```
 
 | Source under `songs/` | BPM | BEAT | LENGTH | Scheduled on/off (seconds) |
@@ -142,17 +147,36 @@ the export manifest's `listening: "not_auditioned"` field remains unchanged.
 
 Exact review artifacts are retained locally outside Git under `.local/publication-verification/`
 in the verification checkout, not published. This is a local handoff location, not a portable
-public download. Owner confirmation of retention through review and listener observations remain
-pending. If artifacts are lost, any later record must disclose that exact audio is unavailable;
+public download. The owner approved local retention through review on 2026-11-12 and will review the mix;
+listener observations remain pending. If artifacts are lost, any later record must disclose that exact audio is unavailable;
 source and hashes cannot reconstruct nondeterministic output.
 
 ## Installation checks
 
 ### Clean distributions
 
-**Pending:** wheel and source archive checks must name their tested source commit, artifact hashes,
-independent clean environments, and results. The distribution smoke's empty plugin fixture tests
-packaging only; it is not audio acceptance.
+**Pass:** wheel and source archive built from clean candidate
+`0c3a7206326bcca08f5250bc0e9d8d98ea5856dd` each installed successfully in separate new Python 3.13
+virtual environments outside the checkout. Each installation used its own empty `UV_CACHE_DIR`.
+Both ran `scripts/check_distribution.py` with that environment's `python -I` from outside the
+checkout and passed. These were local reproductions of the existing CI checks, not claims about
+a remote CI run.
+
+Commands followed `.github/workflows/check.yml`: `uv build --out-dir`, a separate `uv venv` for
+each artifact, `uv pip install --python` targeting that environment, then the distribution smoke.
+The smoke verified installed module origin, all console entrypoint help, packaged resources,
+initialization, guide freshness, default sound listing, and piano-roll output in both advice modes.
+The empty plugin directory was a path fixture: **no real plugin or audio was tested here**.
+
+Retained under `.local/publication-verification/distributions/`:
+
+| Artifact | SHA-256 |
+|---|---|
+| `poser-0.1.0-py3-none-any.whl` | `a21115a26a40a1b50d8316c7e8aba073e810b2ada7c908140b77eff12141c260` |
+| `poser-0.1.0.tar.gz` | `48ad923acd3c39b20644a1643c0e88ebde30a20aaa649fb7b045756674fa1838` |
+
+Later evidence-only edits do not mean those bytes were rebuilt. Recheck if the candidate's
+application, packaged reference, dependency, or build inputs change.
 
 ### Anonymous public Git route
 
