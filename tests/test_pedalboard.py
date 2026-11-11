@@ -1,5 +1,6 @@
 """Tests for the Pedalboard instrument, with test workers in place of the plugin workers."""
 
+import dataclasses
 import gc
 import importlib
 import io
@@ -14,7 +15,7 @@ from collections.abc import Callable, Iterator
 from importlib import metadata
 from pathlib import Path
 from types import ModuleType
-from typing import NoReturn
+from typing import NoReturn, cast
 
 import numpy as np
 import pytest
@@ -49,11 +50,13 @@ from poser.adapters.pedalboard.worker import (
     render_duration_s,
     render_effect,
     render_fresh,
+    render_group_job,
     render_job,
 )
 from poser.core.audio import SAMPLE_RATE, Audio, read_raw_audio, write_raw_audio
+from poser.core.graph import Wire
 from poser.core.jsonvalue import Json, JsonValue
-from poser.core.names import Identifier, Suffix
+from poser.core.names import Identifier, NodeName, Suffix
 from poser.core.performance import Control, NoteOff, NoteOn, Performance, performance_to_data
 from poser.core.ports import (
     AdapterContext,
@@ -62,6 +65,8 @@ from poser.core.ports import (
     CaptureRequest,
     ConfigError,
     EffectRenderRequest,
+    GroupMember,
+    GroupRenderRequest,
     RenderFailure,
     RenderRequest,
     ResolvedEffect,
@@ -1838,3 +1843,324 @@ def resolved_recipe(effect: PedalboardEffect) -> ResolvedEffect:
     resolved = effect.resolve(Identifier("drive"))
     assert isinstance(resolved, ResolvedEffect)
     return resolved
+
+
+# The cycle group's block pass (C22): one job, fixed blocks, previous-line delay reads.
+
+
+def group_job(
+    tmp_path: Path,
+    frames: int = 1500,
+    **fields: JsonValue,
+) -> dict[str, JsonValue]:
+    """A loop of sum, delay(512), and Gain(-6), with the track into the sum and the Gain's return
+    at -12 dB, written as files, so the reference below can be computed per sample."""
+    members: list[JsonValue] = [
+        {
+            "name": "late",
+            "recipe": None,
+            "delay_samples": BUFFER_SIZE,
+            "input_path": str(tmp_path / "late.in.npy"),
+            "control_path": None,
+            "output_path": str(tmp_path / "late.out.npy"),
+        },
+        {
+            "name": "loop",
+            "recipe": {"path": None, "builtin": "sum", "parameters": {}},
+            "delay_samples": None,
+            "input_path": str(tmp_path / "loop.in.npy"),
+            "control_path": None,
+            "output_path": str(tmp_path / "loop.out.npy"),
+        },
+        {
+            "name": "loop.drive",
+            "recipe": {"path": None, "builtin": "Gain", "parameters": {"gain_db": -6}},
+            "delay_samples": None,
+            "input_path": str(tmp_path / "drive.in.npy"),
+            "control_path": None,
+            "output_path": str(tmp_path / "drive.out.npy"),
+        },
+    ]
+    for name, fill in (("loop.in", 0.5), ("late.in", 0.0), ("drive.in", 0.0)):
+        write_raw_audio(tmp_path / f"{name}.npy", np.full((2, frames), fill, np.float32))
+    wires: list[JsonValue] = [
+        ["loop", "late", "audio", 0.0],
+        ["late", "loop.drive", "audio", 0.0],
+        ["loop.drive", "loop", "audio", -12.0],
+    ]
+    job: dict[str, JsonValue] = {
+        "frames": frames,
+        "members": members,
+        "wires": wires,
+    }
+    job.update(fields)
+    return job
+
+
+def reference_loop(
+    frames: int, amplitude: float, drive: float, return_gain: float
+) -> dict[str, np.ndarray]:
+    summed = np.zeros(frames, np.float32)
+    delayed = np.zeros(frames, np.float32)
+    driven = np.zeros(frames, np.float32)
+    for t in range(frames):
+        held = summed[t - BUFFER_SIZE] if t >= BUFFER_SIZE else np.float32(0.0)
+        delayed[t] = held
+        driven[t] = np.float32(np.float64(held) * drive)
+        summed[t] = np.float32(np.float64(amplitude) + np.float64(driven[t]) * return_gain)
+    return {"loop.out.npy": summed, "late.out.npy": delayed, "drive.out.npy": driven}
+
+
+def test_render_group_pass_writes_every_member_whole(tmp_path: Path) -> None:
+    output = render_group_job(group_job(tmp_path))
+
+    assert output == {"status": "ok"}
+    expected = reference_loop(1500, 0.5, 10 ** (-6 / 20), 10 ** (-12 / 20))
+    for name, reference in expected.items():
+        audio = read_raw_audio(tmp_path / name, 1500)
+        assert isinstance(audio, Audio)
+        assert np.array_equal(audio.samples[0], reference), name
+
+
+def test_render_group_visits_exactly_the_blocks_of_the_horizon(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    plugin = FakeEffectPlugin(1.0)
+    monkeypatch.setattr("pedalboard.load_plugin", lambda *args, **kwargs: plugin)
+    job = group_job(tmp_path)
+    members = cast("list[dict[str, JsonValue]]", job["members"])
+    job["members"] = [
+        members[0],
+        dict(members[1], recipe={"path": "/Drive.vst3", "builtin": None, "parameters": {}}),
+        dict(members[2], recipe={"path": "/Drive.vst3", "builtin": None, "parameters": {}}),
+    ]
+
+    assert render_group_job(job) == {"status": "ok"}
+
+    # The sum and the drive run per block, and nothing runs after the horizon ends.
+    blocks = [(shape[1], rate, kwargs) for shape, rate, kwargs in plugin.calls]
+    # Two plugin members, each visited once per block, in the instantaneous order.
+    assert [count for count, _, _ in blocks] == [512, 512, 512, 512, 476, 476]
+    assert all(kwargs == {"buffer_size": BUFFER_SIZE} for _, _, kwargs in blocks)
+
+
+def test_render_group_reports_the_member_that_cannot_load(tmp_path: Path) -> None:
+    job = group_job(tmp_path)
+    members = cast("list[dict[str, JsonValue]]", job["members"])
+    recipe = cast("dict[str, JsonValue]", members[2]["recipe"])
+    recipe["builtin"] = "NoSuchEffect"
+
+    assert render_group_job(job) == {
+        "status": "load_failed",
+        "detail": (
+            "member 'loop.drive': module 'pedalboard_native' has no attribute 'NoSuchEffect'"
+        ),
+    }
+
+
+def test_render_group_refuses_a_control_edge_for_any_recipe_but_the_duck(
+    tmp_path: Path,
+) -> None:
+    control = write_effect_control(tmp_path, frames=1500)
+    job = group_job(tmp_path)
+    members = cast("list[dict[str, JsonValue]]", job["members"])
+    members[2]["control_path"] = str(control)
+
+    result = render_group_job(job)
+
+    assert isinstance(result, dict)
+    fields = result
+    assert fields["status"] == "load_failed"
+    detail = str(fields["detail"])
+    assert detail.startswith("member 'loop.drive':")
+    assert "takes no control wire" in detail
+
+
+@pytest.mark.parametrize(
+    ("job", "problem"),
+    [
+        ({"frames": 0, "members": [], "wires": []}, "frames"),
+        ({"frames": 10, "members": [], "wires": []}, "members"),
+        (
+            {
+                "frames": 10,
+                "members": [
+                    {
+                        "name": "loop",
+                        "recipe": None,
+                        "delay_samples": 1,
+                        "input_path": "",
+                        "control_path": None,
+                        "output_path": "",
+                    }
+                ],
+                "wires": [["ghost", "loop", "audio", 0.0]],
+            },
+            "ghost",
+        ),
+    ],
+)
+def test_render_group_refuses_a_job_that_is_not_exactly_its_laws(
+    tmp_path: Path, job: dict[str, JsonValue], problem: str
+) -> None:
+    with pytest.raises(MalformedJobError, match=problem):
+        render_group_job(job)
+
+
+def test_render_group_reports_an_unusable_input(tmp_path: Path) -> None:
+    job = group_job(tmp_path)
+    members = cast("list[dict[str, JsonValue]]", job["members"])
+    members[1]["input_path"] = str(tmp_path / "absent.npy")
+
+    with pytest.raises(ValueError, match="the group member's input is unusable"):
+        render_group_job(job)
+
+
+def group_request(tmp_path: Path, frames: int = 1200) -> GroupRenderRequest:
+    """A loop of the adapter's drive, a sum builtin, and a delay, as the core would ask."""
+    silent = Audio(np.zeros((2, frames), dtype=np.float32))
+    track = Audio(np.full((2, frames), 0.5, dtype=np.float32))
+    return GroupRenderRequest(
+        frames=frames,
+        members=(
+            GroupMember(NodeName("late"), None, BUFFER_SIZE, silent, None),
+            GroupMember(
+                NodeName("loop"),
+                ResolvedEffect(
+                    "sum", "sum", Json.of({"path": None, "builtin": "sum", "parameters": {}})
+                ),
+                None,
+                track,
+                None,
+            ),
+            GroupMember(
+                NodeName("loop.drive"), resolved_recipe(make_effect(tmp_path)), None, silent, None
+            ),
+        ),
+        wires=(
+            Wire("loop", "late", "audio"),
+            Wire("late", "loop.drive", "audio"),
+            Wire("loop.drive", "loop", "audio", gain_db=-12),
+        ),
+        outputs=(
+            (NodeName("late"), tmp_path / "late.npy"),
+            (NodeName("loop"), tmp_path / "loop.npy"),
+            (NodeName("loop.drive"), tmp_path / "drive.npy"),
+        ),
+    )
+
+
+def test_the_effect_adapter_renders_a_cycle_group_through_the_worker(tmp_path: Path) -> None:
+    request = group_request(tmp_path)
+
+    assert make_effect(tmp_path).render_group(request, 60) is None
+
+    expected = reference_loop(request.frames, 0.5, 10 ** (-6 / 20), 10 ** (-12 / 20))
+    for name, reference in (
+        ("late.npy", "late.out.npy"),
+        ("loop.npy", "loop.out.npy"),
+        ("drive.npy", "drive.out.npy"),
+    ):
+        audio = read_raw_audio(tmp_path / name, request.frames)
+        assert isinstance(audio, Audio)
+        assert np.array_equal(audio.samples[0], expected[reference]), name
+
+
+def test_the_group_job_the_adapter_sends_carries_every_member_and_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seen: dict[str, JsonValue] = {}
+
+    def keep(target: object, job: dict[str, JsonValue], timeout_s: float) -> dict[str, str]:
+        seen.update(job)
+        members = cast("list[dict[str, JsonValue]]", job["members"])
+        for member in members:
+            write_raw_audio(
+                Path(cast("str", member["output_path"])),
+                np.zeros((2, cast("int", job["frames"])), "f4"),
+            )
+        return {"status": "ok"}
+
+    monkeypatch.setattr(instrument_module, "run_isolated", keep)
+    request = group_request(tmp_path)
+
+    assert make_effect(tmp_path).render_group(request, 60) is None
+
+    assert seen["frames"] == request.frames
+    assert seen["wires"] == [
+        ["loop", "late", "audio", 0.0],
+        ["late", "loop.drive", "audio", 0.0],
+        ["loop.drive", "loop", "audio", -12.0],
+    ]
+    members = cast("list[dict[str, JsonValue]]", seen["members"])
+    by_name = {cast("str", member["name"]): member for member in members}
+    late = by_name["late"]
+    loop = by_name["loop"]
+    drive = by_name["loop.drive"]
+    assert late["recipe"] is None
+    assert late["delay_samples"] == BUFFER_SIZE
+    assert cast("dict[str, JsonValue]", loop["recipe"])["builtin"] == "sum"
+    assert cast("dict[str, JsonValue]", drive["recipe"])["builtin"] == "Gain"
+    assert all(member["output_path"] for member in members)
+    assert all(member["input_path"] for member in members)
+
+
+@pytest.mark.parametrize(
+    ("result", "failure"),
+    [
+        (
+            {"status": "load_failed", "detail": "cannot load it"},
+            RenderFailure(RenderFailureStatus.LOAD_FAILED, "cannot load it"),
+        ),
+        ({"status": "fine"}, RenderFailure(RenderFailureStatus.CRASHED, MALFORMED_RESULT)),
+    ],
+)
+def test_the_group_adapter_maps_each_worker_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    result: dict[str, JsonValue],
+    failure: RenderFailure,
+) -> None:
+    monkeypatch.setattr(instrument_module, "run_isolated", lambda *args: result)
+
+    assert make_effect(tmp_path).render_group(group_request(tmp_path), 60) == failure
+
+
+def test_the_group_adapter_refuses_a_control_edge_for_any_recipe_but_the_duck(
+    tmp_path: Path,
+) -> None:
+    request = group_request(tmp_path)
+    steered = dataclasses.replace(
+        request,
+        members=(
+            *request.members[:2],
+            dataclasses.replace(request.members[2], control=request.members[1].audio),
+        ),
+    )
+
+    failure = make_effect(tmp_path).render_group(steered, 60)
+
+    assert failure == RenderFailure(
+        RenderFailureStatus.LOAD_FAILED,
+        "effect 'drive' has no sidechain input, so it takes no control wire",
+    )
+
+
+def test_the_group_adapter_refuses_a_payload_that_is_not_its_own(tmp_path: Path) -> None:
+    request = group_request(tmp_path)
+    stranger = dataclasses.replace(
+        request,
+        members=(
+            GroupMember(
+                NodeName("late"),
+                ResolvedEffect("late", "x", Json.of({"state": "x"})),
+                None,
+                request.members[0].audio,
+                None,
+            ),
+            *request.members[1:],
+        ),
+    )
+
+    with pytest.raises(ValueError, match="not a Pedalboard effect payload"):
+        make_effect(tmp_path).render_group(stranger, 60)

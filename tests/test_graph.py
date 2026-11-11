@@ -10,7 +10,15 @@ from typing import cast
 import pytest
 import yaml
 
-from poser.core.graph import ACCEPTS_WIRES, Graph, GraphError, Node, Wire
+from poser.core.graph import (
+    ACCEPTS_WIRES,
+    BUFFER_SIZE,
+    Graph,
+    GraphError,
+    Node,
+    Wire,
+    instantaneous_order,
+)
 from poser.core.song import ControlChange, Note, Song, Track, parse_song
 
 SCAFFOLD = Path(__file__).resolve().parents[1] / "src" / "poser" / "scaffold"
@@ -44,6 +52,11 @@ def named_nodes(*names: str) -> tuple[Node, ...]:
 def effect_nodes(*names: str) -> tuple[Node, ...]:
     """Effect nodes, which accept audio wires, for the wiring fixtures."""
     return tuple(make_node(name=name, kind="effect", effect="drive") for name in names)
+
+
+def delay_node(name: str, delay_samples: int) -> Node:
+    """A delay node, whose one payload is the sample count its line delays by."""
+    return make_node(name=name, kind="delay", delay_samples=delay_samples)
 
 
 def make_graph(**changes: object) -> Graph:
@@ -440,3 +453,254 @@ def test_song_graph_is_one_isolated_node_per_track(song: Song) -> None:
         assert node.sound == track.sound
         assert node.notes == track.notes
         assert node.cc == track.cc
+
+
+# The feedback regime (C19, C20, B3): a declared mode whose cycles pass a delay.
+
+INSTANT_CYCLE_MESSAGE = re.compile(r"^Graph: instantaneous wires form a cycle (.+)$")
+
+
+def instant_cycle_in(problem: str) -> tuple[str, ...] | None:
+    """Return the names an instantaneous-cycle problem walks through, or None."""
+    if match := INSTANT_CYCLE_MESSAGE.match(problem):
+        return tuple(match.group(1).split(" -> "))
+    return None
+
+
+def loop_wires(*steps: tuple[str, str]) -> tuple[Wire, ...]:
+    return tuple(Wire(source, target, "audio") for source, target in steps)
+
+
+def test_a_feedback_loop_through_a_delay_is_admitted() -> None:
+    """RC5's shape: track -> sum, sum -> delay -> drive -> sum. The track feeds the loop; the
+    loop's instantaneous graph is the straight line drive -> sum -> delay."""
+    nodes = (
+        make_node(name="track"),
+        make_node(name="loop", kind="effect", effect="sum"),
+        delay_node("late", BUFFER_SIZE),
+        make_node(name="loop.drive", kind="effect", effect="drive"),
+    )
+    wires = loop_wires(
+        ("track", "loop"),
+        ("loop", "late"),
+        ("late", "loop.drive"),
+        ("loop.drive", "loop"),
+    )
+    graph = Graph(120, nodes, wires, "feedback")
+
+    assert graph.mode == "feedback"
+    assert [[node.name for node in group] for group in graph.groups()] == [
+        ["track"],
+        ["late", "loop", "loop.drive"],
+    ]
+
+
+def test_an_scc_alone_never_admits_the_audit_counterexample() -> None:
+    """C20's counterexample: a<->b beside a<->delay is one SCC, but the instantaneous graph still
+    holds the delay-free cycle a -> b -> a, so the graph is refused, naming a and b."""
+    nodes = (*effect_nodes("a", "b"), delay_node("d", BUFFER_SIZE))
+    wires = loop_wires(("a", "b"), ("b", "a"), ("a", "d"), ("d", "a"))
+
+    with pytest.raises(GraphError) as raised:
+        Graph(120, nodes, wires, "feedback")
+
+    walks = [walk for problem in raised.value.problems if (walk := instant_cycle_in(problem))]
+    assert len(walks) == 1
+    assert set(walks[0]) == {"a", "b"}  # The instantaneous cycle, not the delay's SCC.
+    assert walks[0][0] == walks[0][-1]
+
+
+def test_a_delay_self_loop_is_a_cycle_through_a_delay() -> None:
+    """The self-loop leaves the delay, so the instantaneous graph drops it and the loop stands."""
+    nodes = (delay_node("late", BUFFER_SIZE),)
+    graph = Graph(120, nodes, loop_wires(("late", "late")), "feedback")
+
+    assert [[node.name for node in group] for group in graph.groups()] == [["late"]]
+
+
+def test_an_instantaneous_cycle_naming_no_delay_still_names_its_members() -> None:
+    nodes = (*effect_nodes("a", "b"), delay_node("d", BUFFER_SIZE))
+    wires = loop_wires(("a", "b"), ("b", "a"), ("a", "d"))
+
+    with pytest.raises(GraphError) as raised:
+        Graph(120, nodes, wires, "feedback")
+
+    assert raised.value.problems == ["Graph: instantaneous wires form a cycle a -> b -> a"]
+
+
+# The instantaneous enumeration: the same 84 three-wire sets, one node now a delay, admitted by
+# the instantaneous graph alone — every wire leaving the delay dropped before the cycle check.
+
+
+FEEDBACK_NODES = ("a", "b", "c")
+
+
+def feedback_nodes() -> tuple[Node, ...]:
+    """One delay and two effects, so every wire set meets both kinds."""
+    return (delay_node("a", BUFFER_SIZE), *effect_nodes("b", "c"))
+
+
+@pytest.mark.parametrize(
+    "edges", THREE_WIRE_SETS, ids=[edge_id(edges) for edges in THREE_WIRE_SETS]
+)
+def test_three_wire_sets_obey_the_instantaneous_law(edges: tuple[tuple[str, str], ...]) -> None:
+    nodes = feedback_nodes()
+    wires = tuple(Wire(x, y, "audio") for x, y in edges)
+    # The instantaneous dependency graph: every wire leaving the delay node dropped.
+    instant = [(x, y) for x, y in edges if x != "a"]
+    closed = cycles_in(instant)
+
+    if not closed:
+        assert Graph(120, nodes, wires, "feedback").wires == wires
+        return
+
+    with pytest.raises(GraphError) as raised:
+        Graph(120, nodes, wires, "feedback")
+    problems = raised.value.problems
+
+    reported = [walk for problem in problems if (walk := instant_cycle_in(problem)) is not None]
+    assert len(reported) == 1
+    expect = {normalized(cycle) for cycle in closed}
+    assert normalized(reported[0]) in expect
+    assert len(problems) == 1
+
+
+def test_the_instantaneous_law_admits_more_than_the_acyclic_one() -> None:
+    """Dropping the delay's wires admits sets the acyclic regime refuses: every set whose only
+    cycles pass through the delay."""
+    admitted = sum(
+        not cycles_in([(x, y) for x, y in edges if x != "a"]) for edges in THREE_WIRE_SETS
+    )
+
+    assert 6 < admitted <= len(THREE_WIRE_SETS)
+
+
+# B3: a delay on a cycle holds at least one block; a standalone delay holds at least one sample.
+
+
+def test_an_in_cycle_delay_under_one_block_is_refused_naming_the_bound() -> None:
+    nodes = (make_node(name="track"), make_node(name="loop", kind="effect", effect="sum"))
+    wires = loop_wires(("track", "loop"), ("loop", "late"), ("late", "loop"))
+
+    with pytest.raises(GraphError) as raised:
+        Graph(120, (*nodes, delay_node("late", BUFFER_SIZE - 1)), wires, "feedback")
+
+    assert raised.value.problems == [
+        (
+            "Graph: delay node 'late' sits on a cycle, so its delay_samples must be at least the "
+            f"block size {BUFFER_SIZE}, got {BUFFER_SIZE - 1}"
+        )
+    ]
+
+
+def test_an_in_cycle_delay_of_one_block_is_accepted() -> None:
+    nodes = (
+        make_node(name="track"),
+        make_node(name="loop", kind="effect", effect="sum"),
+        delay_node("late", BUFFER_SIZE),
+    )
+    wires = loop_wires(("track", "loop"), ("loop", "late"), ("late", "loop"))
+    graph = Graph(120, nodes, wires, "feedback")
+
+    assert graph.nodes[2].delay_samples == BUFFER_SIZE
+
+
+def test_a_standalone_delay_may_declare_one_sample() -> None:
+    nodes = (make_node(name="track"), delay_node("late", 1))
+    graph = Graph(120, nodes, loop_wires(("track", "late")))
+
+    assert graph.mode == "acyclic"
+    assert graph.nodes[1].delay_samples == 1
+
+
+def test_a_delay_node_takes_audio_wires_and_no_control_wire() -> None:
+    nodes = (make_node(name="track"), delay_node("late", BUFFER_SIZE))
+    wired = Graph(120, nodes, loop_wires(("track", "late")))
+
+    assert ACCEPTS_WIRES["delay"] == {"audio": None, "control": 0}
+    assert wired.wires[0].to_name == "late"
+    with pytest.raises(GraphError) as raised:
+        Graph(120, nodes, (Wire("track", "late", "control"),))
+    assert raised.value.problems == [
+        "Graph.wires[0]: node 'late' of kind 'delay' accepts no control wires"
+    ]
+
+
+# Mode isolation (C19): the same value flips acceptance with the mode; acyclic messages hold.
+
+
+def loopish_nodes() -> tuple[Node, ...]:
+    return (
+        make_node(name="track"),
+        make_node(name="loop", kind="effect", effect="sum"),
+        delay_node("late", BUFFER_SIZE),
+    )
+
+
+def loopish_wires() -> tuple[Wire, ...]:
+    return loop_wires(("track", "loop"), ("loop", "late"), ("late", "loop"))
+
+
+def test_flipping_the_mode_flips_the_acceptance_of_one_graph_value() -> None:
+    assert Graph(120, loopish_nodes(), loopish_wires(), "feedback").mode == "feedback"
+    with pytest.raises(GraphError) as raised:
+        Graph(120, loopish_nodes(), loopish_wires())
+
+    walks = [walk for problem in raised.value.problems if (walk := cycle_in(problem))]
+    assert walks == [("loop", "late", "loop")]
+
+
+def test_acyclic_rejection_messages_are_unchanged_by_the_new_mode() -> None:
+    nodes = effect_nodes(*NAMES)
+    wires = loop_wires(("a", "b"), ("b", "a"))
+    with pytest.raises(GraphError) as raised:
+        Graph(120, nodes, wires)
+    assert raised.value.problems == ["Graph: wires form a cycle a -> b -> a"]
+    with pytest.raises(GraphError) as raised:
+        Graph(120, nodes, wires, "feedback")
+    assert raised.value.problems == ["Graph: instantaneous wires form a cycle a -> b -> a"]
+
+
+# Cycle groups (C-cycles): the components scheduling renders by and digests name.
+
+
+def test_groups_order_acyclic_graphs_like_topological_order() -> None:
+    nodes = (*effect_nodes("a", "b", "c"), make_node(name="lead"))
+    wires = loop_wires(("c", "a"))
+    graph = Graph(120, nodes, wires)
+
+    assert [node.name for group in graph.groups() for node in group] == [
+        node.name for node in graph.topological()
+    ]
+
+
+def test_groups_hold_cycle_members_together_upstream_first() -> None:
+    nodes = (
+        make_node(name="lead"),
+        *effect_nodes("bus"),
+        delay_node("late", BUFFER_SIZE),
+        *effect_nodes("bus.drive"),
+    )
+    wires = loop_wires(
+        ("lead", "bus"),
+        ("bus", "late"),
+        ("late", "bus.drive"),
+        ("bus.drive", "bus"),
+        ("bus", "out"),
+    )[:-1]
+    nodes = (*nodes, *effect_nodes("out"))
+    wires = (*wires, Wire("bus", "out", "audio"))
+    graph = Graph(120, nodes, wires, "feedback")
+
+    groups = [tuple(node.name for node in group) for group in graph.groups()]
+    assert groups == [("lead",), ("bus", "bus.drive", "late"), ("out",)]
+
+
+def test_instantaneous_order_is_deterministic_and_ties_break_by_name() -> None:
+    edges = [("sum", "late"), ("drive", "sum")]
+    first = instantaneous_order(["late", "sum", "drive"], ["late"], edges)
+    second = instantaneous_order(["drive", "sum", "late"], ["late"], edges)
+
+    assert first == second == ("drive", "sum", "late")
+    with pytest.raises(GraphError, match="instantaneous wires form a cycle"):
+        instantaneous_order(["a", "b"], [], [("a", "b"), ("b", "a")])

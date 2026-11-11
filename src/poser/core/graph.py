@@ -1,7 +1,7 @@
 """The signal graph: nodes and wires as one value, its laws enforced in its only constructor."""
 
 import heapq
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Literal, NotRequired, TypedDict, cast
 
@@ -33,17 +33,22 @@ NODE_KINDS: tuple[NodeKind, ...] = ("track", "effect", "delay")
 WIRE_KINDS: tuple[WireKind, ...] = ("audio", "control")
 MODES: tuple[Mode, ...] = ("acyclic", "feedback")
 
+# The render loop's processing block, in samples: a feedback cycle's granularity, because the
+# effects a loop runs through consume blocks, so a delay on a cycle holds at least one block.
+BUFFER_SIZE = 512
+
 # Which incoming wires each kind of node accepts, per wire kind: the most wires of that kind the
 # node takes, or None for any number. An effect node takes any number of audio wires, including
 # none at all (it then renders the silence it is fed), and at most one control wire, which it
 # takes only alongside an audio wire, since steering does nothing for a node that hears nothing;
 # whether its recipe can use the control edge is a render-time fact its adapter checks. A track
-# node takes no wires: sources are sources. P5 widens this table further; the acceptance rule
-# never changes.
+# node takes no wires: sources are sources, so a cycle never holds one. A delay node sums any
+# number of audio wires into its one delayed line, and takes no control edge: its equation has
+# no steering input.
 ACCEPTS_WIRES: dict[NodeKind, dict[WireKind, int | None]] = {
     "track": {"audio": 0, "control": 0},
     "effect": {"audio": None, "control": 1},
-    "delay": {"audio": 0, "control": 0},
+    "delay": {"audio": None, "control": 0},
 }
 
 
@@ -150,6 +155,36 @@ class Graph:
             ],
         }
 
+    def groups(self) -> tuple[tuple[Node, ...], ...]:
+        """Return the graph's strongly connected components, every upstream component first.
+
+        The order is the condensation's, Kahn's algorithm always taking the ready component whose
+        first name sorts first, so it is the same for every equal graph and equals `topological`
+        while no component holds a cycle. Each component's members are ordered by name. Scheduling
+        renders in this order, and a cycle group's cache digest names its members in it.
+        """
+        by_name = {node.name: node for node in self.nodes}
+        components = _sccs(by_name, self.wires)
+        component_of = {name: index for index, names in enumerate(components) for name in names}
+        incoming: list[int] = [0] * len(components)
+        outgoing: list[set[int]] = [set() for _ in components]
+        for wire in self.wires:
+            source, target = component_of[wire.from_name], component_of[wire.to_name]
+            if source != target and target not in outgoing[source]:
+                outgoing[source].add(target)
+                incoming[target] += 1
+        ready = [(components[index][0], index) for index, count in enumerate(incoming) if not count]
+        heapq.heapify(ready)
+        ordered: list[tuple[Node, ...]] = []
+        while ready:
+            _, index = heapq.heappop(ready)
+            ordered.append(tuple(by_name[name] for name in components[index]))
+            for target in sorted(outgoing[index]):
+                incoming[target] -= 1
+                if incoming[target] == 0:
+                    heapq.heappush(ready, (components[target][0], target))
+        return tuple(ordered)
+
     def topological(self) -> tuple[Node, ...]:
         """Return the nodes so each follows the nodes its wires come from, ties broken by name.
 
@@ -253,7 +288,12 @@ def _graph_problems(graph: Graph) -> list[str]:
     problems += _endpoint_problems(wires, nodes)
     problems += _acceptance_problems(nodes, wires)
     if graph.mode == "acyclic":
-        problems += _cycle_problems(nodes, wires)
+        problems += _cycle_problems(nodes, wires, "wires")
+    else:
+        kinds = {node.name: node.kind for node in nodes}
+        instantaneous = [wire for wire in wires if kinds.get(wire.from_name) != "delay"]
+        problems += _cycle_problems(nodes, instantaneous, "instantaneous wires")
+        problems += _delay_bound_problems(nodes, wires)
     return problems
 
 
@@ -356,8 +396,12 @@ class GraphData(TypedDict):
     wires: list[WireData]
 
 
-def _cycle_problems(nodes: Sequence[Node], wires: Sequence[Wire]) -> list[str]:
-    """Return one problem naming the first cycle the wires close among the nodes, or none."""
+def _cycle_problems(nodes: Sequence[Node], wires: Sequence[Wire], what: str) -> list[str]:
+    """Return one problem naming the first cycle the wires close among the nodes, or none.
+
+    `what` names the wire set in the message: all wires, or the instantaneous ones a feedback
+    graph is admitted by, which drop every wire leaving a delay node.
+    """
     outgoing: dict[str, list[str]] = {node.name: [] for node in nodes}
     for wire in wires:
         if wire.from_name in outgoing and wire.to_name in outgoing:
@@ -382,9 +426,129 @@ def _cycle_problems(nodes: Sequence[Node], wires: Sequence[Wire]) -> list[str]:
                     break
                 if state[target] == on_path:
                     cycle = [*path[path.index(target) :], target]
-                    return [f"Graph: wires form a cycle {' -> '.join(cycle)}"]
+                    return [f"Graph: {what} form a cycle {' -> '.join(cycle)}"]
             else:
                 state[node] = done
                 path.pop()
                 trail.pop()
     return []
+
+
+def _delay_bound_problems(nodes: Sequence[Node], wires: Sequence[Wire]) -> list[str]:
+    """Return one problem per delay node on a cycle declaring less than one render block.
+
+    B3: a cycle's granularity is one block, because the effects a loop runs through consume
+    blocks, so an in-cycle delay holds at least `BUFFER_SIZE` samples and reads only previous
+    blocks. A standalone delay is a straight-line node and may declare one sample.
+    """
+    by_name = {node.name: node for node in nodes}
+    on_cycle = {name for names in _sccs(by_name, wires) if len(names) > 1 for name in names} | {
+        wire.from_name for wire in wires if wire.from_name == wire.to_name
+    }
+    return [
+        (
+            f"Graph: delay node {node.name!r} sits on a cycle, so its delay_samples must be at "
+            f"least the block size {BUFFER_SIZE}, got {node.delay_samples}"
+        )
+        for node in nodes
+        if node.kind == "delay"
+        and node.name in on_cycle
+        and is_int(node.delay_samples)
+        and node.delay_samples < BUFFER_SIZE
+    ]
+
+
+def _sccs(by_name: Mapping[str, Node], wires: Sequence[Wire]) -> tuple[tuple[str, ...], ...]:
+    """Return the nodes' strongly connected components, each component's members by name.
+
+    Tarjan's algorithm, iterative, walking each node's targets in name order, so the components
+    come out the same for every equal graph.
+    """
+    outgoing: dict[str, list[str]] = {name: [] for name in by_name}
+    for wire in wires:
+        if wire.from_name in outgoing and wire.to_name in outgoing:
+            outgoing[wire.from_name].append(wire.to_name)
+    for targets in outgoing.values():
+        targets.sort()
+    index_of: dict[str, int] = {}
+    low: dict[str, int] = {}
+    stack: list[str] = []
+    on_stack: set[str] = set()
+    components: list[list[str]] = []
+    counter = 0
+    for root in by_name:
+        if root in index_of:
+            continue
+        index_of[root] = low[root] = counter
+        counter += 1
+        stack.append(root)
+        on_stack.add(root)
+        trail: list[tuple[str, Iterator[str]]] = [(root, iter(outgoing[root]))]
+        while trail:
+            node, following = trail[-1]
+            for target in following:
+                if target not in index_of:
+                    index_of[target] = low[target] = counter
+                    counter += 1
+                    stack.append(target)
+                    on_stack.add(target)
+                    trail.append((target, iter(outgoing[target])))
+                    break
+                if target in on_stack:
+                    low[node] = min(low[node], index_of[target])
+            else:
+                trail.pop()
+                if trail:
+                    parent = trail[-1][0]
+                    low[parent] = min(low[parent], low[node])
+                if low[node] == index_of[node]:
+                    component: list[str] = []
+                    while True:
+                        member = stack.pop()
+                        on_stack.discard(member)
+                        component.append(member)
+                        if member == node:
+                            break
+                    components.append(sorted(component))
+    return tuple(tuple(names) for names in components)
+
+
+def instantaneous_order(
+    names: Sequence[str], delayed: Sequence[str], edges: Sequence[tuple[str, str]]
+) -> tuple[str, ...]:
+    """Return the names so each follows the nodes its instantaneous wires come from, ties by name.
+
+    The instantaneous dependency graph drops every edge leaving a `delayed` name, because a
+    delay's output feeds the future: within a render block nothing waits for it, and a wire out of
+    a delay member reads the previous block's output. The graph constructor admits a feedback graph
+    only when its instantaneous graph is acyclic, so every name always lands in the order.
+    """
+    breaks = set(delayed)
+    incoming: dict[str, int] = dict.fromkeys(names, 0)
+    outgoing: dict[str, list[str]] = {name: [] for name in names}
+    for source, target in edges:
+        if source in breaks or source not in outgoing or target not in incoming:
+            continue
+        outgoing[source].append(target)
+        incoming[target] += 1
+    ready = [name for name, count in incoming.items() if count == 0]
+    heapq.heapify(ready)
+    ordered: list[str] = []
+    while ready:
+        name = heapq.heappop(ready)
+        ordered.append(name)
+        for target in outgoing[name]:
+            incoming[target] -= 1
+            if incoming[target] == 0:
+                heapq.heappush(ready, target)
+    if len(ordered) < len(names):
+        held = sorted(set(names) - set(ordered))
+        raise GraphError(
+            [
+                (
+                    f"Graph: instantaneous wires form a cycle {' -> '.join(held)}: every loop "
+                    "must pass a delay node"
+                )
+            ]
+        )
+    return tuple(ordered)

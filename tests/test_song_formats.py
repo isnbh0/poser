@@ -270,6 +270,81 @@ def test_script_song_may_return_a_graph_the_author_wired(tmp_path: Path) -> None
     ]
 
 
+def test_script_song_may_return_a_feedback_graph(tmp_path: Path) -> None:
+    """C14 with the declared regime: the mode arrives in the returned value, nowhere else."""
+    path = write_script(
+        tmp_path,
+        """
+from poser import Graph, Node, Note, Wire
+
+
+def build():
+    note = (Note(0, 60, 1, 100),)
+    lead = Node("lead", "track", sound="serum", notes=note)
+    loop = Node("lead.loop", "effect", effect="crush", notes=note)
+    late = Node("lead.late", "delay", delay_samples=512, notes=note)
+    return Graph(
+        120,
+        (lead, loop, late),
+        (Wire("lead", "lead.loop", "audio"), Wire("lead.loop", "lead.late", "audio"),
+         Wire("lead.late", "lead.loop", "audio")),
+        mode="feedback",
+    )
+""",
+    )
+
+    graph = load_song(path, SONG_FORMATS)
+
+    assert isinstance(graph, Graph)
+    assert graph.mode == "feedback"
+    assert [node.kind for node in graph.nodes] == ["track", "effect", "delay"]
+
+
+def test_a_feedback_graph_whose_instantaneous_graph_is_cyclic_is_a_song_error(
+    tmp_path: Path,
+) -> None:
+    path = write_script(
+        tmp_path,
+        """
+from poser import Graph, Node, Note, Wire
+
+
+def build():
+    note = (Note(0, 60, 1, 100),)
+    a = Node("a", "effect", effect="crush", notes=note)
+    b = Node("b", "effect", effect="crush", notes=note)
+    return Graph(120, (a, b), (Wire("a", "b", "audio"), Wire("b", "a", "audio")), mode="feedback")
+""",
+    )
+
+    with pytest.raises(SongError) as raised:
+        load_song(path, SONG_FORMATS)
+
+    assert raised.value.problems == [f"{path}: Graph: instantaneous wires form a cycle a -> b -> a"]
+
+
+def test_the_record_writes_and_keeps_a_graphs_mode(tmp_path: Path) -> None:
+    """C17: the record's `mode` round-trips, so the two regimes never share a record text."""
+    fmt = YamlSongFormat()
+    note = (Note(0, 60, 1, 100),)
+    lead = Node("lead", "track", sound="serum", notes=note)
+    loop = Node("lead.loop", "effect", effect="crush", notes=note)
+    late = Node("lead.late", "delay", delay_samples=512, notes=note)
+    wires = (
+        Wire("lead", "lead.loop", "audio"),
+        Wire("lead.loop", "lead.late", "audio"),
+        Wire("lead.late", "lead.loop", "audio"),
+    )
+
+    text = fmt.dump(Graph(120, (lead, loop, late), wires, "feedback"))
+
+    data = yaml.safe_load(text)
+    assert data["mode"] == "feedback"
+    straight = fmt.dump(Graph(120, (lead, loop, late), wires[:2]))
+    assert straight != text
+    assert "mode: acyclic" in straight
+
+
 def test_a_misshapen_graph_from_a_script_reports_the_path(tmp_path: Path) -> None:
     """The same constructor laws hold, with the script's path before each problem."""
     header = "from poser import Graph, Node, Note, Wire\n"

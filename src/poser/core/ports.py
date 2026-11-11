@@ -14,7 +14,7 @@ from typing import Protocol, cast, runtime_checkable
 
 from poser.core.audio import Audio
 from poser.core.cache import Stamp, StampProblem
-from poser.core.graph import Graph, Node
+from poser.core.graph import Graph, Node, Wire
 from poser.core.jsonvalue import Json
 from poser.core.names import Identifier, NodeName, SongId, Suffix
 from poser.core.performance import Performance
@@ -352,6 +352,112 @@ class Effect(Protocol):
         anything it raises is a poser bug. LOAD_FAILED means a plugin or recipe that does not
         load, CRASHED a worker that died, and TIMED_OUT one past `timeout_s`.
         """
+        ...
+
+
+# Cycle groups
+
+
+@dataclass(frozen=True)
+class GroupMember:
+    """One member of a cycle group: an effect recipe, or a delay with its declared samples,
+    together with the audio and control the group is fed from outside itself."""
+
+    name: NodeName
+    recipe: ResolvedEffect | None  # None exactly when the member is a delay node.
+    delay_samples: int | None  # None exactly when the member is an effect node.
+    audio: Audio  # The member's summed external audio, whole horizon; silence when it has none.
+    control: Audio | None = None  # The member's one external control stem, or None.
+
+    def __post_init__(self) -> None:
+        _require("GroupMember", "name", self.name, NodeName)
+        if (self.recipe is None) == (self.delay_samples is None):
+            raise ValueError(
+                "GroupMember needs exactly one of recipe and delay_samples, got "
+                f"{self.recipe!r} and {self.delay_samples!r}"
+            )
+        _require("GroupMember", "audio", self.audio, Audio)
+        if self.control is not None:
+            _require("GroupMember", "control", self.control, Audio)
+
+
+@dataclass(frozen=True)
+class GroupRenderRequest:
+    """One cycle group's render: its members, the wires between them, and each output's path.
+
+    The adapter runs the block pass (C22) inside one worker job: it loads every recipe once,
+    steps `frames` through fixed `BUFFER_SIZE` blocks in the instantaneous graph's order, keeps
+    the feedback buffers in the job, and writes each member's whole output.
+    """
+
+    frames: int  # Every member's input, control, and output hold exactly this many frames.
+    members: tuple[GroupMember, ...]
+    wires: tuple[Wire, ...]  # Wires whose ends are both members; nothing else.
+    outputs: tuple[tuple[NodeName, Path], ...]  # One output path per member.
+
+    def __post_init__(self) -> None:
+        if not (is_int(self.frames) and self.frames >= 1):
+            raise ValueError(
+                f"GroupRenderRequest.frames must be a positive integer, got {self.frames!r}"
+            )
+        members = _tuple_of("GroupRenderRequest", "members", self.members, GroupMember)
+        object.__setattr__(self, "members", members)
+        if not members:
+            raise ValueError("GroupRenderRequest.members must hold at least one member")
+        names = [member.name for member in members]
+        if len(set(names)) != len(names):
+            raise ValueError(f"GroupRenderRequest.members repeats a name: {names}")
+        for member in members:
+            if member.audio.frames != self.frames or (
+                member.control is not None and member.control.frames != self.frames
+            ):
+                raise ValueError(
+                    f"GroupMember {member.name!r}'s audio must hold the request's "
+                    f"{self.frames} frames"
+                )
+        wires = _tuple_of("GroupRenderRequest", "wires", self.wires, Wire)
+        for wire in wires:
+            for end in (wire.from_name, wire.to_name):
+                if end not in names:
+                    raise ValueError(
+                        f"GroupRenderRequest.wires names {end!r}, which is no member's name"
+                    )
+        object.__setattr__(self, "wires", wires)
+        outputs = _tuple_of("GroupRenderRequest", "outputs", self.outputs, tuple)
+        for output in outputs:
+            name, path = output
+            if not isinstance(name, NodeName) or not isinstance(path, Path):
+                raise ValueError(
+                    f"GroupRenderRequest.outputs must pair NodeNames with Paths, got {output!r}"
+                )
+        if {name for name, _ in outputs} != set(names):
+            raise ValueError("GroupRenderRequest.outputs must hold exactly one path per member")
+        object.__setattr__(self, "outputs", outputs)
+
+
+@runtime_checkable
+class GroupEffect(Protocol):
+    """An effect adapter that renders a cycle group as one block pass.
+
+    The contract a group renderer meets, beyond `Effect`'s:
+
+    - `render_group` runs in the parent process but loads plugin code only inside its one worker
+      job, exactly as `render` does.
+    - It loads every member's recipe once, steps `request.frames` through fixed `BUFFER_SIZE`
+      blocks in the instantaneous graph's order, lets a wire out of a delay member read the
+      previous block's output, and keeps the feedback buffers in the job, never in the store.
+    - It writes exactly `request.frames` float32 frames at `SAMPLE_RATE` and `NUM_CHANNELS` to
+      every member's output path with `write_raw_audio`, or returns a RenderFailure naming the
+      member that could not load, and may leave the files absent.
+    """
+
+    @property
+    def adapter_id(self) -> Identifier:
+        """The adapter's name, such as `pedalboard`."""
+        ...
+
+    def render_group(self, request: GroupRenderRequest, timeout_s: float) -> RenderFailure | None:
+        """Render the whole cycle group, or return why it could not."""
         ...
 
 

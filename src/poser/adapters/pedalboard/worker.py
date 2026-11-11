@@ -25,8 +25,10 @@ from poser.core.audio import (
     read_raw_audio,
     write_raw_audio,
 )
+from poser.core.graph import BUFFER_SIZE, instantaneous_order
 from poser.core.jsonvalue import JsonValue
 from poser.core.performance import Control, NoteOff, NoteOn, Performance, performance_from_data
+from poser.core.rendering import delay_line, delay_signal
 from poser.core.rules import is_int, is_number
 
 if TYPE_CHECKING:
@@ -34,8 +36,8 @@ if TYPE_CHECKING:
     from pedalboard_native import MIDIMessageLike
 
 # Serum applies a controller change at the start of the processing block that contains it, so
-# the block size bounds controller timing. 512 samples is 10.7 ms at 48 kHz.
-BUFFER_SIZE = 512
+# the block size bounds controller timing. The size itself is `BUFFER_SIZE` in `poser.core.graph`,
+# where the feedback regime's one-block bound on in-cycle delays is enforced next to it.
 SETTLE_S = 0.1
 
 RENDER_KEYS = {"path", "plugin_name", "state", "performance", "audio_path"}
@@ -300,6 +302,240 @@ def render_effect(job: JsonValue) -> JsonValue:
             "exactly the frames it is given"
         )
     write_raw_audio(Path(output_path), result)
+    return {"status": "ok"}
+
+
+# A cycle group's block pass (C22): one job per group, fixed BUFFER_SIZE blocks, previous-block
+# feedback. The buffers live here, in the job, never in the render store.
+GROUP_KEYS = {"frames", "members", "wires"}
+GROUP_MEMBER_KEYS = {
+    "name",
+    "recipe",
+    "delay_samples",
+    "input_path",
+    "control_path",
+    "output_path",
+}
+
+
+@dataclass
+class GroupMemberJob:
+    """One cycle-group member the block pass runs, with its buffers kept through the pass."""
+
+    name: str
+    recipe: Mapping[str, JsonValue] | None  # path/builtin/parameters, or None for a delay.
+    delay_samples: int | None  # None exactly when the member is an effect.
+    input_path: Path
+    control_path: Path | None
+    output_path: Path
+    input: np.ndarray | None = None  # (2, frames) The member's summed external audio.
+    control: np.ndarray | None = None  # The member's external control edge, whole horizon.
+    buffer: np.ndarray | None = None  # (2, frames) The member's output so far.
+    line: np.ndarray | None = None  # (2, frames) A delay member's input line, by sample index.
+    plugin: LoadedEffect | None = None  # The recipe's one loaded instance, for an effect member.
+
+
+def _group_members(value: object, what: str, job: JsonValue) -> dict[str, GroupMemberJob]:
+    """Read a group job's members, each naming exactly one of a recipe and a delay."""
+    if not isinstance(value, list) or not value:
+        raise MalformedJobError(what, job)
+    members: dict[str, GroupMemberJob] = {}
+    for entry in value:
+        fields = job_fields(entry, GROUP_MEMBER_KEYS, what)
+        name, recipe, delay_samples = fields["name"], fields["recipe"], fields["delay_samples"]
+        input_path, control_path, output_path = (
+            fields["input_path"],
+            fields["control_path"],
+            fields["output_path"],
+        )
+        is_effect = isinstance(recipe, dict)
+        is_delay = is_int(delay_samples) and delay_samples >= 1
+        if not (
+            isinstance(name, str)
+            and name
+            and name not in members
+            and is_effect != is_delay
+            and optional_str(control_path)
+            and isinstance(input_path, str)
+            and isinstance(output_path, str)
+        ):
+            raise MalformedJobError(what, job)
+        members[name] = GroupMemberJob(
+            name=name,
+            recipe=cast("Mapping[str, JsonValue] | None", recipe) if is_effect else None,
+            delay_samples=delay_samples if is_delay else None,
+            input_path=Path(input_path),
+            control_path=None if control_path is None else Path(control_path),
+            output_path=Path(output_path),
+        )
+    return members
+
+
+def _group_wires(
+    value: object, names: set[str], what: str, job: JsonValue
+) -> list[tuple[str, str, str, float]]:
+    """Read a group job's inside wires, each [from, to, kind, gain] between two members."""
+    if not isinstance(value, list):
+        raise MalformedJobError(what, job)
+    wires: list[tuple[str, str, str, float]] = []
+    for entry in value:
+        if not isinstance(entry, list) or len(entry) != 4:
+            raise MalformedJobError(what, job)
+        source, target, kind, gain = entry
+        if not (
+            isinstance(source, str)
+            and isinstance(target, str)
+            and source in names
+            and target in names
+            and kind in ("audio", "control")
+            and is_number(gain)
+        ):
+            raise MalformedJobError(what, job)
+        wires.append((source, target, str(kind), float(gain)))
+    return wires
+
+
+def _load_group_member(member: GroupMemberJob) -> str | None:
+    """Load the member's recipe once and read its external control, or say why it cannot.
+
+    Every recipe loads here, once for the whole pass, so its state carries between blocks. Only
+    the duck has a sidechain input poser can promise, so any other member fed a control edge,
+    from outside the group or across it, is refused by name.
+    """
+    where = (
+        None
+        if member.recipe is None
+        else (
+            member.recipe["path"] if member.recipe["path"] is not None else member.recipe["builtin"]
+        )
+    )
+    if member.control_path is not None:
+        frames = member.input.shape[1] if member.input is not None else 0
+        read = read_raw_audio(member.control_path, frames)
+        if isinstance(read, AudioProblem):
+            return f"the control wire's audio is unusable: {read.message}"
+        member.control = read.samples
+    if member.recipe is None:
+        return None
+    builtin = member.recipe.get("builtin")
+    if member.control is not None and builtin != DUCK:
+        return f"{where} takes no control wire: it has no sidechain input"
+    if builtin == SUM:
+        return None
+    if builtin == DUCK:
+        try:
+            duck_parameters(cast("Mapping[str, JsonValue]", member.recipe["parameters"]))
+        except Exception as error:  # noqa: BLE001
+            return str(error)
+        return None
+    try:
+        plugin = load_effect(
+            cast("str | None", member.recipe.get("path")),
+            cast("str | None", builtin),
+            cast("Mapping[str, JsonValue]", member.recipe["parameters"]),
+        )
+    except Exception as error:  # noqa: BLE001
+        return str(error)
+    if plugin.is_instrument:
+        return f"{where} is not an effect"
+    member.plugin = plugin
+    return None
+
+
+def _group_effect_block(
+    member: GroupMemberJob, block: np.ndarray, control: np.ndarray | None
+) -> np.ndarray:
+    """Process one block through the member's already-loaded recipe.
+
+    A plugin is called per block, so its state carries between blocks and the loop's granularity
+    is one block; the duck's follower therefore restarts each block, which the one-block bound on
+    in-cycle delays declares. The frame-count law is asserted here as everywhere.
+    """
+    recipe = cast("Mapping[str, JsonValue]", member.recipe)
+    builtin = recipe.get("builtin")
+    if builtin == SUM:
+        return block
+    if builtin == DUCK:
+        return render_duck(
+            block, control, duck_parameters(cast("Mapping[str, JsonValue]", recipe["parameters"]))
+        )
+    out = cast("LoadedEffect", member.plugin)(block, SAMPLE_RATE, buffer_size=BUFFER_SIZE)
+    if not isinstance(out, np.ndarray) or out.shape != block.shape:
+        shape = getattr(out, "shape", type(out).__name__)
+        raise ValueError(
+            f"the effect returned {shape}, expected {block.shape}; an effect returns exactly "
+            "the frames it is given"
+        )
+    return out
+
+
+def render_group_job(job: JsonValue) -> JsonValue:
+    """Render one cycle group as a block pass and write every member's output.
+
+    One job per group: each recipe loads once, then the horizon steps through fixed BUFFER_SIZE
+    blocks in the instantaneous order, which drops every wire leaving a delay member. Within a
+    block each member reads its summed inputs, rounds them to float32 once, and writes its output
+    buffer. A wire out of a delay member reads that delay's output signal, its input line read
+    delay_samples earlier: silence before the line fills, no dry term, and for an in-cycle delay
+    only frames earlier blocks wrote. The frame-count law holds by construction: every member's
+    output is exactly `frames` frames.
+    """
+    what = "group render job"
+    fields = job_fields(job, GROUP_KEYS, what)
+    frames = fields["frames"]
+    if not is_int(frames) or frames < 1:
+        raise MalformedJobError(what, job)
+    members = _group_members(fields["members"], what, job)
+    wires = _group_wires(fields["wires"], set(members), what, job)
+    for member in members.values():
+        read = read_raw_audio(member.input_path, frames)
+        if isinstance(read, AudioProblem):
+            # A wrong-type input crashes the worker, like every rule the input breaks.
+            raise ValueError(f"the group member's input is unusable: {read.message}")  # noqa: TRY004
+        member.input = read.samples.astype(np.float32, copy=True)
+        member.buffer = np.zeros_like(member.input)
+        if member.delay_samples is not None:
+            member.line = np.zeros_like(member.input)
+    for member in members.values():
+        if problem := _load_group_member(member):
+            return {"status": "load_failed", "detail": f"member {member.name!r}: {problem}"}
+    delayed = {name for name, member in members.items() if member.line is not None}
+    order = instantaneous_order(
+        list(members),
+        sorted(delayed),
+        [(source, target) for source, target, _, _ in wires],
+    )
+    for start in range(0, frames, BUFFER_SIZE):
+        end = min(start + BUFFER_SIZE, frames)
+        for name in order:
+            member = members[name]
+            block = cast("np.ndarray", member.input)[:, start:end].astype(np.float64)
+            control = None if member.control is None else member.control[:, start:end]
+            for source, target, kind, gain in wires:
+                if target != name:
+                    continue
+                if source in delayed:
+                    sample = delay_signal(
+                        cast("np.ndarray", members[source].line),
+                        start,
+                        end - start,
+                        cast("int", members[source].delay_samples),
+                    )
+                else:
+                    sample = cast("np.ndarray", members[source].buffer)[:, start:end]
+                if kind == "audio":
+                    block += sample.astype(np.float64) * 10 ** (gain / 20)
+                else:
+                    control = sample
+            stepped = block.astype(np.float32)
+            if member.line is not None:
+                member.line[:, start:end] = stepped
+                out = delay_line(member.line[:, :start], stepped, cast("int", member.delay_samples))
+            else:
+                out = _group_effect_block(member, stepped, control)
+            cast("np.ndarray", member.buffer)[:, start:end] = out
+    for member in members.values():
+        write_raw_audio(member.output_path, cast("np.ndarray", member.buffer))
     return {"status": "ok"}
 
 

@@ -98,11 +98,20 @@ track's `effects` list; a track node stays a source and takes no wires, and a no
 number of nodes. A wire carries audio, scaled by its `gain_db` for sends, or `control`, at most
 one per node and only into a recipe that documents a control input, such as a sidechain duck.
 
-The mix is the sum of the nodes nothing feeds from, each at its own `gain`. A bus is therefore an
-effect node fed by sends, each scaled by its wire's `gain_db`, fading its group at the bus's own
-`gain`. The leaf-only consequence: routing a track's output into an effect removes the track's
-dry sound from the mix unless a dry branch is authored — fan the track out to both the effect
-and the mix to keep it.
+The mix is the sum of the nodes nothing feeds from, each at its own `gain`. A bus is an effect
+node fed by sends, each scaled by its wire's `gain_db`, fading its group at the bus's own `gain`.
+Routing a track's output into an effect removes the track's dry sound from the mix unless a dry
+branch is authored — fan the track out to both the effect and the mix to keep it.
+
+## Feedback
+
+Loops are opt-in: `build()` returns `Graph(mode="feedback")` instead of the acyclic default. A
+loop is admitted when its instantaneous graph — the wires minus every wire leaving a `delay`
+node — is acyclic, so every loop passes a `delay` node whose `delay_samples` declares how far it
+holds the sound back. On a loop that delay is at least one render block (512 samples); a smaller
+in-loop delay is refused, and off a loop any length renders. The loop renders block by block with
+previous-block feedback, so loop timing is the declared delay alone; latency compensation is not
+attempted.
 
 ## Sounds
 
@@ -111,16 +120,16 @@ it. A bare instrument name is that instrument's default sound, and each instrume
 names. Choose sounds by the role each track plays. This workspace's instruments are under
 "Instruments here".
 
-`list-sounds` exits 0 when every sound is listed (notes about files it cannot read may print),
-1 when a source has a problem its message names, and 2 when `poser.toml` could not be read.
+`list-sounds` exits 0 when every sound is listed (notes about unreadable files may print), 1
+when a source has a problem its message names, and 2 when `poser.toml` could not be read.
 
 ## Rendering
 
 `uv run render-song songs/<name>.py` writes one stem per node and prints each stem's path. Stems
-are cached by their inputs, so only changed nodes render, and a gain-only edit renders nothing.
-Every node's inputs include the song's tempo and total length, so lengthening the song re-renders
-every node. Changing a track re-renders its chain. `--force` re-renders every node. Add `--json`
-for a machine-readable report.
+are cached by their inputs, so only changed nodes render, a gain-only edit renders nothing, and
+`--force` re-renders every node; `--json` prints a machine-readable report. Every node's inputs
+include the song's tempo and total length, so lengthening the song re-renders every node.
+Changing a track re-renders its chain.
 
 Exit codes, for both `render-song` and `analyze-song`:
 
@@ -183,6 +192,5 @@ changed.
 ## Judging a revision
 
 Analysis finds defects and measures; it does not say a song is good. Compare a revision against an
-earlier record. Treat a band or bar difference under 1 dB as possible render noise.
-
-Keep the mix peak at or below -1 dBFS by lowering track `gain`.
+earlier record, and treat a band or bar difference under 1 dB as possible render noise. Keep the
+mix peak at or below -1 dBFS by lowering track `gain`.

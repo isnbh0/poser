@@ -2,7 +2,7 @@
 
 import math
 import re
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 
@@ -13,7 +13,7 @@ from poser.core.audio import (
     TAIL_S,
     graph_duration_s,
 )
-from poser.core.graph import Graph, Node
+from poser.core.graph import Graph, Node, Wire
 from poser.core.jsonvalue import digest
 from poser.core.statuses import StemStatus
 
@@ -68,6 +68,58 @@ def sound_key(adapter_id: str, adapter_version: str, identity: str) -> str:
     if not adapter_version:
         raise ValueError("sound_key needs a non-empty adapter version")
     return digest({"adapter": adapter_id, "version": adapter_version, "identity": identity})
+
+
+def delay_identity(delay_samples: int) -> str:
+    """Return a delay node's resolved identity: the one sample count its line delays by."""
+    return digest({"kind": "delay", "delay_samples": int(delay_samples)})
+
+
+def cycle_key(
+    graph: Graph,
+    node: Node,
+    members: Sequence[Node],
+    identities: Mapping[str, str | None],
+    inside_wires: Sequence[Wire],
+    upstream_keys: Sequence[tuple[str, str, str, float]],
+) -> str:
+    """Return the stamp key of one member of a cycle group, the group being one render unit.
+
+    Every member's key digests the whole group: each member's name, kind, and resolved identity
+    or declared delay, the wires inside the group, the mode, and the keys arriving from outside
+    it, so a change to any member or to the group's upstream re-renders every member, and nodes
+    outside stay cached. `node.name` keeps the members' stamps apart. Numbers are normalized so
+    that `1` and `1.0` give the same key.
+    """
+    return digest(
+        {
+            "format": RENDER_FORMAT,
+            "sample_rate": SAMPLE_RATE,
+            "channels": NUM_CHANNELS,
+            "bit_depth": STEM_BIT_DEPTH,
+            "tail_s": TAIL_S,
+            "bpm": float(graph.bpm),
+            "duration_s": graph_duration_s(graph),
+            "mode": graph.mode,
+            "members": [
+                {
+                    "name": member.name,
+                    "kind": member.kind,
+                    "identity": identities.get(member.name),
+                    "delay_samples": member.delay_samples,
+                }
+                for member in members
+            ],
+            "wires": [
+                [wire.from_name, wire.to_name, wire.kind, float(wire.gain_db)]
+                for wire in inside_wires
+            ],
+            "upstream": [
+                [name, key, kind, float(gain_db)] for name, key, kind, gain_db in upstream_keys
+            ],
+            "name": node.name,
+        }
+    )
 
 
 @dataclass(frozen=True)

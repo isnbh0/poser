@@ -15,7 +15,7 @@ from typing import cast
 import numpy as np
 
 from poser.core.audio import Audio, measure_peak_dbfs, stem_samples
-from poser.core.cache import StampProblem, node_key
+from poser.core.cache import StampProblem
 from poser.core.graph import Graph, Node
 from poser.core.names import Identifier, NodeName, SongId
 from poser.core.ports import (
@@ -35,7 +35,15 @@ from poser.core.ports import (
     SoundFailure,
     Visualizer,
 )
-from poser.core.rendering import EMPTY_EFFECTS, require_stem_format, resolve_node
+from poser.core.rendering import (
+    EMPTY_EFFECTS,
+    ResolvedDelay,
+    ResolvedNode,
+    cycle_groups,
+    node_cache_key,
+    require_stem_format,
+    resolve_node,
+)
 from poser.core.report import (
     BAR_BEATS,
     MIX_NAME,
@@ -179,15 +187,25 @@ def _analyze(
     sound_keys: dict[NodeName, str] = {}
     stems: dict[NodeName, Audio] = {}
     failures: dict[NodeName, NodeReport] = {}
-    # Keys are computed in the graph's topological order, because a node's key digests its
-    # upstream keys. Report rows stay positionally aligned with the graph's nodes, which
-    # compilation sets to song order.
-    for node in graph.topological():
-        name = NodeName(node.name)
-        upstream = _upstream_keys(graph, node, keys)
+    groups = cycle_groups(graph)
+    resolved_of: dict[str, ResolvedDelay | ResolvedNode | SoundFailure] = {}
+    identity_of: dict[str, str | None] = {}
+    for node in graph.nodes:
         resolved = resolve_node(node, instruments, effects)
-        identity = None if isinstance(resolved, SoundFailure) else resolved.sound_key
-        keys[name] = node_key(graph, node, identity, upstream)
+        resolved_of[node.name] = resolved
+        identity_of[node.name] = (
+            None
+            if isinstance(resolved, SoundFailure)
+            else (resolved.identity if isinstance(resolved, ResolvedDelay) else resolved.sound_key)
+        )
+    # Keys are computed in the graph's cycle-group order, because a node's key digests its
+    # upstream keys and a cycle group's digest reads the identities of every member. Report rows
+    # stay positionally aligned with the graph's nodes, which compilation sets to song order.
+    for node in [member for group in graph.groups() for member in group]:
+        name = NodeName(node.name)
+        resolved = resolved_of[node.name]
+        identity = identity_of[node.name]
+        keys[name] = node_cache_key(graph, node, identity_of, keys, groups.get(node.name))
         if not store.stem_path(name).is_file():
             failures[name] = NodeReport(
                 node.name,
@@ -211,17 +229,17 @@ def _analyze(
                 detail=resolved.detail,
             )
             continue
-        sound_keys[name] = resolved.sound_key
+        sound_keys[name] = cast("str", identity)
         try:
             stems[name] = read_stem(
-                store, name, (keys[name], resolved.sound_key), audio_files, frames
+                store, name, (keys[name], cast("str", identity)), audio_files, frames
             )
         except StaleStemError as error:
             failures[name] = NodeReport(
                 node.name,
                 AnalysisStatus.STALE_STEM,
                 keys[name],
-                resolved.sound_key,
+                identity,
                 node.kind,
                 _upstream(graph, node),
                 gain_db=node.gain_db,

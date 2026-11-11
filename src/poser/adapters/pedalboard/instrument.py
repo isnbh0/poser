@@ -47,7 +47,13 @@ from poser.adapters.pedalboard.sources import (
     scan_saved,
 )
 from poser.adapters.pedalboard.state import decode_state, encode_state
-from poser.adapters.pedalboard.worker import DUCK, capture_job, render_effect, render_job
+from poser.adapters.pedalboard.worker import (
+    DUCK,
+    capture_job,
+    render_effect,
+    render_group_job,
+    render_job,
+)
 from poser.core.audio import write_raw_audio
 from poser.core.jsonvalue import Json, JsonValue, digest, json_object
 from poser.core.names import Identifier, Suffix
@@ -59,6 +65,7 @@ from poser.core.ports import (
     CaptureRequest,
     ConfigError,
     EffectRenderRequest,
+    GroupRenderRequest,
     RenderFailure,
     RenderRequest,
     ResolvedEffect,
@@ -71,6 +78,17 @@ from poser.core.statuses import RenderFailureStatus, SoundFailureStatus
 
 LOCK_NAME = ".lock"  # Hidden, so scans skip it.
 MALFORMED_RESULT = "worker wrote a malformed result"
+
+
+def _effect_result(result: JsonValue) -> RenderFailure | None:
+    """Read an effect worker verb's result, mapping each failure it reports."""
+    match result:
+        case {"status": "ok", **rest} if not rest:
+            return None
+        case {"status": "load_failed", "detail": str(detail), **rest} if detail and not rest:
+            return RenderFailure(RenderFailureStatus.LOAD_FAILED, detail)
+        case _:
+            return RenderFailure(RenderFailureStatus.CRASHED, MALFORMED_RESULT)
 
 
 def plugin_version(path: Path) -> str | None:
@@ -403,13 +421,72 @@ class PedalboardEffect:
             return RenderFailure(RenderFailureStatus.TIMED_OUT, str(error))
         except WorkerCrashedError as error:
             return RenderFailure(RenderFailureStatus.CRASHED, str(error))
-        match result:
-            case {"status": "ok", **rest} if not rest:
-                return None
-            case {"status": "load_failed", "detail": str(detail), **rest} if detail and not rest:
-                return RenderFailure(RenderFailureStatus.LOAD_FAILED, detail)
-            case _:
-                return RenderFailure(RenderFailureStatus.CRASHED, MALFORMED_RESULT)
+        return _effect_result(result)
+
+    def render_group(self, request: GroupRenderRequest, timeout_s: float) -> RenderFailure | None:
+        """Render a cycle group: one worker job loads every recipe once and steps the whole group
+        through fixed blocks, so the loop's feedback never leaves the job.
+
+        Each member's recipe payload must be one of this adapter's, and a member fed a control
+        edge is refused here exactly as `render` refuses one, naming the recipe.
+        """
+        members: list[JsonValue] = []
+        for member in request.members:
+            recipe: JsonValue = None
+            if member.recipe is not None:
+                fields = json_object(member.recipe.payload.value())
+                if fields is None or set(fields) != {"path", "builtin", "parameters"}:
+                    raise ValueError(
+                        f"not a Pedalboard effect payload: {member.recipe.payload.text}"
+                    )
+                if member.control is not None and fields["builtin"] != DUCK:
+                    # Whether a recipe takes a control wire is a render-time fact: build time
+                    # loads no plugin and promises no plugin surface, so poser promises a
+                    # sidechain input only for its own duck, and every other recipe refuses the
+                    # control edge here, naming itself.
+                    return RenderFailure(
+                        RenderFailureStatus.LOAD_FAILED,
+                        f"effect {member.recipe.recipe!r} has no sidechain input, so it takes no "
+                        "control wire",
+                    )
+                recipe = member.recipe.payload.value()
+            members.append(
+                {
+                    "name": str(member.name),
+                    "recipe": recipe,
+                    "delay_samples": member.delay_samples,
+                    "input_path": "",
+                    "control_path": None,
+                    "output_path": "",
+                }
+            )
+        outputs = dict(request.outputs)
+        job: dict[str, JsonValue] = {
+            "frames": request.frames,
+            "members": members,
+            "wires": [
+                [wire.from_name, wire.to_name, wire.kind, wire.gain_db] for wire in request.wires
+            ],
+        }
+        try:
+            # Every member's input crosses as a file, so plugin-sized audio never crosses as JSON.
+            with tempfile.TemporaryDirectory() as directory:
+                for index, member in enumerate(request.members):
+                    input_path = Path(directory) / f"{member.name}.input.npy"
+                    write_raw_audio(input_path, member.audio.samples)
+                    slot = cast("dict[str, JsonValue]", members[index])
+                    slot["input_path"] = str(input_path)
+                    slot["output_path"] = str(outputs[member.name])
+                    if member.control is not None:
+                        control_path = Path(directory) / f"{member.name}.control.npy"
+                        write_raw_audio(control_path, member.control.samples)
+                        slot["control_path"] = str(control_path)
+                result = run_isolated(render_group_job, job, timeout_s)
+        except WorkerTimedOutError as error:
+            return RenderFailure(RenderFailureStatus.TIMED_OUT, str(error))
+        except WorkerCrashedError as error:
+            return RenderFailure(RenderFailureStatus.CRASHED, str(error))
+        return _effect_result(result)
 
 
 def _preset_format(owner: str, entry: str) -> PresetFormat:

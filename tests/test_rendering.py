@@ -4,6 +4,7 @@ import dataclasses
 import os
 from collections.abc import Mapping, Sequence
 from pathlib import Path
+from typing import Protocol, override
 
 import numpy as np
 import pytest
@@ -23,17 +24,35 @@ from fakes import (
 
 from poser.core import cache, rendering
 from poser.core.analysis import AnalysisTools, analyze_song
+from poser.core.audio import Audio
 from poser.core.cache import Stamp, StampProblem, node_key, sound_key
-from poser.core.graph import Graph, Node, Wire
+from poser.core.graph import BUFFER_SIZE, Graph, Node, Wire
 from poser.core.names import Identifier, NodeName, SongId, TrackName
 from poser.core.performance import perform
-from poser.core.ports import Effect, Instrument, RenderFailure, SongBusyError, SoundFailure
+from poser.core.ports import (
+    Effect,
+    EffectRenderRequest,
+    Instrument,
+    RenderFailure,
+    ResolvedEffect,
+    SongBusyError,
+    SoundFailure,
+)
 from poser.core.rendering import ResolvedNode, TrackResult, render_song, resolve_node
 from poser.core.report import AnalysisStatus, NodeReport, Report
 from poser.core.song import Note, Song, Track
 from poser.core.statuses import RenderFailureStatus, SoundFailureStatus, StemStatus
 
 SONG_ID = SongId("songs/demo.yaml")
+
+
+class NamedEffect(Effect, Protocol):
+    """What every configured effect the tests pass Setup offers: its configured name."""
+
+    @property
+    def name(self) -> Identifier: ...
+
+
 LEAD = TrackName("lead")
 BASS = TrackName("bass")
 NOTE = (Note(beat=0, pitch=60, length=1, velocity=100),)
@@ -56,17 +75,17 @@ class Setup:
         self,
         tmp_path: Path,
         instrument: FakeInstrument | None = None,
-        effect: FakeEffect | None = None,
-        effects: FakeEffect | Sequence[FakeEffect] | None = None,
+        effect: NamedEffect | None = None,
+        effects: NamedEffect | Sequence[NamedEffect] | None = None,
     ) -> None:
         self.instrument = instrument or make_instrument()
         self.effect = effect
         if effects is None:
-            self.extra: tuple[FakeEffect, ...] = ()
-        elif isinstance(effects, FakeEffect):
-            self.extra = (effects,)
-        else:
+            self.extra: tuple[NamedEffect, ...] = ()
+        elif isinstance(effects, Sequence):
             self.extra = tuple(effects)
+        else:
+            self.extra = (effects,)
         self.renders = FakeRenderStore(tmp_path / "renders")
         self.store: FakeSongStore = self.renders.song(SONG_ID)
         self.audio_files = NpyAudioFiles()
@@ -877,3 +896,306 @@ def test_an_effect_that_takes_no_control_wire_reports_load_failed(tmp_path: Path
     assert "'drive'" in detail
     assert "sidechain" in detail
     assert not setup.store.stem_path(NodeName("wettened")).exists()
+
+
+# The feedback regime (RC5, C20, B3, C22, C-cycles): one block pass per cycle group, on fakes.
+
+
+LOOP_SUM = NodeName("loop")
+LOOP_DRIVE = NodeName("loop.drive")
+LATE = NodeName("late")
+
+
+def loop_graph(*, delay_samples: int = BUFFER_SIZE, notes: tuple[Note, ...] = NOTE) -> Graph:
+    """RC5: a track feeds a sum, the sum runs through a delay and a drive back into itself, and
+    the loop also feeds a leaf. A pad stands apart from the loop."""
+    nodes = (
+        Node("track", "track", sound="fake", notes=notes),
+        Node("bass", "track", sound="fake:pad", notes=NOTE),
+        Node("loop", "effect", effect="sum"),
+        Node("late", "delay", delay_samples=delay_samples),
+        Node("loop.drive", "effect", effect="drive"),
+        Node("out", "effect", effect="sum"),
+    )
+    wires = (
+        Wire("track", "loop", "audio"),
+        Wire("loop", "late", "audio"),
+        Wire("late", "loop.drive", "audio"),
+        Wire("loop.drive", "loop", "audio", gain_db=-12),
+        Wire("loop", "out", "audio"),
+    )
+    return Graph(120, nodes, wires, "feedback")
+
+
+def loop_setup(tmp_path: Path) -> tuple[Setup, FakeEffect, FakeEffect]:
+    """A setup with the loop's two recipes, handed back so tests can read their counters."""
+    sum_effect = FakeEffect("sum", identity="sum", amount=1.0)
+    drive_effect = FakeEffect("drive", identity="drive", amount=2.0)
+    return Setup(tmp_path, effects=(sum_effect, drive_effect)), sum_effect, drive_effect
+
+
+def stem_of(setup: Setup, name: NodeName, frames: int) -> Audio:
+    return setup.audio_files.read(setup.store.stem_path(name), frames)
+
+
+def reference_loop(
+    frames: int, amplitude: float, amount: float, delay: int, return_gain_db: float
+) -> dict[str, np.ndarray]:
+    """The loop as a straightforward per-sample reference: the delay's output is its input read
+    `delay` earlier, silence before the first fill, every stored signal rounded once to float32."""
+    send = 10 ** (return_gain_db / 20)
+    track = np.full(frames, amplitude, np.float32)
+    summed = np.zeros(frames, np.float32)
+    delayed = np.zeros(frames, np.float32)
+    driven = np.zeros(frames, np.float32)
+    for t in range(frames):
+        held = summed[t - delay] if t >= delay else np.float32(0.0)
+        delayed[t] = held
+        driven[t] = np.float32(np.float64(held) * amount)
+        summed[t] = np.float32(np.float64(track[t]) + np.float64(driven[t]) * send)
+    return {"sum": summed, "delay": delayed, "drive": driven}
+
+
+def test_the_loop_matches_a_per_sample_reference_and_holds_silence_before_fill(
+    tmp_path: Path,
+) -> None:
+    """C21 and C22: the block pass is exactly the delay equation, silence before the line fills,
+    and no dry term anywhere in the loop."""
+    setup, _, _ = loop_setup(tmp_path)
+    graph = loop_graph()
+
+    results = by_name(setup.render(graph))
+
+    assert all(result.status is StemStatus.RENDERED for result in results.values())
+    expected = reference_loop(FRAMES, 0.5, 2.0, BUFFER_SIZE, return_gain_db=-12)
+    for name, reference in (("loop", "sum"), ("late", "delay"), (LOOP_DRIVE, "drive")):
+        stem = stem_of(setup, NodeName(name), FRAMES).samples[0]
+        assert np.array_equal(stem, expected[reference]), name
+    # Silence before first fill: the loop's sound enters half a block late.
+    assert np.array_equal(
+        stem_of(setup, LATE, FRAMES).samples[0][:BUFFER_SIZE], np.zeros(BUFFER_SIZE, np.float32)
+    )
+    assert not np.any(stem_of(setup, LATE, FRAMES).samples[0][:BUFFER_SIZE])
+
+
+def test_a_feedback_render_is_deterministic(tmp_path: Path) -> None:
+    setup, _, _ = loop_setup(tmp_path)
+    setup.render(loop_graph())
+    before = {
+        node.name: setup.store.stem_path(NodeName(node.name)).read_bytes()
+        for node in loop_graph().nodes
+    }
+
+    setup.render(loop_graph(), force=True)
+    after = {
+        node.name: setup.store.stem_path(NodeName(node.name)).read_bytes()
+        for node in loop_graph().nodes
+    }
+
+    assert before == after
+
+
+def test_mutating_the_track_rerenders_the_whole_cycle_group_and_downstream(tmp_path: Path) -> None:
+    """C-cycles: one digest covers the group, so a change to any member's upstream re-renders
+    every member and the group's downstream, and unrelated nodes stay cached."""
+    setup, sum_effect, drive_effect = loop_setup(tmp_path)
+    setup.render(loop_graph())
+    renders_after_first = len(setup.instrument.renders)
+
+    changed = loop_graph(notes=(*NOTE, Note(0.5, 64, 0.5, 90)))
+    results = by_name(setup.render(changed))
+
+    assert [
+        results[NodeName(name)].cached
+        for name in ("track", "bass", "loop", "late", LOOP_DRIVE, "out")
+    ] == [
+        False,
+        True,
+        False,
+        False,
+        False,
+        False,
+    ]
+    assert len(sum_effect.group_renders) == 2  # The group rendered once more, as one job.
+    # The first effect member in name order runs every group job; the drive instance never does.
+    assert len(drive_effect.group_renders) == 0
+    assert len(setup.instrument.renders) == renders_after_first + 1  # Only the track played again.
+
+
+def test_a_gain_only_edit_renders_nothing(tmp_path: Path) -> None:
+    """The fader is mixdown-only, so the group's digest never sees it."""
+    setup, sum_effect, _ = loop_setup(tmp_path)
+    setup.render(loop_graph())
+    renders = len(setup.instrument.renders)
+
+    results = by_name(setup.render(loop_graph()))  # Same value, so also a pure cache check.
+    quiet_nodes = loop_graph().nodes
+    quiet = Graph(
+        120,
+        tuple(dataclasses.replace(node, gain_db=-6.0) for node in quiet_nodes),
+        loop_graph().wires,
+        "feedback",
+    )
+    results = by_name(setup.render(quiet))
+
+    assert [
+        results[NodeName(name)].cached
+        for name in ("track", "bass", "loop", "late", LOOP_DRIVE, "out")
+    ] == [True] * 6
+    assert len(sum_effect.group_renders) == 1
+    assert len(setup.instrument.renders) == renders
+
+
+def test_termination_is_structural_in_the_delay_size(tmp_path: Path) -> None:
+    """C22: one job per group whatever the delay declares, over exactly ceil(horizon / block)
+    blocks."""
+    setup, sum_effect, _ = loop_setup(tmp_path)
+    setup.render(loop_graph())
+    long_setup, long_sum, _ = loop_setup(tmp_path)
+    long_setup.render(loop_graph(delay_samples=4 * BUFFER_SIZE))
+
+    assert len(sum_effect.group_renders) == len(long_sum.group_renders) == 1
+    assert sum_effect.group_blocks == [[512] * (FRAMES // BUFFER_SIZE) + [FRAMES % BUFFER_SIZE]]
+    assert long_sum.group_blocks == sum_effect.group_blocks
+
+
+def test_a_standalone_delay_is_a_sample_exact_shift(tmp_path: Path) -> None:
+    """A delay off any cycle is a straight-line node: out[t] = in[t - delay_samples], silence
+    before the third sample, and cached like any stem."""
+    setup = Setup(tmp_path)
+    nodes = (
+        Node("track", "track", sound="fake", notes=NOTE),
+        Node("late", "delay", delay_samples=3),
+    )
+    graph = Graph(120, nodes, (Wire("track", "late", "audio"),))
+
+    results = by_name(setup.render(graph))
+    track = stem_of(setup, NodeName("track"), FRAMES).samples
+    late = stem_of(setup, NodeName("late"), FRAMES).samples
+
+    assert results[NodeName("late")].status is StemStatus.RENDERED
+    assert np.array_equal(late[:, :3], np.zeros((2, 3), np.float32))
+    assert np.array_equal(late[:, 3:], track[:, :-3])
+    again = by_name(setup.render(graph))
+    assert again[NodeName("late")].cached
+
+
+def test_a_group_whose_external_upstream_fails_fails_whole(tmp_path: Path) -> None:
+    failure = RenderFailure(RenderFailureStatus.CRASHED, "the worker failed")
+    setup = Setup(
+        tmp_path,
+        instrument=make_instrument(dead=FakeSound(identity="dead", render_failure=failure)),
+        effects=FakeEffect("sum", identity="sum", amount=1.0),
+    )
+    nodes = (
+        Node("track", "track", sound="fake:dead", notes=NOTE),
+        Node("loop", "effect", effect="sum"),
+        Node("late", "delay", delay_samples=BUFFER_SIZE),
+    )
+    graph = Graph(
+        120,
+        nodes,
+        (
+            Wire("track", "loop", "audio"),
+            Wire("loop", "late", "audio"),
+            Wire("late", "loop", "audio"),
+        ),
+        "feedback",
+    )
+
+    results = by_name(setup.render(graph))
+
+    assert results[NodeName("track")].status is RenderFailureStatus.CRASHED
+    assert results[LOOP_SUM].status is RenderFailureStatus.UPSTREAM_FAILED
+    assert results[LOOP_SUM].detail == "upstream 'track' did not render"
+    assert results[LATE].detail == "upstream 'loop' did not render"
+    assert not setup.store.stem_path(LATE).exists()
+
+
+class RefusingEffect(FakeEffect):
+    """A fake effect whose recipe never resolves, as a broken configuration would not."""
+
+    @override
+    def resolve(self, recipe: str) -> ResolvedEffect | SoundFailure:
+        return SoundFailure(SoundFailureStatus.UNKNOWN_SOUND, "the recipe is broken")
+
+
+def test_a_group_member_that_cannot_resolve_fails_the_group_naming_it(tmp_path: Path) -> None:
+    setup = Setup(
+        tmp_path, effects=(RefusingEffect("sum", identity="sum", amount=1.0), FakeEffect("drive"))
+    )
+
+    results = by_name(setup.render(loop_graph()))
+
+    assert results[LOOP_SUM].status is SoundFailureStatus.UNKNOWN_SOUND
+    assert results[LOOP_SUM].detail == "the recipe is broken"
+    assert results[LATE].status is RenderFailureStatus.UPSTREAM_FAILED
+    assert results[LATE].detail == "upstream 'loop' did not render"
+    assert results[LOOP_DRIVE].detail == "upstream 'loop' did not render"
+
+
+class OtherAdapterEffect(FakeEffect):
+    """A fake effect of another adapter, so a loop spanning two adapters can be built."""
+
+    @override
+    @property
+    def adapter_id(self) -> Identifier:
+        return Identifier("other")
+
+
+def test_a_loop_spanning_two_adapters_is_refused_naming_them(tmp_path: Path) -> None:
+    setup = Setup(
+        tmp_path,
+        effects=(
+            FakeEffect("sum", identity="sum", amount=1.0),
+            OtherAdapterEffect("drive", identity="drive", amount=1.0),
+        ),
+    )
+
+    results = by_name(setup.render(loop_graph()))
+
+    failure = results[LOOP_SUM]
+    assert failure.status is RenderFailureStatus.LOAD_FAILED
+    assert failure.detail is not None
+    assert "different adapters" in failure.detail
+    assert "fake" in failure.detail
+    assert "other" in failure.detail
+
+
+class NoGroupPassEffect:
+    """A fake effect adapter that never learned the block pass, seen only as an Effect."""
+
+    def __init__(self, inner: FakeEffect) -> None:
+        self._inner = inner
+        self.name = inner.name
+
+    @property
+    def adapter_id(self) -> Identifier:
+        return self._inner.adapter_id
+
+    @property
+    def adapter_version(self) -> str:
+        return self._inner.adapter_version
+
+    def resolve(self, recipe: str) -> ResolvedEffect | SoundFailure:
+        return self._inner.resolve(recipe)
+
+    def render(self, request: EffectRenderRequest, timeout_s: float) -> RenderFailure | None:
+        return self._inner.render(request, timeout_s)
+
+
+def test_an_adapter_without_a_block_pass_refuses_the_group(tmp_path: Path) -> None:
+    setup = Setup(
+        tmp_path,
+        effects=(
+            NoGroupPassEffect(FakeEffect("sum", identity="sum", amount=1.0)),
+            FakeEffect("drive"),
+        ),
+    )
+
+    results = by_name(setup.render(loop_graph()))
+
+    failure = results[LOOP_SUM]
+    assert failure.status is RenderFailureStatus.LOAD_FAILED
+    assert failure.detail is not None
+    assert "no block pass" in failure.detail

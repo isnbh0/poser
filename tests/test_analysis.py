@@ -40,7 +40,7 @@ from poser.core.ports import (
     SectionResult,
     SoundFailure,
 )
-from poser.core.rendering import render_song, resolve_node
+from poser.core.rendering import ResolvedDelay, render_song, resolve_node
 from poser.core.report import (
     BANDS,
     AnalysisStatus,
@@ -152,7 +152,13 @@ def node_key_of(song: Song, index: int, setup: Setup) -> str:
     graph = song.graph()
     node = graph.nodes[index]
     resolved = resolve_node(node, setup.instruments)
-    identity = None if isinstance(resolved, SoundFailure) else resolved.sound_key
+    identity = (
+        None
+        if isinstance(resolved, SoundFailure)
+        else resolved.identity
+        if isinstance(resolved, ResolvedDelay)
+        else resolved.sound_key
+    )
     return node_key(graph, node, identity, ())
 
 
@@ -708,3 +714,67 @@ def test_rewiring_changes_the_record_digest_and_reanalysis_keeps_it(tmp_path: Pa
 
     assert again.song_sha256 == rewired.song_sha256
     assert again.run == 3
+
+
+# The feedback regime: cycle members' keys come from the group digest, so analysis reads the same
+# stamps rendering wrote.
+
+
+def loop_graph() -> Graph:
+    """RC5: a track into a sum, through a delay and a drive back into the sum, and a leaf."""
+    nodes = (
+        Node("track", "track", sound="fake", notes=BAR),
+        Node("bass", "track", sound="fake:pad", notes=BAR),
+        Node("loop", "effect", effect="sum"),
+        Node("late", "delay", delay_samples=512),
+        Node("loop.drive", "effect", effect="drive"),
+        Node("out", "effect", effect="sum"),
+    )
+    wires = (
+        Wire("track", "loop", "audio"),
+        Wire("loop", "late", "audio"),
+        Wire("late", "loop.drive", "audio"),
+        Wire("loop.drive", "loop", "audio"),
+        Wire("loop", "out", "audio"),
+    )
+    return Graph(120, nodes, wires, "feedback")
+
+
+def test_a_feedback_graph_analyzes_through_its_group_keys(tmp_path: Path) -> None:
+    """The analysis computes each member's key from the group digest, exactly what rendering
+    stamped, so a rendered feedback graph reads as current and the report stays in song order."""
+    graph = loop_graph()
+    setup = Setup(
+        tmp_path,
+        song=graph,
+        effects=[
+            FakeEffect("sum", identity="sum", amount=1.0),
+            FakeEffect("drive", identity="drive", amount=1.0),
+        ],
+    )
+
+    report = setup.analyze(graph)
+
+    nodes = {node.name: node for node in report.nodes}
+    assert [node.name for node in report.nodes] == [node.name for node in graph.nodes]
+    assert all(node.status is AnalysisStatus.ANALYZED for node in report.nodes)
+    assert nodes["late"].kind == "delay"
+    assert nodes["late"].upstream == ("loop",)
+    assert nodes["loop"].upstream == ("track", "loop.drive")
+    # One digest per member, carrying the member's name: equal nowhere, changed together.
+    keys = [nodes[name].node_key for name in ("loop", "late", "loop.drive")]
+    assert len(set(keys)) == 3
+
+    render_song(
+        graph,
+        setup.renders,
+        SONG_ID,
+        setup.instruments,
+        setup.audio_files,
+        effects=setup.effects,
+        timeout_s=10.0,
+        force=False,
+    )
+    again = setup.analyze(graph)
+
+    assert all(node.status is AnalysisStatus.ANALYZED for node in again.nodes)

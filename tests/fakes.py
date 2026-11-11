@@ -9,14 +9,14 @@ from collections.abc import Generator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Literal, cast
 from urllib.parse import quote
 
 import numpy as np
 
 from poser.core.audio import Audio, AudioProblem, read_raw_audio, write_raw_audio
 from poser.core.cache import Stamp, StampProblem
-from poser.core.graph import Graph
+from poser.core.graph import BUFFER_SIZE, Graph, instantaneous_order
 from poser.core.jsonvalue import Json, JsonValue, json_object
 from poser.core.names import Identifier, NodeName, SongId, Suffix
 from poser.core.ports import (
@@ -25,6 +25,7 @@ from poser.core.ports import (
     CaptureFailure,
     CaptureRequest,
     EffectRenderRequest,
+    GroupRenderRequest,
     MixInput,
     Record,
     RenderFailure,
@@ -38,6 +39,7 @@ from poser.core.ports import (
     SoundFailure,
     SoundListing,
 )
+from poser.core.rendering import delay_line, delay_signal
 from poser.core.report import BANDS, Levels
 from poser.core.song import Song, SongError, parse_song, song_to_data
 from poser.core.sounds import SoundEntry, SoundRef
@@ -265,6 +267,8 @@ class FakeEffect:
         self._bad_output = bad_output
         self._sidechain = sidechain
         self.renders: list[EffectRenderRequest] = []
+        self.group_renders: list[GroupRenderRequest] = []
+        self.group_blocks: list[list[int]] = []  # Each call's visited block sizes, in order.
 
     @property
     def adapter_id(self) -> Identifier:
@@ -306,6 +310,92 @@ class FakeEffect:
             samples[:, frames // 2] = np.nan
         if self._bad_output != "no_file":
             write_raw_audio(request.audio_path, samples.astype(np.float32)[:, :frames])
+        return None
+
+    def render_group(self, request: GroupRenderRequest, timeout_s: float) -> RenderFailure | None:
+        """Run the block pass in-process, as the Pedalboard worker does: every recipe applies to
+        each fixed block, the buffers stay here, and the visited block sizes are recorded.
+
+        Each member's own payload carries its amount, so one instance renders any member. A
+        control edge pulls its block down by the block's own peak, the block-wise shape of the
+        single-node law.
+        """
+        assert timeout_s > 0
+        self.group_renders.append(request)
+        blocks = [
+            min(BUFFER_SIZE, request.frames - start)
+            for start in range(0, request.frames, BUFFER_SIZE)
+        ]
+        self.group_blocks.append(blocks)
+        amounts = {
+            str(member.name): float(
+                cast(
+                    "float",
+                    cast("dict[str, JsonValue]", json_object(member.recipe.payload.value()))[
+                        "amount"
+                    ],
+                )
+            )
+            for member in request.members
+            if member.recipe is not None
+        }
+        delayed = {
+            str(member.name): int(member.delay_samples)
+            for member in request.members
+            if member.delay_samples is not None
+        }
+        order = instantaneous_order(
+            [str(member.name) for member in request.members],
+            sorted(delayed),
+            [(wire.from_name, wire.to_name) for wire in request.wires],
+        )
+        inputs = {
+            str(member.name): np.array(member.audio.samples, copy=True)
+            for member in request.members
+        }
+        controls = {
+            str(member.name): (
+                None if member.control is None else np.array(member.control.samples, copy=True)
+            )
+            for member in request.members
+        }
+        buffers = {name: np.zeros_like(audio) for name, audio in inputs.items()}
+        lines = {name: np.zeros_like(audio) for name, audio in inputs.items() if name in delayed}
+        for start in range(0, request.frames, BUFFER_SIZE):
+            end = min(start + BUFFER_SIZE, request.frames)
+            for name in order:
+                block = inputs[name][:, start:end].astype(np.float64)
+                member_control = controls[name]
+                control = None if member_control is None else member_control[:, start:end]
+                for wire in request.wires:
+                    if wire.to_name != name:
+                        continue
+                    if wire.from_name in delayed:
+                        sample = delay_signal(
+                            lines[wire.from_name],
+                            start,
+                            end - start,
+                            delayed[wire.from_name],
+                        )
+                    else:
+                        sample = buffers[wire.from_name][:, start:end]
+                    if wire.kind == "audio":
+                        block += sample.astype(np.float64) * 10 ** (wire.gain_db / 20)
+                    else:
+                        control = sample
+                stepped = block.astype(np.float32)
+                if name in delayed:
+                    lines[name][:, start:end] = stepped
+                    out = delay_line(lines[name][:, :start], stepped, delayed[name])
+                else:
+                    out = stepped * amounts[name]
+                    if control is not None:
+                        peak = float(np.max(np.abs(control)))
+                        out = out * max(0.0, 1.0 - peak)
+                    out = np.asarray(out, dtype=np.float32)
+                buffers[name][:, start:end] = out
+        for name, path in request.outputs:
+            write_raw_audio(path, buffers[str(name)])
         return None
 
 
