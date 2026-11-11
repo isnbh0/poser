@@ -83,6 +83,35 @@ def test_success_writes_current_guide_and_loadable_demo(
     assert not (target / "renders").exists()
 
 
+def test_complete_read_only_gitignore_is_not_rewritten(
+    tmp_path: Path, plugin: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = tmp_path / "studio"
+    target.mkdir()
+    ignore = target / ".gitignore"
+    original = files("poser").joinpath("scaffold", "gitignore").read_bytes()
+    ignore.write_bytes(original)
+    ignore.chmod(0o444)
+    write_text = Path.write_text
+
+    def reject_ignore_write(
+        path: Path,
+        data: str,
+        encoding: str | None = None,
+        errors: str | None = None,
+        newline: str | None = None,
+    ) -> int:
+        if path == ignore:
+            raise AssertionError("unchanged .gitignore was rewritten")
+        return write_text(path, data, encoding=encoding, errors=errors, newline=newline)
+
+    monkeypatch.setattr(Path, "write_text", reject_ignore_write)
+    assert init_workspace.main(args(target, plugin)) == 0
+    assert ignore.read_bytes() == original
+    assert (ignore.stat().st_mode & 0o777) == 0o444
+    assert (target / "poser.toml").is_file()
+
+
 def test_later_guide_updates_use_studio_config_not_setup_resource(
     tmp_path: Path, plugin: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

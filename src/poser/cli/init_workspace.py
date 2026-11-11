@@ -43,10 +43,13 @@ def _preflight(directory: Path, targets: tuple[str, ...]) -> None:
             raise ConfigError(f"{path} exists")
 
 
-def _merged_ignore(path: Path) -> str:
-    existing = path.read_text(encoding="utf-8") if path.exists() else ""
+def _merged_ignore(path: Path) -> str | None:
+    exists = path.exists()
+    existing = path.read_text(encoding="utf-8") if exists else ""
     present = set(existing.splitlines())
     missing = [line for line in _scaffold("gitignore").splitlines() if line not in present]
+    if exists and not missing:
+        return None
     if missing and existing and not existing.endswith("\n"):
         existing += "\n"
     return existing + "".join(f"{line}\n" for line in missing)
@@ -92,8 +95,10 @@ def main(argv: list[str] | None = None) -> int:
             "CLAUDE.md": _scaffold("claude.md"),
             CONFIG_NAME: setup.config,
             "songs/demo.yaml": setup.demo,
-            ".gitignore": _merged_ignore(directory / ".gitignore"),
         }
+        ignore = _merged_ignore(directory / ".gitignore")
+        if ignore is not None:
+            outputs[".gitignore"] = ignore
     except (ConfigError, OSError, UnicodeError) as error:
         print(f"init-workspace: {error}", file=sys.stderr)
         return 2
