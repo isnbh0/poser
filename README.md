@@ -11,7 +11,9 @@ and [scsynth](packages/poser-scsynth/README.md).
 
 A studio is your own project for songs, instruments, and renders. Follow the [setup guide](docs/setup.md)
 to create and verify one yourself, or copy the [agent bootstrap prompt](docs/bootstrap.md) to have
-an agent help. Both routes use the same procedure and the Surge XT reference setup.
+an agent help. Both routes use the same procedure: the free Surge XT reference setup on macOS,
+with optional continuation to your first song. This platform scope describes the reference setup,
+not every poser backend.
 
 ## Surge demo
 
@@ -21,13 +23,15 @@ glance:
 
 ![the demo mix's spectrogram](docs/demo-spectrogram.png)
 
-The report that drives the next revision (here abridged):
+The report that drives the next revision (here abridged). Song tracks appear as analysis `nodes`,
+alongside any effect nodes; the song authoring key remains `tracks`. Metric values below are
+illustrative, not a reproducible audio fingerprint:
 
 ```json
 {
   "song": "demo",
   "run": 1,
-  "tracks": [
+  "nodes": [
     {
       "name": "lead",
       "status": "analyzed",
@@ -94,8 +98,9 @@ writes only `POSER.md`, and refuses to replace one it did not generate. `CLAUDE.
 ## Commands
 
 - `uv run init-workspace --setup surge`: write the selected reference setup and guide into a directory.
-- `uv run check-instruments`: check that each instrument loads, makes sound, and renders the same
-  notes twice alike.
+- `uv run check-instruments`: check instrument loading and note output; report exact sample-value
+  equality with no tolerance separately as informational repeatability. `REPEATABLE no` alone
+  is not failure.
 - `uv run list-sounds`: list every sound a song can name, with a description.
 - `uv run render-song <song>`: render one aligned stem per track, rendering again only tracks
   whose inputs changed.
@@ -143,7 +148,8 @@ share. In a uv workspace, make the workspace a package (`[tool.uv] package = tru
 `make check` runs format, lint, types, and the tests that need no plugins. `make test-real` loads
 real plugins; it reads a `poser.toml` at the repository root, so copy
 `src/poser/reference_setups/surge/poser.toml` there and edit its paths first. [AGENTS.md](AGENTS.md) describes
-the layout and rules.
+the layout and rules. The [publication checklist](docs/publication-checks.md) separates local checks
+from conditional public acquisition, fresh-install, and listening acceptance.
 
 ## License
 

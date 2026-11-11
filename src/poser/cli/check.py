@@ -1,7 +1,8 @@
-"""`check-instruments`: check that each instrument in poser.toml loads, sounds, and repeats.
+"""`check-instruments`: check that each instrument in poser.toml loads and plays every note.
 
-Each instrument renders a short pattern twice. A plugin that crashes, hangs, or opens a license
-dialog fails its own row without stopping the others.
+Repeatability is informational: exact sample-value equality with no tolerance, not a pass
+requirement. Each instrument renders a short pattern twice. A plugin that crashes, hangs, or
+opens a license dialog fails its own row without stopping the others.
 """
 
 import argparse

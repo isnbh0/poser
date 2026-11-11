@@ -1,9 +1,11 @@
 """The commands, run through `main` in workspaces whose `poser.toml` selects test adapters."""
 
 import json
+import math
 from pathlib import Path
 
 import pytest
+from fakes import FakeInstrument, FakeSound
 from helpers import fxp_bytes
 from workspaces import CommandWorkspace, make_workspace, write_script_song, write_song
 
@@ -18,8 +20,10 @@ from poser.cli.common import (
 )
 from poser.compose import load
 from poser.core.audio import SILENCE_DBFS
+from poser.core.checking import CheckResult
+from poser.core.checks import CheckStatus
 from poser.core.guide import GENERATED
-from poser.core.names import SongId
+from poser.core.names import Identifier, SongId
 from poser.core.ports import CaptureFailure
 
 SONG = "songs/tune.yaml"
@@ -382,6 +386,67 @@ def test_check_json_and_a_pass(
     }
 
 
+@pytest.mark.parametrize("json_mode", [False, True], ids=["table", "json"])
+def test_check_differing_renders_pass(
+    workspace: CommandWorkspace, capsys: pytest.CaptureFixture[str], json_mode: bool
+) -> None:
+    def drifting(instrument: FakeInstrument) -> None:
+        instrument._sounds[None] = FakeSound(amplitude=0.5, drift=0.01)
+
+    workspace.module.SETUP["synth"] = drifting
+
+    assert check.main(["--json"] if json_mode else []) == EXIT_ALL_PASS
+
+    text = out(capsys)
+    if not json_mode:
+        assert text.splitlines()[1].split() == ["synth", "fake", "pass", "-6.0", "no"]
+        return
+    (result,) = json.loads(text)
+    assert result["status"] == "pass"
+    assert result["repeatable"] is False
+    assert math.isfinite(result["max_difference_dbfs"])
+    assert result["max_difference_dbfs"] == pytest.approx(-40, abs=0.01)
+    assert set(result) == {
+        "name",
+        "adapter",
+        "status",
+        "peak_dbfs",
+        "note_peaks_dbfs",
+        "clipped",
+        "repeatable",
+        "max_difference_dbfs",
+        "detail",
+    }
+
+
+@pytest.mark.parametrize(
+    "status", [status for status in CheckStatus if status is not CheckStatus.PASS]
+)
+def test_check_each_failure_exits_one_alongside_a_pass(status: CheckStatus) -> None:
+    passing = CheckResult(Identifier("good"), Identifier("fake"), CheckStatus.PASS)
+    failing = CheckResult(Identifier("bad"), Identifier("fake"), status)
+    assert check.exit_code([passing, failing]) == EXIT_SOME_FAILED
+
+
+@pytest.mark.parametrize("config", ["[instruments", "[instruments]\n"])
+def test_check_bad_config_exits_two(
+    workspace: CommandWorkspace, capsys: pytest.CaptureFixture[str], config: str
+) -> None:
+    workspace.config.write_text(config)
+    assert check.main([]) == EXIT_BAD_CONFIG
+    assert capsys.readouterr().err.startswith("check-instruments: ")
+    assert not workspace.module.BUILT
+
+
+def test_check_help_calls_repeatability_informational(capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit) as error:
+        check.main(["--help"])
+    assert error.value.code == 0
+    help_text = " ".join(out(capsys).split())
+    assert "Repeatability is informational" in help_text
+    assert "not a pass requirement" in help_text
+
+
 # list-sounds
 
 
@@ -734,6 +799,11 @@ def test_update_guide_preserves_personal_files_and_handles_missing_reference(
     assert agents.read_bytes() == before[agents]
     assert claude.read_bytes() == before[claude]
     assert b"personal patches" in reference.read_bytes()
+    text = reference.read_text()
+    for phrase in ("intent and preferences", "not auditioned", "reported mix path"):
+        assert phrase in text
+    assert guide.main(["--check"]) == EXIT_ALL_PASS
+    assert agents.read_bytes() == before[agents]
     reference.unlink()
     before = {p: p.read_bytes() for p in (agents, claude, config)}
     assert guide.main(["--check"]) == EXIT_SOME_FAILED

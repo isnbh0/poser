@@ -3,14 +3,23 @@
 ## Composing here
 
 poser renders songs through configured instruments and measures the result. Compose here by looping:
-
-1. Write or edit a song in a format enabled by `poser.toml`'s `adapters.song_formats`.
-2. Render it: `uv run render-song <song>`.
-3. Analyze it: `uv run analyze-song <song> --json`.
-4. Read the report, the spectrograms, and earlier history records, then revise.
-
-When the script format is enabled, song scripts import `poser` directly and need no PEP 723
-header; `render-song` loads them in this project's environment.
+1. Reuse intent and preferences in `AGENTS.md`; ask only for consequential missing choices,
+   accepting delegated choices with stated provisional defaults. Keep the demo and owner's work.
+2. Write a new song in a format enabled by `poser.toml`'s `adapters.song_formats`.
+3. Render it: `uv run render-song <song>`; analyze it: `uv run analyze-song <song> --json`.
+4. Read the report, spectrograms, and history; revise against the brief and actual results.
+5. Invite the person to audition, or listen when a usable route and permission exist. Starting
+   a player is not listening. If unable to listen, disclose "not auditioned" and invite feedback;
+   this need not block a technically verified draft.
+6. For delivery, verify editable source bytes stay unchanged across a successful render followed
+   by successful analysis. Inspect that analysis's report and reported mix path; preserve source,
+   report, and mix together before another run replaces outputs. Include local source dependencies
+   for scripts; unchanged source alone cannot reproduce external state. Never deliver an earlier
+   mix as current after a failed attempt. Give files or accessible paths, report/image locations,
+   analysis results, brief interpretation, and listening limitations; disclose mutable output paths.
+   A historical report alone does not prove matching audio when its mix path is mutable.
+When the script format is enabled, song scripts import `poser` directly, without a PEP 723
+header, in this project's environment.
 
 ## Songs
 
@@ -38,13 +47,11 @@ controller change must fall within 3600 seconds.
 | `value` | controller change | integer | 0 to 127 |
 | `shape` | controller change, optional | `step` or `linear` | |
 
-A `step` change holds its value until the next change to that controller. A `linear` change ramps
-to the next change to the same controller, so it needs a later one.
+A `step` holds until that controller's next change; `linear` ramps to it and needs a later one.
 
-A track with `effects` runs its sound through those recipes in order, as one chain per track: the
-first recipe hears the track, the next hears the first, and so on. A chain's nodes are named
-`<track>.<effect>`, with a repeat taking an ordinal (`bass.drive.2`). The track's `gain` still
-fades the chain's end, so the fader works as before.
+Track `effects` form a recipe chain: the first hears the track, each next hears its predecessor.
+Nodes are named `<track>.<effect>`, with repeats numbered (`bass.drive.2`). Track `gain` fades
+the chain's end.
 
 With the script format enabled, this short song shows the form rather than a finished piece:
 
@@ -81,7 +88,6 @@ def build() -> Song:
 ```
 
 Music helpers, from `poser`; their docstrings give the parameters:
-
 - `pitch` — the MIDI pitch of a note name such as `C4`, `F#3`, or `Bb2`.
 - `scale` — one octave of a mode (`MODES`, such as major, minor, dorian) from a root.
 - `degree` — a scale's nth note from 0, continuing into other octaves.
@@ -97,8 +103,8 @@ An effect node names a recipe from `poser.toml`; a track node is a source and ta
 A node may feed many nodes. A wire carries audio, scaled by `gain_db`, or `control`, at most one
 per node and only into a recipe that documents a control input, such as a sidechain duck.
 
-The mix sums nodes nothing feeds from, each at its own `gain_db`. A bus is an effect node fed by
-sends, each scaled by its wire's `gain_db`, fading its group at the bus's own `gain_db`.
+The mix sums leaf nodes at their `gain_db`. A bus is an effect fed by sends scaled by wire
+`gain_db`, fading its group at the bus's `gain_db`.
 Routing a track's output into an effect removes the track's dry sound from the mix unless a dry
 branch is authored. For example, wire the track to both a wet effect node and a passthrough
 `sum` effect node (configured in `poser.toml` with `builtin = "sum"`). Leave both nodes without
@@ -106,33 +112,26 @@ outgoing wires; the mix includes both their outputs. The mix itself is not a wir
 
 ## Feedback
 
-Loops are opt-in: `build()` returns `Graph(mode="feedback")` instead of the acyclic default. A
-loop is admitted when its instantaneous graph — the wires minus every wire leaving a `delay`
-node — is acyclic, so every loop passes a `delay` node whose `delay_samples` declares how far it
-holds the sound back. On a loop that delay is at least one render block (512 samples); a smaller
-in-loop delay is refused, and off a loop any length renders. The loop renders block by block with
-previous-block feedback, so loop timing is the declared delay alone; latency compensation is not
-attempted.
+Opt into loops with `build()` returning `Graph(mode="feedback")`. Removing wires leaving `delay`
+nodes must make the graph acyclic. Each loop's `delay_samples` must be at least one render block
+(512 samples); smaller in-loop delays are refused, while off-loop delays allow any length.
+Rendering uses previous-block feedback; timing is the declared delay, without latency compensation.
 
 ## Sounds
 
-A `sound` is `<instrument>` or `<instrument>:<name>`, exactly as `uv run list-sounds` prints
-it. A bare instrument name is that instrument's default sound, and each instrument has its own
-names. Choose sounds by the role each track plays. This workspace's instruments are under
-"Instruments here".
+A `sound` is `<instrument>` (its default) or `<instrument>:<name>`, as `uv run list-sounds` prints.
+Each instrument has its own names; choose by track role. See "Instruments here" for this workspace.
 
 `list-sounds` exits 0 when all sounds are listed, 1 for a source problem, and 2 for unreadable config.
 
 ## Rendering
 
-`uv run render-song <song>` writes one stem per node and prints each stem's path. Stems
-are cached by their inputs, so only changed nodes render, a gain-only edit renders nothing, and
-`--force` re-renders every node; `--json` prints a machine-readable report. Every node's inputs
-include the song's tempo and total length, so lengthening the song re-renders every node.
-Changing a track re-renders its chain.
+`uv run render-song <song>` writes and prints a stem path per node, caching by inputs. Only
+changed nodes render; gain-only edits render nothing. `--force` re-renders all nodes; `--json`
+prints a machine-readable report. Inputs include tempo and total length, so lengthening the song
+re-renders every node. Changing a track re-renders its chain.
 
 Exit codes, for both `render-song` and `analyze-song`:
-
 - 0: everything passed.
 - 1: from `render-song`, a track did not end `rendered`; from `analyze-song`, a node or the mix
   failed. The report says which.
@@ -149,7 +148,7 @@ run's report and images. Report fields whose meaning is not obvious from their n
 | Field | Meaning |
 |---|---|
 | `run` | This analysis's record number |
-| `song_sha256` | Digest of the song version analyzed; equal digests mean the same song |
+| `song_sha256` | Digest of the record writer's serialized loaded song, not a raw editable source-file hash |
 | `node_key` | Digest of the node's render inputs: everything but `gain`, including the song's length, the sound or recipe it resolved to, and the keys of the stems fed into it |
 | `sound_key` | Digest of the sound or recipe itself; it changes when a preset, saved sound file, or effect parameters change |
 | `gain_db` | The node's `gain` |
@@ -183,7 +182,8 @@ fail the analysis.
 
 - `uv run render-song` and `uv run analyze-song`: render and analyze a song, as above.
 - `uv run list-sounds`: every sound a song can name, with a description.
-- `uv run check-instruments`: whether each instrument loads, sounds, and repeats.
+- `uv run check-instruments`: checks load and note output. Repeatability is informational:
+  exact sample-value equality with no tolerance; `pass` with `no` succeeds. Clipping is also informational.
 - `uv run update-guide`: rewrite `POSER.md` after `poser.toml` changes; `--check` compares it.
 - `uv run save-sound`: for owners, not agents; only for instruments supporting capture.
 - `uv run init-workspace --setup surge`: makes a new workspace; not needed here.

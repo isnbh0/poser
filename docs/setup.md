@@ -2,7 +2,7 @@
 
 A studio is your own project for songs, configuration, sounds, and renders. A reference setup
 is a curated starting configuration and demo copied into that project; an adapter connects poser
-to a backend that plays instruments. This guide uses the Surge XT reference setup.
+to a backend that plays instruments. This guide uses the free Surge XT reference setup on macOS.
 
 To have an agent help, copy the [bootstrap prompt](bootstrap.md). Or follow the same procedure
 manually below.
@@ -32,7 +32,10 @@ The chain stops at the first failure. After `cd` succeeds, your shell stays in t
 `uv init` or `cd` fails, remain in the parent directory and resolve that error before continuing.
 
 Use the Git dependency shown here, not the unrelated PyPI package named `poser`. If adapting
-these steps to an existing project, inspect its files and dependencies first. The initializer
+these steps to an existing project, inspect its files and dependencies first. The studio's `uv.lock`
+records the resolved Git commit; retain it with the project for reproducibility. A newly resolved
+unqualified Git URL can select a later commit. Choosing an explicit revision is optional, not a
+missing locking feature; do not discard an existing lockfile. The initializer
 refuses to overwrite its owned output files; it merges required entries into an existing
 `.gitignore`.
 
@@ -43,9 +46,61 @@ adapters. After changing `poser.toml` or other guide inputs, run `uv run update-
 studio; use `uv run update-guide --check` to check whether the guide is current. Your `AGENTS.md`
 edits remain yours.
 
-The check exercises instrument loading, sound output, and repeatability. After the demo renders
-and analyzes, listen to `renders/songs/demo.yaml/latest/mix.wav`; its report and spectrograms are
-also under `renders/songs/demo.yaml/latest/`.
+The check exercises instrument loading and note output. Status and exit code determine failure:
+exit 0 means all instruments pass, 1 means an instrument failed, and 2 means a configuration or
+workspace error. `repeatable` reports exact sample-value equality between two renders, with no
+tolerance, not perceptual quality. A `pass` with `REPEATABLE no` (JSON `repeatable: false`) is
+valid. Clipping is informational in instrument checking, unlike clipping defects in song analysis.
+
+After successful demo rendering and analysis, invite the person to listen to
+`renders/songs/demo.yaml/latest/mix.wav`; its report and spectrograms are also under
+`renders/songs/demo.yaml/latest/`. Audition yourself only with a usable listening route and
+permission. Starting a player is not evidence you heard the result. If you cannot listen, disclose
+that it is not auditioned and ask the person to audition. Lack of audition does not invalidate
+technical setup verification.
+
+## Compose your first song (optional)
+
+After successful setup, offer to continue to a first song. Setup-only is a complete outcome;
+declining needs no creative questionnaire. Reuse preferences already provided. Ask only for
+consequential missing intent, such as mood, approximate length, or references; accept delegated
+choices and state provisional defaults.
+
+Read the studio's `AGENTS.md` and generated `POSER.md`, and run `uv run list-sounds`. Create a
+new song without overwriting the demo or the owner's work. In the commands below, replace
+`<song-path>` with that new source's path (YAML or Python); it is a placeholder, not a musical brief.
+Run from the studio:
+
+```bash
+uv run render-song <song-path> &&
+uv run analyze-song <song-path> --json
+```
+
+Inspect the JSON report's node and mix defects and spectrograms. Revise in response to the brief
+and actual results, then render and analyze again. Invite the person to listen, or audition with
+a usable route and permission, as for the demo. Disclose when you cannot listen and request the
+person's audition; do not block delivery of a technically verified draft for lack of listening.
+Analysis success is not artistic approval or a mastering guarantee.
+
+### Final handoff
+
+Preserve the editable song source and verify its bytes remain unchanged across a successful
+render followed by successful analysis. Inspect that analysis's report and its reported mix path;
+use that mix, not an assumed filename. For this reference setup the rendered mix is a WAV.
+Copy or deliver the unchanged source, that report, and that mix together before another run can
+replace the outputs. Include local source dependencies needed to reproduce a Python song;
+unchanged source bytes alone do not establish reproducibility for scripts using external state.
+
+`song_sha256` identifies the record writer's serialized loaded song, not necessarily the editable
+source file; do not compare it with a raw source-file hash. Even a historical report's mix path
+can refer to mutable `latest` output, so retaining that report alone does not establish matching
+audio. Never hand off an earlier mix as the current successful result after a failed latest attempt.
+
+Deliver or identify the editable source and matching WAV, report and spectrogram locations,
+analysis result, a brief interpretation, and listening status (including “not auditioned” when
+applicable). If attachments are unavailable, give accessible paths and disclose which point to
+mutable `latest` output. Preserve the matching artifacts before any further run even when sharing
+paths instead of attachments.
 
 ## Recover from a failure
 
@@ -56,7 +111,8 @@ checks create no studio template files, but the Python project and dependency cr
 remain. Resolve any reported existing-file conflicts rather than overwriting them.
 
 If initialization succeeds but `check-instruments` fails, keep the studio and read the diagnostic:
-the failure may concern loading, sound output, or repeatability, not just a missing plugin. Correct
+real failures include load errors, crashes, timeouts, non-finite output, silence, or missing notes,
+not just a missing plugin. Do not repair or reinitialize solely because repeatability is false. Correct
 the installation or current `poser.toml`, run `uv run update-guide` if its inputs changed, and
 rerun `uv run check-instruments` before rendering and analyzing. Do not delete studio files or
 rerun initialization to repair an initialized studio.

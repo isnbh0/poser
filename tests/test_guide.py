@@ -101,6 +101,42 @@ def test_guide_is_short_and_claude_imports_studio_instructions() -> None:
     assert "[POSER.md](POSER.md)" in (SCAFFOLD_DIR / "agents.md").read_text()
 
 
+def test_composition_guidance_covers_intent_audition_and_honest_delivery() -> None:
+    composing = " ".join(GUIDE.split("## Composing here\n", 1)[1].split("## Songs", 1)[0].split())
+    for phrase in (
+        "intent and preferences in `AGENTS.md`",
+        "consequential missing choices",
+        "delegated choices with stated provisional defaults",
+        "usable route and permission",
+        "Starting a player is not listening",
+        'disclose "not auditioned"',
+        "need not block a technically verified draft",
+        "source bytes stay unchanged",
+        "successful render followed by successful analysis",
+        "reported mix path",
+        "preserve source, report, and mix together before another run",
+        "local source dependencies",
+        "cannot reproduce external state",
+        "Never deliver an earlier mix as current after a failed attempt",
+        "files or accessible paths",
+        "report/image locations",
+        "listening limitations",
+        "disclose mutable output paths",
+        "historical report alone does not prove matching audio",
+    ):
+        assert phrase in composing
+    assert "not a raw editable source-file hash" in GUIDE
+    assert "it does not say a song is good" in GUIDE
+
+
+def test_check_guidance_separates_repeatability_from_success() -> None:
+    commands = " ".join(GUIDE.split("## Commands\n", 1)[1].split("## Judging", 1)[0].split())
+    assert "Repeatability is informational" in commands
+    assert "exact sample-value equality with no tolerance" in commands
+    assert "`pass` with `no` succeeds" in commands
+    assert "Clipping is also informational" in commands
+
+
 def test_python_examples_load(tmp_path: Path) -> None:
     assert python_songs(tmp_path)
 

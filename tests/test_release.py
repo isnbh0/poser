@@ -1,5 +1,6 @@
 """The files that make poser a releasable package: license, metadata, README, and type marker."""
 
+import json
 import re
 import shlex
 import subprocess
@@ -9,7 +10,10 @@ from importlib.resources import files
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
+import pytest
 from helpers import REPO_DIR
+
+from poser.core.report import BANDS, AnalysisStatus, MixReport, NodeReport, Report, report_to_data
 
 PROJECT = tomllib.loads((REPO_DIR / "pyproject.toml").read_text())["project"]
 
@@ -40,6 +44,7 @@ ONBOARDING = (
     REPO_DIR / "README.md",
     REPO_DIR / "docs/setup.md",
     REPO_DIR / "docs/bootstrap.md",
+    REPO_DIR / "docs/publication-checks.md",
     REPO_DIR / "src/poser/reference_setups/surge/README.md",
     REPO_DIR / "packages/poser-scsynth/README.md",
 )
@@ -47,7 +52,7 @@ ONBOARDING = (
 
 def test_onboarding_local_links_resolve_to_project_files() -> None:
     result = subprocess.run(
-        ["git", "ls-files", "--cached", "--others", "--exclude-standard"],  # noqa: S607
+        ["git", "ls-files"],  # noqa: S607
         cwd=REPO_DIR,
         check=True,
         capture_output=True,
@@ -55,6 +60,7 @@ def test_onboarding_local_links_resolve_to_project_files() -> None:
     )
     project_files = set(result.stdout.splitlines())
     for document in ONBOARDING:
+        assert str(document.relative_to(REPO_DIR)) in project_files, document
         links = re.findall(r"!?\[[^]]*\]\(([^)]+)\)", document.read_text())
         for link in links:
             parsed = urlsplit(link)
@@ -73,9 +79,7 @@ def test_onboarding_commands_and_shared_guide_link() -> None:
     for document in ONBOARDING:
         commands = re.findall(r"uv run ([\w-]+)", document.read_text())
         assert set(commands) <= set(PROJECT["scripts"]), document
-    blocks = re.findall(r"```bash\n(.*?)```", setup, re.DOTALL)
-    assert len(blocks) == 1
-    lexer = shlex.shlex(blocks[0], posix=True, punctuation_chars="&")
+    lexer = shlex.shlex(setup_chain(), posix=True, punctuation_chars="&")
     lexer.whitespace_split = True
     tokens = list(lexer)
     commands: list[list[str]] = [[]]
@@ -89,31 +93,189 @@ def test_onboarding_commands_and_shared_guide_link() -> None:
         assert any(command[:3] == ["uv", "run", name] for command in commands)
 
 
-def test_setup_command_chain_stops_and_retains_working_directory(tmp_path: Path) -> None:
-    setup = (REPO_DIR / "docs/setup.md").read_text()
-    (block,) = re.findall(r"```bash\n(.*?)```", setup, re.DOTALL)
+def section(document: Path, heading: str) -> str:
+    """Read one level-two section, including any subordinate sections."""
+    text = document.read_text()
+    match = re.search(rf"^## {re.escape(heading)}\s*$", text, re.MULTILINE)
+    assert match is not None, (document, heading)
+    return re.split(r"^## ", text[match.end() :], maxsplit=1, flags=re.MULTILINE)[0]
+
+
+def setup_chain() -> str:
+    text = section(REPO_DIR / "docs/setup.md", "Create and verify")
+    (block,) = re.findall(r"```bash\n(.*?)```", text, re.DOTALL)
+    return block
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        "init",
+        "cd",
+        "add",
+        "init-workspace",
+        "check-instruments",
+        "render-song",
+        "analyze-song",
+        "none",
+    ],
+)
+def test_setup_command_chain_stops_and_retains_working_directory(
+    tmp_path: Path, failure: str
+) -> None:
+    studio = tmp_path / "my-studio"
+    studio.mkdir()
+    owned = studio / "songs" / "existing.yaml"
+    owned.parent.mkdir()
+    owned.write_text("owner's existing song\n")
+    config = studio / "poser.toml"
+    config.write_text("# owner's configuration\n")
+    before = {path: path.read_bytes() for path in (owned, config)}
     fake_uv = """uv() {
     printf 'uv %s\\n' "$*"
-    if [ "$1" = init ]; then
-        [ "$1" = "$FAIL" ] && return 1
-        [ "$FAIL" = cd ] || mkdir my-studio
-    fi
-    [ "$2" = init-workspace ] && [ "$FAIL" = workspace ] && return 1
+    case "$1" in
+        init|add) step=$1 ;;
+        run) step=$2 ;;
+        *) return 99 ;;
+    esac
+    [ "$step" = "$FAIL" ] && return 1
     return 0
 }
+cd() {
+    [ "$FAIL" = cd ] && return 1
+    command cd "$@"
+}
 """
-    for failure in ("init", "cd", "workspace", "none"):
-        parent = tmp_path / failure
-        parent.mkdir()
-        script = f"FAIL={failure}\n{fake_uv}\n{block}\nprintf 'cwd=%s\\n' \"$PWD\"\n"
-        result = subprocess.run(
-            ["/bin/sh", "-c", script], cwd=parent, capture_output=True, text=True, check=True
-        )
-        lines = result.stdout.splitlines()
-        in_studio = failure in ("workspace", "none")
-        assert lines[-1] == f"cwd={parent / 'my-studio' if in_studio else parent}"
-        assert any("check-instruments" in line for line in lines) == (failure == "none")
-        assert any("uv add" in line for line in lines) == in_studio
+    script = (
+        f"FAIL={shlex.quote(failure)}\n{fake_uv}\n{setup_chain()}\n"
+        'status=$?\nprintf \'status=%s\\ncwd=%s\\n\' "$status" "$PWD"\n'
+    )
+    result = subprocess.run(
+        ["/bin/sh", "-c", script], cwd=tmp_path, capture_output=True, text=True, check=True
+    )
+    lines = result.stdout.splitlines()
+    commands = [
+        "uv init --bare --python 3.13 my-studio",
+        "uv add git+https://github.com/isnbh0/poser",
+        "uv run init-workspace --setup surge",
+        "uv run check-instruments",
+        "uv run render-song songs/demo.yaml",
+        "uv run analyze-song songs/demo.yaml",
+    ]
+    stop = {
+        "init": 1,
+        "cd": 1,
+        "add": 2,
+        "init-workspace": 3,
+        "check-instruments": 4,
+        "render-song": 5,
+        "analyze-song": 6,
+        "none": 6,
+    }[failure]
+    assert lines[:-2] == commands[:stop]
+    assert lines[-2] == f"status={0 if failure == 'none' else 1}"
+    assert lines[-1] == f"cwd={tmp_path if failure in ('init', 'cd') else studio}"
+    assert {path: path.read_bytes() for path in before} == before
+
+
+def test_readme_analysis_example_matches_serialized_report() -> None:
+    demo = section(REPO_DIR / "README.md", "Surge demo")
+    (example,) = re.findall(r"```json\n(.*?)```", demo, re.DOTALL)
+    documented = json.loads(example)
+    bands = dict.fromkeys(BANDS, -30.0)
+    node = NodeReport(
+        name="lead",
+        status=AnalysisStatus.ANALYZED,
+        node_key="0" * 64,
+        sound_key="1" * 64,
+        kind="track",
+        upstream=(),
+        peak_dbfs=-6.0,
+        integrated_lufs=-14.0,
+        clipped_samples=0,
+        bands_db=bands,
+        bar_dbfs=(-12.0,),
+        spectrogram="lead.png",
+    )
+    mix = MixReport(
+        path="mix.wav",
+        peak_dbfs=-6.0,
+        integrated_lufs=-14.0,
+        clipped_samples=0,
+        bands_db=bands,
+        bar_dbfs=(-12.0,),
+        spectrogram="mix.png",
+        defects=(),
+    )
+    serialized = report_to_data(Report("example", 1, "2" * 64, (node,), mix))
+    assert isinstance(serialized, dict)
+    assert isinstance(documented, dict)
+    assert "nodes" in documented
+    assert "tracks" not in documented
+    assert set(documented) <= set(serialized)
+    serialized_nodes = serialized["nodes"]
+    assert isinstance(serialized_nodes, list)
+    serialized_node = serialized_nodes[0]
+    assert isinstance(serialized_node, dict)
+    assert isinstance(documented["nodes"], list)
+    assert documented["nodes"]
+    for documented_node in documented["nodes"]:
+        assert isinstance(documented_node, dict)
+        assert set(documented_node) <= set(serialized_node)
+        assert documented_node["status"] in {status.value for status in AnalysisStatus}
+    serialized_mix = serialized["mix"]
+    assert isinstance(serialized_mix, dict)
+    assert isinstance(documented["mix"], dict)
+    assert set(documented["mix"]) <= set(serialized_mix)
+
+
+def test_readme_reference_scope_and_repeatability() -> None:
+    studio = section(REPO_DIR / "README.md", "Create your studio").lower()
+    for phrase in ("free", "surge xt", "macos", "optional", "first song"):
+        assert phrase in studio
+    commands = section(REPO_DIR / "README.md", "Commands").lower()
+    check = re.search(r"check-instruments.*?(?=\n- |\Z)", commands, re.DOTALL)
+    assert check is not None
+    for phrase in ("repeatab", "informational", "no"):
+        assert phrase in check[0]
+
+
+def test_setup_optional_composition_and_honest_handoff() -> None:
+    setup = REPO_DIR / "docs/setup.md"
+    verify = section(setup, "Create and verify").lower()
+    verify = " ".join(verify.split())
+    for phrase in (
+        "status and exit code determine failure",
+        "exact sample-value equality",
+        "with no tolerance, not perceptual quality",
+        "a `pass` with `repeatable no` (json `repeatable: false`) is valid",
+        "clipping is informational in instrument checking",
+        "starting a player is not evidence you heard the result",
+        "lack of audition does not invalidate technical setup verification",
+    ):
+        assert phrase in verify
+    compose = section(setup, "Compose your first song (optional)").lower()
+    for phrase in (
+        "agents.md",
+        "poser.md",
+        "uv run list-sounds",
+        "uv run render-song",
+        "uv run analyze-song",
+        "--json",
+        "source",
+        "wav",
+        "report",
+        "spectrogram",
+        "unchanged",
+        "latest",
+        "song_sha256",
+        "not auditioned",
+    ):
+        assert phrase in compose
+    bootstrap = (REPO_DIR / "docs/bootstrap.md").read_text().lower()
+    (prompt,) = re.findall(r"```text\n(.*?)```", bootstrap, re.DOTALL)
+    for phrase in ("optional", "composition", "setup.md", "cannot listen", "source/mix"):
+        assert phrase in prompt
 
 
 def test_scsynth_readme_config_supplies_engine_path(tmp_path: Path) -> None:
