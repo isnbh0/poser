@@ -15,7 +15,7 @@ from poser.adapters.song_formats import SONG_FORMATS
 from poser.compose import read_config
 from poser.core import analysis, music, report, song
 from poser.core.audio import NUM_CHANNELS, SAMPLE_RATE, TAIL_S
-from poser.core.graph import Graph, Node, Wire
+from poser.core.graph import Graph
 from poser.core.guide import FIRST_INSTRUMENT_PLACEHOLDER
 from poser.core.loading import load_song
 from poser.core.ports import ResolvedSound
@@ -82,8 +82,8 @@ def first_column(heading: str) -> list[str]:
     return names
 
 
-def python_songs(tmp_path: Path) -> list[Song]:
-    """The guide's example scripts, which return Songs; direct wiring stays prose-only here."""
+def python_examples(tmp_path: Path) -> list[Song | Graph]:
+    """Load the guide's example scripts through the public song frontend."""
     songs = []
     first = read_config(SURGE_DIR / "poser.toml").instruments[0].name
     for index, body in enumerate(blocks("python")):
@@ -91,9 +91,13 @@ def python_songs(tmp_path: Path) -> list[Song]:
         path.parent.mkdir()
         path.write_text(body.replace(FIRST_INSTRUMENT_PLACEHOLDER, f'"{first}"'))
         song = load_song(path, SONG_FORMATS)
-        assert isinstance(song, Song)
+        assert isinstance(song, Song | Graph)
         songs.append(song)
     return songs
+
+
+def python_songs(tmp_path: Path) -> list[Song]:
+    return [example for example in python_examples(tmp_path) if isinstance(example, Song)]
 
 
 def test_core_audio_format_and_fixed_tail_are_documented() -> None:
@@ -105,20 +109,19 @@ def test_core_audio_format_and_fixed_tail_are_documented() -> None:
 
 
 def test_python_examples_load(tmp_path: Path) -> None:
-    assert python_songs(tmp_path)
+    assert python_examples(tmp_path)
 
 
-def test_dry_wet_branch_has_two_mix_leaves() -> None:
-    graph = Graph(
-        bpm=100,
-        nodes=(
-            Node("lead", "track", sound="surge", notes=music.notes([60], 0, 1, 100)),
-            Node("wet", "effect", effect="reverb"),
-            Node("dry", "effect", effect="sum"),
-        ),
-        wires=(Wire("lead", "wet", "audio"), Wire("lead", "dry", "audio")),
-    )
-    assert {node.name for node in analysis._leaves(graph)} == {"wet", "dry"}
+def test_dry_wet_branch_has_two_mix_leaves(tmp_path: Path) -> None:
+    (graph,) = [example for example in python_examples(tmp_path) if isinstance(example, Graph)]
+    assert {node.name: node.gain_db for node in analysis._leaves(graph)} == {
+        "wet": -6,
+        "dry": -3,
+    }
+    assert {(wire.from_name, wire.to_name): wire.gain_db for wire in graph.wires} == {
+        ("lead", "wet"): -12,
+        ("lead", "dry"): 0,
+    }
 
 
 def test_yaml_examples_parse() -> None:
@@ -243,6 +246,8 @@ def test_music_helpers_are_listed() -> None:
     listed = re.findall(r"^- `(\w+)` — ", GUIDE, re.MULTILINE)
     assert sorted(listed) == sorted(MUSIC_HELPERS)
     assert all(callable(getattr(music, name, None)) for name in listed)
+    assert all(callable(getattr(poser, name, None)) for name in listed)
+    assert not {"MODES", "CHORDS"} & backticked()
 
 
 def test_composer_api_exports() -> None:

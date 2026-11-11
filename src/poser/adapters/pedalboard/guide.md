@@ -34,8 +34,9 @@ track. Changing `parameters` re-renders that node and everything downstream of i
 Two builtins belong to poser, not to Pedalboard, and render headlessly with no vendor plugin:
 
 - `builtin = "sum"` is a passthrough summer: it changes nothing, so a node wired to it exists to
-  carry its feeds. Send tracks into it with wires at `gain_db: 0` and the bus fades the group at
-  the node's own `gain`.
+  carry its feeds. Send tracks into it with wires at `gain_db=0`. When the bus is a leaf, its
+  node's `gain_db` fades the group in the mix. If it feeds another node, use the outgoing wire's
+  `gain_db` or an explicit `Gain` effect upstream to scale that signal, not the bus's mix fader.
 - `builtin = "duck"` is a sidechain duck: the node's output is pulled down while a `control`
   wire's signal is loud. Its `parameters` are `attack_ms`,
   `release_ms`, and `amount_db` (defaults 10, 150, and 6): the follower rises to a louder control

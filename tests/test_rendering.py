@@ -762,11 +762,11 @@ def test_a_bus_is_a_leaf_whose_sends_scale_and_sum_into_the_mix(tmp_path: Path) 
     setup = Setup(tmp_path, effects=(FakeEffect("sum", identity="sum", amount=1.0),))
     dry = 0.2  # The pad sound's amplitude.
 
-    def bus_graph(hat_send_db: float) -> Graph:
+    def bus_graph(hat_send_db: float, hat_gain_db: float = 0.0) -> Graph:
         nodes = (
             Node("kick", "track", sound="fake:pad", notes=NOTE),
             Node("snare", "track", sound="fake:pad", notes=NOTE),
-            Node("hat", "track", sound="fake:pad", notes=NOTE),
+            Node("hat", "track", sound="fake:pad", notes=NOTE, gain_db=hat_gain_db),
             Node("drums", "effect", effect="sum", gain_db=-6.0),
         )
         wires = (
@@ -788,6 +788,13 @@ def test_a_bus_is_a_leaf_whose_sends_scale_and_sum_into_the_mix(tmp_path: Path) 
     mix = setup.audio_files.read(setup.store.mix_path(), FRAMES)
     # The mix sums the bus, the only leaf, at the bus's gain_db, and nothing dry.
     assert np.allclose(mix.samples, dry * 3 * 10 ** (-6 / 20))
+
+    # A non-leaf node's mix fader neither scales its send nor invalidates downstream stems.
+    faded = bus_graph(0.0, hat_gain_db=-12.0)
+    assert all(result.cached for result in setup.render(faded))
+    assert setup.analyze(faded).mix is not None
+    faded_mix = setup.audio_files.read(setup.store.mix_path(), FRAMES)
+    assert np.allclose(faded_mix.samples, mix.samples)
 
     # A send at -12 dB instead of 0 dB is in the downstream key: the bus re-renders, the rest not.
     quiet = by_name(setup.render(bus_graph(-12.0)))

@@ -16,6 +16,7 @@ from poser.cli import init_workspace
 from poser.cli.guide import main, workspace_guide
 from poser.compose import Composition, load, parse_config
 from poser.core.cache import Stamp
+from poser.core.graph import Graph
 from poser.core.guide import GENERATED, GuideBlock, compose_guide, observed_advice
 from poser.core.loading import load_song
 from poser.core.names import NodeName, SongId
@@ -121,8 +122,9 @@ def test_examples_load_in_both_modes(tmp_path: Path, enabled: bool) -> None:
         path = tmp_path / f"example{i}.py"
         path.write_text(body)
         song = load_song(path, SONG_FORMATS)
-        assert isinstance(song, Song)
-        assert song.tracks[0].sound == "synth"
+        assert isinstance(song, Song | Graph)
+        sources = song.tracks if isinstance(song, Song) else song.nodes
+        assert sources[0].sound == "synth"
 
 
 def test_guidance_toggle_preserves_rendered_bytes_keys_and_cache(

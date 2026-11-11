@@ -57,9 +57,9 @@ the chain's end.
 
 Music helpers, from `poser`; their docstrings give the parameters:
 - `pitch` — the MIDI pitch of a note name such as `C4`, `F#3`, or `Bb2`.
-- `scale` — one octave of a mode (`MODES`, such as major, minor, dorian) from a root.
+- `scale` — one octave of a mode (such as major, minor, dorian) from a root.
 - `degree` — a scale's nth note from 0, continuing into other octaves.
-- `chord` — a chord's pitches (`CHORDS`, such as maj, min7, sus4), optionally inverted.
+- `chord` — a chord's pitches (such as maj, min7, sus4), optionally inverted.
 - `notes` — notes from pitches, together as a chord or `step` beats apart as a line.
 - `swing` — notes with every off-beat moved later, for a swung feel.
 - `humanize` — notes with seeded, repeatable velocity and timing variation.
@@ -94,7 +94,7 @@ Exit codes, for both `render-song` and `analyze-song`:
 
 ## Reading the analysis
 
-`uv run analyze-song <song> --json` mixes the stems with each node's `gain` and prints
+`uv run analyze-song <song> --json` mixes leaf stems with each leaf node's `gain_db` and prints
 the report, which names the files it wrote: the mix, and a spectrogram per node and for the mix.
 Every analysis keeps a numbered record, even a failed one, holding the song as analyzed and that
 run's report and images. Report fields whose meaning is not obvious from their names:
@@ -103,9 +103,9 @@ run's report and images. Report fields whose meaning is not obvious from their n
 |---|---|
 | `run` | This analysis's record number |
 | `song_sha256` | Digest of the record writer's serialized loaded song, not a raw editable source-file hash |
-| `node_key` | Digest of the node's render inputs: everything but `gain`, including the song's length, the sound or recipe it resolved to, and the keys of the stems fed into it |
+| `node_key` | Digest of the node's render inputs: everything but the node's `gain_db`, including the song's length, the sound or recipe it resolved to, and the keys of the stems fed into it |
 | `sound_key` | Digest of the sound or recipe itself; it changes when a preset, saved sound file, or effect parameters change |
-| `gain_db` | The node's `gain` |
+| `gain_db` | The node's terminal mix fader, in decibels |
 | `peak_dbfs` | Highest sample level, in dB relative to full scale |
 | `integrated_lufs` | Loudness over the whole song |
 | `bands_db` | Level in each frequency band, relative and uncalibrated |
@@ -114,7 +114,8 @@ run's report and images. Report fields whose meaning is not obvious from their n
 | `sections` | Extra analysis from configured report sections, by name; each has a `version` and either `data` with its own `defects`, or an `error` |
 
 Node measurements are of that node's own output: the sound as played, or the effect's output
-before `gain`; mix measurements are after it. Band levels are relative and uncalibrated, not absolute targets.
+before its `gain_db`; mix measurements include leaf faders. Band levels are relative and
+uncalibrated, not absolute targets.
 
 The bands are `sub` 20–60 Hz, `bass` 60–250 Hz, `low_mid` 250–500 Hz, `mid` 500–2000 Hz,
 `high_mid` 2000–6000 Hz, and `high` 6000–20000 Hz.
@@ -154,12 +155,37 @@ An effect node names a recipe from `poser.toml`; a track node is a source and ta
 A node may feed many nodes. A wire carries audio, scaled by `gain_db`, or `control`, at most one
 per node and only into a recipe that documents a control input, such as a sidechain duck.
 
-The mix sums leaf nodes at their `gain_db`. A bus is an effect fed by sends scaled by wire
-`gain_db`, fading its group at the bus's `gain_db`.
-Routing a track's output into an effect removes the track's dry sound from the mix unless a dry
-branch is authored. For example, wire the track to both a wet effect node and a passthrough
-`sum` effect node (configured in `poser.toml` with `builtin = "sum"`). Leave both nodes without
-outgoing wires; the mix includes both their outputs. The mix itself is not a wire target.
+The mix sums only leaf nodes (nodes without outgoing wires), applying each leaf's `gain_db`.
+A node's `gain_db` is a terminal mix fader: it does not scale outgoing audio. A bus feeding
+another node therefore needs wire `gain_db` to change that send's level, or an upstream gain
+processing effect to change the signal itself. Wire gain changes render inputs; node fader
+changes reuse stems. The mix itself is not a wire target.
+
+Routing a track into an effect removes its dry sound from the mix unless a dry branch is
+authored. This example assumes recipes named `reverb` and `sum` in `poser.toml`, with `sum`
+configured as a passthrough by the selected adapter:
+
+```python
+from poser import Graph, Node, Wire, notes
+
+
+def build() -> Graph:
+    return Graph(
+        bpm=100,
+        nodes=(
+            Node("lead", "track", sound="{first_instrument}", notes=notes([60], 0, 1, 100)),
+            Node("wet", "effect", effect="reverb", gain_db=-6),
+            Node("dry", "effect", effect="sum", gain_db=-3),
+        ),
+        wires=(
+            Wire("lead", "wet", "audio", gain_db=-12),
+            Wire("lead", "dry", "audio"),
+        ),
+    )
+```
+
+Only `wet` and `dry` enter the mix. The wet recipe receives the lead at -12 dB; its output
+enters the mix at -6 dB. The dry branch receives the unscaled lead and enters at -3 dB.
 
 ## Feedback
 

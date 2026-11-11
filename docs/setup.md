@@ -39,10 +39,10 @@ missing locking feature; do not discard an existing lockfile. The initializer
 refuses to overwrite its owned output files; it merges required entries into an existing
 `.gitignore`.
 
-The setup copies `poser.toml` and `songs/demo.yaml` into your studio. Edit these for your own
-instruments and songs. Put studio-specific agent instructions in `AGENTS.md`; `CLAUDE.md` points
-to those instructions. `POSER.md` is generated from poser, the current configuration, and its
-adapters. After changing `poser.toml` or other guide inputs, run `uv run update-guide` from the
+The setup copies `poser.toml` and `songs/demo.yaml` into your studio. Edit `poser.toml` for your
+instruments and create new files for your songs; preserve `songs/demo.yaml` as the smoke-test demo.
+Put studio-specific agent instructions in `AGENTS.md`; `CLAUDE.md` points to those instructions.
+`POSER.md` is generated from poser, the current configuration, and its adapters. After changing `poser.toml` or other guide inputs, run `uv run update-guide` from the
 studio; use `uv run update-guide --check` to check whether the guide is current. Your `AGENTS.md`
 edits remain yours.
 
