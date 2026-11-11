@@ -279,6 +279,15 @@ class FileRenderStore:
     def guide(self) -> str:
         return GUIDE.format(stem=self._stem_suffix)
 
+    def protected_roots(self) -> tuple[Path, ...]:
+        """Declare confinement, refusing existing links that escape the store."""
+        root = self._renders_dir.resolve()
+        if root.exists():
+            for path in root.rglob("*"):
+                if path.is_symlink() and not path.resolve().is_relative_to(root):
+                    raise ValueError(f"render store symlink escapes its protected root: {path}")
+        return (root,)
+
     def song(self, song_id: SongId) -> FileSongStore:
         parts = SongId(song_id).split("/")
         if parts[0].startswith("."):

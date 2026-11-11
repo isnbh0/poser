@@ -37,7 +37,7 @@ Two builtins belong to poser, not to Pedalboard, and render headlessly with no v
   carry its feeds. Send tracks into it with wires at `gain_db: 0` and the bus fades the group at
   the node's own `gain`.
 - `builtin = "duck"` is a sidechain duck: the node's output is pulled down while a `control`
-  wire's signal is loud, so a kick can steer a pad. Its `parameters` are `attack_ms`,
+  wire's signal is loud. Its `parameters` are `attack_ms`,
   `release_ms`, and `amount_db` (defaults 10, 150, and 6): the follower rises to a louder control
   level over `attack_ms`, falls from a quieter one over `release_ms`, and a full-scale control
   level pulls the gain down by exactly `amount_db`. With no control wire it passes its audio

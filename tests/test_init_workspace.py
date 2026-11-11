@@ -11,7 +11,7 @@ from poser.adapters.song_formats import SONG_FORMATS
 from poser.cli import guide, init_workspace, sounds
 from poser.cli.workspace import Workspace, find_workspace
 from poser.compose import load
-from poser.core.guide import GENERATED, compose_guide
+from poser.core.guide import GENERATED
 from poser.core.loading import load_song
 from poser.core.ports import ConfigError
 from poser.core.song import Song, SongError
@@ -40,6 +40,7 @@ def snapshot(root: Path) -> dict[str, tuple[str, bytes]]:
             else path.read_bytes(),
         )
         for path in root.rglob("*")
+        if ".poser-init" not in path.relative_to(root).parts
     }
 
 
@@ -65,14 +66,13 @@ def test_success_writes_current_guide_and_loadable_demo(
     assert song.tracks
     assert {str(track.sound) for track in song.tracks} == {"surge"}
     composition = load(target / "poser.toml", target / "sounds", target / "renders")
-    core = files("poser").joinpath("scaffold", "guide.md").read_text(encoding="utf-8")
     instructions = (target / "AGENTS.md").read_text()
     assert instructions == files("poser").joinpath("scaffold", "agents.md").read_text()
     assert "[POSER.md](POSER.md)" in instructions
     assert not instructions.startswith(GENERATED)
     assert (target / "CLAUDE.md").read_text() == "@AGENTS.md\n"
     text = (target / "POSER.md").read_text()
-    assert text == compose_guide(core, composition.instrument_notes(), composition.guide_parts())
+    assert text == guide.workspace_guide(composition)
     assert text.startswith(GENERATED + "\n")
     assert guide.main(["--config", str(target / "poser.toml"), "--check"]) == 0
     assert sounds.list_main(["--config", str(target / "poser.toml")]) == 0
@@ -180,7 +180,7 @@ def test_missing_plugin_diagnostic_links_to_recovery(
     diagnostic = capsys.readouterr().err
     assert surge.DOC_URL in diagnostic
     assert "--plugin-path" in diagnostic
-    assert not target.exists()
+    assert snapshot(target) == {}
 
 
 def test_bad_overrides_do_not_mutate_existing_project(
@@ -205,7 +205,7 @@ def test_regular_file_is_not_a_vst_bundle(tmp_path: Path) -> None:
     plugin.write_text("not a bundle")
     target = tmp_path / "new"
     assert init_workspace.main(args(target, plugin)) == 2
-    assert not target.exists()
+    assert snapshot(target) == {}
 
 
 def test_merges_existing_ignore(tmp_path: Path, plugin: Path) -> None:
@@ -269,6 +269,26 @@ def test_composition_failure_does_not_write(
     monkeypatch.setattr(init_workspace, "workspace_guide", fail)
     assert init_workspace.main(args(target, plugin)) == 2
     assert snapshot(target) == before
+
+
+@pytest.mark.parametrize("advice", ["on", "off"])
+def test_persists_advice(tmp_path: Path, plugin: Path, advice: str) -> None:
+    target = tmp_path / "studio"
+    assert init_workspace.main([*args(target, plugin), "--advice", advice]) == 0
+    config = tomllib.loads((target / "poser.toml").read_text())
+    assert config["guidance"]["advice"] is (advice == "on")
+    assert guide.main(["--config", str(target / "poser.toml"), "--check"]) == 0
+
+
+def test_hardlinked_ignore_refused(tmp_path: Path, plugin: Path) -> None:
+    target = tmp_path / "studio"
+    target.mkdir()
+    original = tmp_path / "original"
+    original.write_bytes(b"owner")
+    (target / ".gitignore").hardlink_to(original)
+    assert init_workspace.main(args(target, plugin)) == 2
+    assert original.read_bytes() == b"owner"
+    assert (target / ".gitignore").stat().st_ino == original.stat().st_ino
 
 
 def test_guide_preparation_does_not_spawn_processes(

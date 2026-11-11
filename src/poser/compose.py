@@ -29,13 +29,15 @@ from typing import cast
 
 from poser.adapters.loading import load_object
 from poser.core.analysis import AnalysisTools
-from poser.core.guide import InstrumentNote
+from poser.core.guide import GuideBlock, InstrumentNote
 from poser.core.jsonvalue import JsonValue, is_json_value
 from poser.core.names import Identifier, Suffix
 from poser.core.ports import (
     AdapterContext,
+    AdviceProvider,
     AudioFiles,
     ConfigError,
+    DeliveryWriter,
     Effect,
     Guided,
     Instrument,
@@ -46,7 +48,18 @@ from poser.core.ports import (
     ReportSection,
     SongFormat,
     Visualizer,
+    WorkspaceInitializer,
 )
+
+
+def workspace_initializer(directory: Path) -> WorkspaceInitializer:
+    """Build the filesystem transaction owner without performing I/O."""
+    factory = cast(
+        "Callable[[Path], WorkspaceInitializer]",
+        load_object("poser.adapters.workspace_init:create"),
+    )
+    return factory(directory)
+
 
 INSTRUMENT = "instrument"
 EFFECT = "effect"
@@ -86,7 +99,7 @@ DEFAULTS: Mapping[str, str | tuple[str, ...]] = MappingProxyType(
 )
 # List keys that cannot be empty: a workspace with no song format can load no song.
 NON_EMPTY_LISTS = frozenset({"song_formats"})
-TOP_LEVEL_KEYS = frozenset({"instruments", "effects", "adapters"})
+TOP_LEVEL_KEYS = frozenset({"instruments", "effects", "adapters", "guidance"})
 ADAPTER_KEY = "adapter"  # An instrument table's spelling of `use`.
 GUIDE_KEY = "guide"  # An instrument table's note for the guide; compose's, not the adapter's.
 USE_KEY = "use"
@@ -123,12 +136,18 @@ class EffectSpec:
 
 
 @dataclass(frozen=True)
+class GuidanceConfig:
+    advice: bool = True
+
+
+@dataclass(frozen=True)
 class WorkspaceConfig:
     path: Path
     instruments: tuple[InstrumentSpec, ...]
     effects: tuple[EffectSpec, ...]
     # Every `[adapters]` key, with defaults filled in; list keys hold tuples.
     adapters: Mapping[str, AdapterSpec | tuple[AdapterSpec, ...]]
+    guidance: GuidanceConfig = field(default_factory=GuidanceConfig)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "adapters", MappingProxyType(dict(self.adapters)))
@@ -198,6 +217,10 @@ def _recipes(
         if not isinstance(adapter, str):
             raise ConfigError(f"{path}: {owner}.{ADAPTER_KEY}: must be a string")
         _check_use(path, f"{owner}.{ADAPTER_KEY}", key, adapter)
+        if guides and "advice" in body:
+            raise ConfigError(
+                f"{path}: {owner}.advice: reserved; optional advice belongs in adapter package data"
+            )
         guide = body.get(GUIDE_KEY)
         if guides and GUIDE_KEY in body and not (isinstance(guide, str) and guide.strip()):
             raise ConfigError(f"{path}: {owner}.{GUIDE_KEY}: must be non-blank text")
@@ -248,6 +271,19 @@ def _adapters(path: Path, value: object) -> dict[str, AdapterSpec | tuple[Adapte
     return adapters
 
 
+def _guidance(path: Path, value: object) -> GuidanceConfig:
+    table = _table(value)
+    if table is None:
+        raise ConfigError(f"{path}: guidance: must be a table")
+    for key in table:
+        if key != "advice":
+            raise ConfigError(f"{path}: guidance.{key}: unknown key")
+    advice = table.get("advice", True)
+    if not isinstance(advice, bool):
+        raise ConfigError(f"{path}: guidance.advice: must be a boolean")
+    return GuidanceConfig(advice)
+
+
 def read_config(path: Path) -> WorkspaceConfig:
     """Read and check a workspace config's structure, importing no adapter.
 
@@ -269,14 +305,17 @@ def parse_config(text: str, path: Path) -> WorkspaceConfig:
     for key in data:
         if key not in TOP_LEVEL_KEYS:
             raise ConfigError(
-                f"{path}: {key}: unknown key; use `instruments`, `effects`, and `adapters`"
+                f"{path}: {key}: unknown key; "
+                "use `instruments`, `effects`, `adapters`, and `guidance`"
             )
     if "instruments" not in data:
         raise ConfigError(f"{path}: instruments: missing; name at least one instrument")
     instruments = _instruments(path, data["instruments"])
     effects = _effects(path, data.get("effects", {}))
     adapters = _adapters(path, data.get("adapters", {}))
-    return WorkspaceConfig(path, instruments, effects, adapters)
+    return WorkspaceConfig(
+        path, instruments, effects, adapters, _guidance(path, data.get("guidance", {}))
+    )
 
 
 # Building adapters
@@ -532,7 +571,11 @@ class Composition:
         )
 
     def guide_parts(self) -> tuple[str, ...]:
-        """Build every adapter and return each guided one's guide, once each, in guide order."""
+        """Legacy required-reference parts; optional advice is never included."""
+        return tuple(block.text for block in self.guide_blocks() if not block.advice)
+
+    def guide_blocks(self) -> tuple[GuideBlock, ...]:
+        """Collect explicitly classified package-only adapter content in guide order."""
         adapters: list[tuple[str, object]] = [
             (f"instruments.{name}", instrument) for name, instrument in self.instruments().items()
         ]
@@ -547,16 +590,32 @@ class Composition:
             ("adapters.visualizer", self.visualizer()),
         ]
         adapters += [(f"adapters.sections[{i}]", s) for i, s in enumerate(self.sections())]
-        parts: list[str] = []
+        parts: list[GuideBlock] = []
         for where, adapter in adapters:
-            if not isinstance(adapter, Guided):
-                continue
-            guide = adapter.guide
-            if not (isinstance(guide, str) and guide.strip().startswith("## ")):
-                raise self._fail(where, "guide does not start with a '## ' heading")
-            if guide not in parts:
-                parts.append(guide)
+            for attribute, supported in (
+                ("guide", isinstance(adapter, Guided)),
+                ("advice", isinstance(adapter, AdviceProvider)),
+            ):
+                if not supported:
+                    continue
+                text = getattr(adapter, attribute)
+                if not (isinstance(text, str) and text.strip().startswith("## ")):
+                    raise self._fail(where, f"{attribute} does not start with a '## ' heading")
+                block = GuideBlock(text, advice=attribute == "advice")
+                if block not in parts:
+                    parts.append(block)
         return tuple(parts)
+
+
+def delivery_writer() -> DeliveryWriter:
+    """Build the default delivery publisher without performing filesystem work."""
+    factory = load_object("poser.adapters.delivery:create")
+    if not callable(factory):
+        raise ConfigError("delivery writer factory is not callable")
+    writer = factory()
+    if not isinstance(writer, DeliveryWriter):
+        raise ConfigError("delivery writer does not implement DeliveryWriter")
+    return writer
 
 
 def load(path: Path, sounds_dir: Path, renders_dir: Path) -> Composition:

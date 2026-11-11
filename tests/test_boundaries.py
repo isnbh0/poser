@@ -16,18 +16,24 @@ ADAPTERS = POSER / "adapters"
 
 PORTS = "poser.core.ports"
 USE_CASES = (
+    "poser.core.session",
     "poser.core.loading",
     "poser.core.rendering",
     "poser.core.checking",
     "poser.core.capturing",
     "poser.core.analysis",
+    "poser.core.delivery",
 )
 DYNAMIC_IMPORT_LOADERS = {"poser.adapters.loading", "poser.adapters.isolation"}
 ADAPTER_LIBRARIES = ("pedalboard", "mido", "yaml", "matplotlib", "scipy", "pyloudnorm")
 CLI = POSER / "cli"
 COMPOSE = POSER / "compose.py"
 PLUGIN_LOADERS = {"poser/adapters/pedalboard/worker.py"}
-FCNTL_USERS = {"poser/adapters/filestore.py", "poser/adapters/pedalboard/instrument.py"}
+FCNTL_USERS = {
+    "poser/adapters/filestore.py",
+    "poser/adapters/pedalboard/instrument.py",
+    "poser/adapters/workspace_init.py",
+}
 LIBRARY_HOMES = {
     "pyloudnorm": {"poser/adapters/measuring.py"},
     "scipy": {"poser/adapters/measuring.py"},
@@ -216,8 +222,12 @@ def test_package_inits_hold_no_imports() -> None:
     for target in api_edges:
         assert target.startswith("poser.core."), target
         assert layer(target) == "model", target
+    # The packaged showcase is editable user song code, not a library implementation.
+    showcase = POSER / "reference_setups" / "surge" / "showcase.py"
+    assert edges(showcase) == {"poser"}
     for path in source_files():
-        assert "poser" not in edges(path), f"{module_name(path)} imports poser itself"
+        if path != showcase:
+            assert "poser" not in edges(path), f"{module_name(path)} imports poser itself"
 
 
 def test_dynamic_imports_only_in_loaders() -> None:

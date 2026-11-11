@@ -16,7 +16,7 @@ from poser.cli.common import (
 )
 from poser.cli.workspace import WorkspaceError, fill_path_options
 from poser.compose import Composition
-from poser.core.guide import GENERATED, compose_guide
+from poser.core.guide import GENERATED, GuideBlock, compose_guide
 from poser.core.ports import ConfigError
 
 GUIDE_NAME = "POSER.md"
@@ -30,7 +30,13 @@ def core_guide() -> str:
 
 def workspace_guide(composition: Composition) -> str:
     """Return the composed guide: the core guide, the instrument notes, then adapters' guides."""
-    return compose_guide(core_guide(), composition.instrument_notes(), composition.guide_parts())
+    advice = (files("poser") / "scaffold" / "advice.md").read_text(encoding="utf-8")
+    return compose_guide(
+        core_guide(),
+        composition.instrument_notes(),
+        (GuideBlock(advice, advice=True), *composition.guide_blocks()),
+        advice=composition.config.guidance.advice,
+    )
 
 
 def guide_path(config: Path) -> Path:

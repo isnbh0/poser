@@ -60,6 +60,7 @@ from poser.core.report import (
     report_to_data,
     silent_defects,
 )
+from poser.core.session import song_session
 from poser.core.song import Song, song_graph, song_last_beat
 
 
@@ -164,8 +165,7 @@ def analyze_song(
     files, the mixer, or the visualizer propagates after the lock is released.
     """
     require_stem_format(renders, audio_files)
-    store = renders.song(song_id)
-    with store.lock():
+    with song_session(renders, song_id) as store:
         return _analyze(
             song, song_name, store, instruments, effects, audio_files, record_writer, tools
         )

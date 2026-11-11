@@ -777,7 +777,8 @@ def test_update_guide_check_follows_poser_toml(
     assert "Surge XT patches are available" in guide_file.read_text()
     assert guide.main(["--check"]) == EXIT_ALL_PASS
     assert sorted(path.name for path in initialized.iterdir() if path.name.startswith(".")) == [
-        ".gitignore"
+        ".gitignore",
+        ".poser-init",
     ]
 
 
@@ -800,7 +801,7 @@ def test_update_guide_preserves_personal_files_and_handles_missing_reference(
     assert claude.read_bytes() == before[claude]
     assert b"personal patches" in reference.read_bytes()
     text = reference.read_text()
-    for phrase in ("intent and preferences", "not auditioned", "reported mix path"):
+    for phrase in ("owner requirements", "not auditioned", "uv run export-song"):
         assert phrase in text
     assert guide.main(["--check"]) == EXIT_ALL_PASS
     assert agents.read_bytes() == before[agents]

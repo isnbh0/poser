@@ -48,6 +48,10 @@ def list_main(argv: list[str] | None = None) -> int:
     parser.add_argument("--config", type=Path, help="workspace config (default: poser.toml)")
     parser.add_argument("--sounds-dir", type=Path, help="saved sound files")
     parser.add_argument("--json", action="store_true", help="print the list as JSON")
+    parser.add_argument(
+        "--instrument", action="append", help="exact instrument name (repeatable; default: all)"
+    )
+    parser.add_argument("--match", help="case-insensitive substring of sound ID or description")
     args = parser.parse_args(argv)
 
     try:
@@ -57,15 +61,31 @@ def list_main(argv: list[str] | None = None) -> int:
         fail(LIST_PROG, error)
         return EXIT_BAD_CONFIG
 
+    selected = set(args.instrument) if args.instrument else set(instruments)
+    unknown = selected.difference(instruments)
+    if unknown:
+        fail(LIST_PROG, f"unknown instrument(s): {', '.join(sorted(unknown))}")
+        return EXIT_BAD_CONFIG
+
     entries: list[SoundEntry] = []
     problems: list[str] = []
     notes: list[str] = []
     for name, instrument in instruments.items():
+        if name not in selected:
+            continue
         listing = instrument.sounds()
         entries += listing.entries
         problems += [f"{name}: {problem}" for problem in listing.problems]
         notes += [f"note: {name}: {note}" for note in listing.notes]
     problems += old_layout_problems(Path(args.sounds_dir))
+
+    if args.match is not None:
+        match = args.match.casefold()
+        entries = [
+            entry
+            for entry in entries
+            if match in str(entry.ref).casefold() or match in entry.description.casefold()
+        ]
 
     if args.json:
         data = [{"sound": str(entry.ref), "description": entry.description} for entry in entries]

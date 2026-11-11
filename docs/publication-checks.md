@@ -82,19 +82,18 @@ If patches are absent, the default-sound demo may pass while named-preset accept
 
 ## D. Audition and honest delivery
 
-Follow the shared guide's final-handoff procedure: preserve the editable source and verify it
-remains unchanged across a successful render followed by successful analysis. Inspect that
-analysis's report and reported mix path. Copy or deliver the matching source, report, and WAV
-together before another run replaces outputs; include Python source dependencies where needed.
-Unchanged source bytes do not establish reproducibility for external-state-dependent scripts.
-`song_sha256` hashes the record writer's serialized loaded song, not necessarily the source file;
-do not compare it to a raw source-file hash. A historical report can still point to mutable
-`latest` audio, so it alone cannot establish the matching audio artifact.
+Follow the shared guide's final-handoff procedure using
+`uv run export-song <song> --destination <new-directory>`, declaring local dependencies with
+repeatable `--include`. Require exit 0, retain the complete bundle, independently verify manifest
+artifact hashes, and move a copy to verify schema-owned report/manifest paths remain valid.
+Render again and verify the earlier bundle is unchanged. A failed export must not report an older
+bundle as its result. Opaque section payload paths are outside the portability guarantee.
 
-Deliver the source and WAV with report/spectrogram locations, analysis interpretation, and caveats.
-When attachments are unavailable, give accessible paths and disclose mutable `latest` locations.
-If analysis fails, report that failure; do not present a stale earlier WAV as the current successful
-song. Analysis success is not artistic approval or a mastering guarantee.
+Deliver the bundle's source and audio with report/spectrogram locations, interpretation, and
+caveats. For Surge the mix is WAV. Python external state and undeclared dependencies remain
+reproducibility limits; `song_sha256` is the serialized-song digest, not a raw source hash.
+Configuration/lockfile and guidance evidence do not prove the environment or actual model exposure.
+Analysis success is not artistic approval or a mastering guarantee.
 
 Have a listener audition the delivered version when possible; record who or what actually listened
 and the outcome. Neither launching playback nor inspecting a spectrogram counts as listening.
@@ -103,13 +102,29 @@ label the delivery **not auditioned**. Do not block a technically verified draft
 reason. Also exercise a setup-only scenario: declining composition must end with setup results,
 not unwanted creative questions or a forced song.
 
+## E. Advice-free generation and optional showcase
+
+Initialize a fresh off studio with `--advice off`, check its generated guide, and inventory the
+complete normal reading path according to [the ablation procedure](ablation.md). Exercise
+on → off → on regeneration without stale advice or changes to owner files. Record adapter guide
+identities and any unaudited legacy coaching. Verify advice selection does not alter rendering.
+Exercise both setup-only completion and an already-requested composition: the latter continues
+without asking for authorization to compose twice, subject to missing intent or permissions.
+
+The [optional showcase](showcase.md) is separate from the smoke test. Require discovered factory
+preset IDs, recorded Surge version, preserved packaged source, an accessible preview and export
+provenance. Do not copy it into off-mode initialization. Its audition acceptance requires an actual
+listener of that exact audio; a not-auditioned preview cannot pass that criterion.
+
 ## Verification record
 
 Create a release verification record with date, candidate and tested revisions, public documentation
 revision, macOS version/architecture, uv/Python/Surge versions, installation provenance, plugin
 location, and selected preset when relevant. Include commands and exit codes, retained artifact
 locations, listening status, and listener/outcome if auditioned. Redact personal information before
-publishing evidence. Use only `pass`, `fail`, `blocked`, or `not run`; each row needs evidence or a
+publishing evidence. Store candidate-specific records and artifact references under
+`docs/verification/`; identify a dirty working-tree candidate separately from its base commit.
+Use only `pass`, `fail`, `blocked`, or `not run`; each row needs evidence or a
 reason and a next action. The template below makes no successful claims.
 
 | Check | Status | Evidence / reason | Next action |
@@ -122,6 +137,10 @@ reason and a next action. The template below makes no successful claims.
 | D. Matching source/report/WAV delivery | not run | No handoff recorded | Preserve and identify matching artifacts |
 | D. Actual audition | not run | No listener recorded | Audition with permission or disclose limitation |
 | D. Setup-only scenario | not run | No scenario recorded | Verify declining composition is complete |
+| E. Already-requested composition | not run | No scenario recorded | Verify direct continuation |
+| E. Advice-free generation | not run | No context inventory | Check fresh off and regeneration |
+| E. Named-preset showcase and accessible preview | not run | No showcase bundle | Preserve source and preview provenance |
+| E. Showcase audition | not run | No listener recorded | Record actual listener of exact audio |
 
 ## Release decision
 

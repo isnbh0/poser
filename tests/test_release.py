@@ -37,7 +37,7 @@ def test_readme_commands_are_project_scripts() -> None:
     commands = re.findall(r"uv run ([\w-]+)", (REPO_DIR / "README.md").read_text())
 
     assert set(commands) == set(PROJECT["scripts"])
-    assert {"check-instruments", "update-guide"} <= set(commands)
+    assert {"check-instruments", "update-guide", "export-song"} <= set(commands)
 
 
 ONBOARDING = (
@@ -45,6 +45,8 @@ ONBOARDING = (
     REPO_DIR / "docs/setup.md",
     REPO_DIR / "docs/bootstrap.md",
     REPO_DIR / "docs/publication-checks.md",
+    REPO_DIR / "docs/ablation.md",
+    REPO_DIR / "docs/showcase.md",
     REPO_DIR / "src/poser/reference_setups/surge/README.md",
     REPO_DIR / "packages/poser-scsynth/README.md",
 )
@@ -254,7 +256,7 @@ def test_setup_optional_composition_and_honest_handoff() -> None:
         "lack of audition does not invalidate technical setup verification",
     ):
         assert phrase in verify
-    compose = section(setup, "Compose your first song (optional)").lower()
+    compose = " ".join(section(setup, "Compose your first song (optional)").lower().split())
     for phrase in (
         "agents.md",
         "poser.md",
@@ -266,15 +268,26 @@ def test_setup_optional_composition_and_honest_handoff() -> None:
         "wav",
         "report",
         "spectrogram",
-        "unchanged",
+        "uv run export-song",
+        "--destination",
+        "--include",
+        "one song lock",
         "latest",
         "song_sha256",
-        "not auditioned",
+        "not_auditioned",
     ):
         assert phrase in compose
+    assert "without asking for that permission again" in compose
     bootstrap = (REPO_DIR / "docs/bootstrap.md").read_text().lower()
     (prompt,) = re.findall(r"```text\n(.*?)```", bootstrap, re.DOTALL)
-    for phrase in ("optional", "composition", "setup.md", "cannot listen", "source/mix"):
+    for phrase in (
+        "optional",
+        "composition",
+        "setup.md",
+        "cannot listen",
+        "export-song",
+        "--include",
+    ):
         assert phrase in prompt
 
 
@@ -314,7 +327,7 @@ def test_packaged_reference_and_neutral_resources() -> None:
     for name in ("poser.toml", "demo.yaml", "README.md"):
         assert surge.joinpath(name).is_file(), name
     scaffold = files("poser").joinpath("scaffold")
-    for name in ("guide.md", "agents.md", "claude.md", "gitignore"):
+    for name in ("guide.md", "advice.md", "agents.md", "claude.md", "gitignore"):
         assert scaffold.joinpath(name).is_file(), name
     for name in ("poser.toml", "demo.yaml", "onboarding.txt"):
         assert not scaffold.joinpath(name).is_file(), name

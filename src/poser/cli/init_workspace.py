@@ -8,7 +8,7 @@ from typing import Never, override
 
 from poser.cli.guide import GUIDE_NAME, workspace_guide
 from poser.cli.workspace import CONFIG_NAME, Workspace
-from poser.compose import Composition, parse_config
+from poser.compose import Composition, parse_config, workspace_initializer
 from poser.core.ports import AdapterContext, ConfigError
 from poser.reference_setups.dispatch import SETUPS, prepare
 
@@ -43,9 +43,9 @@ def _preflight(directory: Path, targets: tuple[str, ...]) -> None:
             raise ConfigError(f"{path} exists")
 
 
-def _merged_ignore(path: Path) -> str | None:
-    exists = path.exists()
-    existing = path.read_text(encoding="utf-8") if exists else ""
+def _merged_ignore(original: bytes | None) -> str | None:
+    exists = original is not None
+    existing = original.decode("utf-8") if original is not None else ""
     present = set(existing.splitlines())
     missing = [line for line in _scaffold("gitignore").splitlines() if line not in present]
     if exists and not missing:
@@ -72,50 +72,51 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--setup", required=True, choices=SETUPS, help="reference setup (surge)")
     parser.add_argument("--plugin-path", type=Path, help="override the VST3 bundle path")
     parser.add_argument("--presets-path", type=Path, help="override the factory presets directory")
+    parser.add_argument("--advice", choices=("on", "off"), default="on")
     args = parser.parse_args(argv)
     directory = args.directory.absolute()
     workspace = Workspace(directory)
     try:
-        setup = prepare(args.setup, args.plugin_path, args.presets_path)
-        targets = (
-            "AGENTS.md",
-            GUIDE_NAME,
-            "CLAUDE.md",
-            CONFIG_NAME,
-            "songs/demo.yaml",
-            ".gitignore",
-        )
-        _preflight(directory, targets)
-        config = parse_config(setup.config, workspace.config)
-        context = AdapterContext(directory, workspace.sounds_dir, workspace.renders_dir)
-        guide = workspace_guide(Composition(config, context))
-        outputs = {
-            "AGENTS.md": _scaffold("agents.md"),
-            GUIDE_NAME: guide,
-            "CLAUDE.md": _scaffold("claude.md"),
-            CONFIG_NAME: setup.config,
-            "songs/demo.yaml": setup.demo,
-        }
-        ignore = _merged_ignore(directory / ".gitignore")
-        if ignore is not None:
-            outputs[".gitignore"] = ignore
+        initializer = workspace_initializer(directory)
+        with initializer.session():
+            setup = prepare(args.setup, args.plugin_path, args.presets_path)
+            targets = (
+                "AGENTS.md",
+                GUIDE_NAME,
+                "CLAUDE.md",
+                CONFIG_NAME,
+                "songs/demo.yaml",
+                ".gitignore",
+            )
+            _preflight(directory, targets)
+            config_text = (
+                setup.config + "\n[guidance]\nadvice = " + str(args.advice == "on").lower() + "\n"
+            )
+            config = parse_config(config_text, workspace.config)
+            context = AdapterContext(directory, workspace.sounds_dir, workspace.renders_dir)
+            guide = workspace_guide(Composition(config, context))
+            outputs = {
+                "AGENTS.md": _scaffold("agents.md"),
+                GUIDE_NAME: guide,
+                "CLAUDE.md": _scaffold("claude.md"),
+                CONFIG_NAME: config_text,
+                "songs/demo.yaml": setup.demo,
+            }
+            ignore_path = directory / ".gitignore"
+            original_ignore = ignore_path.read_bytes() if ignore_path.exists() else None
+            ignore = _merged_ignore(original_ignore)
+            if ignore is not None:
+                outputs[".gitignore"] = ignore
+            initializer.publish(
+                {name: text.encode("utf-8") for name, text in outputs.items()},
+                expected_ignore=original_ignore,
+            )
     except (ConfigError, OSError, UnicodeError) as error:
         print(f"init-workspace: {error}", file=sys.stderr)
         return 2
 
-    try:
-        for target, text in outputs.items():
-            path = directory / target
-            path.parent.mkdir(parents=True, exist_ok=True)
-            if target == ".gitignore" and path.exists():
-                path.write_text(text, encoding="utf-8")
-            else:
-                with path.open("x", encoding="utf-8") as output:
-                    output.write(text)
-            print(target)
-    except OSError as error:
-        print(f"init-workspace: cannot write workspace: {error}", file=sys.stderr)
-        return 2
+    for target in outputs:
+        print(target)
     print(f"Surge plugin: {setup.plugin}")
     print(
         f"Surge presets: {setup.presets}" if setup.presets else "Surge presets: not found; omitted"

@@ -102,26 +102,22 @@ def test_guide_is_short_and_claude_imports_studio_instructions() -> None:
 
 
 def test_composition_guidance_covers_intent_audition_and_honest_delivery() -> None:
-    composing = " ".join(GUIDE.split("## Composing here\n", 1)[1].split("## Songs", 1)[0].split())
+    composing = " ".join(
+        GUIDE.split("## Operational contract\n", 1)[1].split("## Songs", 1)[0].split()
+    )
     for phrase in (
-        "intent and preferences in `AGENTS.md`",
-        "consequential missing choices",
-        "delegated choices with stated provisional defaults",
-        "usable route and permission",
+        "owner requirements in `AGENTS.md`",
+        "Playback requires permission",
         "Starting a player is not listening",
         'disclose "not auditioned"',
-        "need not block a technically verified draft",
-        "source bytes stay unchanged",
-        "successful render followed by successful analysis",
-        "reported mix path",
-        "preserve source, report, and mix together before another run",
+        "uv run export-song <song> --destination <new-directory>",
+        "loads once, renders, analyzes",
+        "only on success",
         "local source dependencies",
-        "cannot reproduce external state",
+        "external state, undeclared imports, and plugin nondeterminism",
         "Never deliver an earlier mix as current after a failed attempt",
-        "files or accessible paths",
-        "report/image locations",
-        "listening limitations",
-        "disclose mutable output paths",
+        "hash manifest",
+        "actual audition is separate evidence",
         "historical report alone does not prove matching audio",
     ):
         assert phrase in composing

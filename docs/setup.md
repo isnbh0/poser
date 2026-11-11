@@ -46,6 +46,14 @@ adapters. After changing `poser.toml` or other guide inputs, run `uv run update-
 studio; use `uv run update-guide --check` to check whether the guide is current. Your `AGENTS.md`
 edits remain yours.
 
+Advice is optional and independent of instrument settings. For first-run advice-free generation,
+replace the initializer invocation above with `uv run init-workspace --setup surge --advice off`.
+The default is on. In an existing studio set `[guidance]` with `advice = false` in `poser.toml`
+(or `true` to restore advice), then run `uv run update-guide` and `uv run update-guide --check`.
+This changes generated documentation, not rendering or analysis thresholds. Owner instructions
+and custom instrument notes are not rewritten. Evaluation operators should use the separate
+[ablation procedure](ablation.md) before starting composing sessions.
+
 The check exercises instrument loading and note output. Status and exit code determine failure:
 exit 0 means all instruments pass, 1 means an instrument failed, and 2 means a configuration or
 workspace error. `repeatable` reports exact sample-value equality between two renders, with no
@@ -61,12 +69,16 @@ technical setup verification.
 
 ## Compose your first song (optional)
 
-After successful setup, offer to continue to a first song. Setup-only is a complete outcome;
+If composition was already requested, continue after successful setup without asking for that
+permission again. Otherwise offer to continue to a first song. Setup-only is a complete outcome;
 declining needs no creative questionnaire. Reuse preferences already provided. Ask only for
 consequential missing intent, such as mood, approximate length, or references; accept delegated
 choices and state provisional defaults.
 
-Read the studio's `AGENTS.md` and generated `POSER.md`, and run `uv run list-sounds`. Create a
+Read the studio's `AGENTS.md` and generated `POSER.md`, and run `uv run list-sounds`.
+For large listings use `uv run list-sounds --instrument surge --match pad --json`; instrument
+selection is exact and repeatable, and matching searches IDs/descriptions case-insensitively.
+A listing is not evidence of audition or musical suitability. Create a
 new song without overwriting the demo or the owner's work. In the commands below, replace
 `<song-path>` with that new source's path (YAML or Python); it is a placeholder, not a musical brief.
 Run from the studio:
@@ -84,23 +96,28 @@ Analysis success is not artistic approval or a mastering guarantee.
 
 ### Final handoff
 
-Preserve the editable song source and verify its bytes remain unchanged across a successful
-render followed by successful analysis. Inspect that analysis's report and its reported mix path;
-use that mix, not an assumed filename. For this reference setup the rendered mix is a WAV.
-Copy or deliver the unchanged source, that report, and that mix together before another run can
-replace the outputs. Include local source dependencies needed to reproduce a Python song;
-unchanged source bytes alone do not establish reproducibility for scripts using external state.
+For a poser-verified matching delivery, run:
 
-`song_sha256` identifies the record writer's serialized loaded song, not necessarily the editable
-source file; do not compare it with a raw source-file hash. Even a historical report's mix path
-can refer to mutable `latest` output, so retaining that report alone does not establish matching
-audio. Never hand off an earlier mix as the current successful result after a failed latest attempt.
+```bash
+uv run export-song <song-path> --destination deliveries/first-song
+```
 
-Deliver or identify the editable source and matching WAV, report and spectrogram locations,
-analysis result, a brief interpretation, and listening status (including “not auditioned” when
-applicable). If attachments are unavailable, give accessible paths and disclose which point to
-mutable `latest` output. Preserve the matching artifacts before any further run even when sharing
-paths instead of attachments.
+Use a new destination each time. Export loads the song once, renders and analyzes it under one
+song lock, and publishes only after success and input checks. It does not copy an old `latest`.
+Render/analyze remain useful for iteration; not every experiment or playback requires export.
+Add repeatable `--include <source-relative-file>` for declared local Python source dependencies.
+The bundle contains editable `source/`, `audio/`, `images/`, `report.json`, and `manifest.json`.
+Share that bundle, or accessible paths to it, with analysis interpretation and listening status.
+For Surge the mix is WAV; other adapters may use another format. Later renders do not replace
+this bundle. Failed export publishes no successful delivery; never substitute an earlier mix.
+
+The manifest records raw source/artifact hashes separately from `song_sha256` (the serialized
+loaded song digest), configuration/lockfile evidence, and guidance evidence. It always records
+`listening: "not_auditioned"`; actual listener evidence is separate. Export does not sandbox
+Python, discover undeclared imports/external state, copy private configuration or plugins, or
+promise deterministic audio. Opaque analysis section payloads are preserved, not made portable;
+only schema-owned artifact paths have the bundle portability guarantee. See the
+[export contract](../README.md#verified-delivery) for outcomes and evidence boundaries.
 
 ## Recover from a failure
 
@@ -108,7 +125,13 @@ If initialization reports a missing plugin or invalid path, locate or install Su
 its existing location as described in the [Surge guide](../src/poser/reference_setups/surge/README.md),
 and retry `uv run init-workspace --setup surge` with any needed overrides. Failed prerequisite
 checks create no studio template files, but the Python project and dependency created earlier
-remain. Resolve any reported existing-file conflicts rather than overwriting them.
+remain. Prerequisite or existing-file failures may also leave the recognized `.poser-init`
+namespace and its stable lock: initialization establishes them before checking prerequisites so
+recovery and retries always use the same lock inode. These are bookkeeping, not studio outputs.
+After interrupted publication, retry the same initializer: its retained `.poser-init`
+namespace permits recovery of its own unchanged outputs. Do not delete that namespace or its
+stable lock. If owner edits or ambiguous ownership prevent recovery, follow the named-path
+diagnostic without deleting the studio. Resolve existing-file conflicts rather than overwriting them.
 
 If initialization succeeds but `check-instruments` fails, keep the studio and read the diagnostic:
 real failures include load errors, crashes, timeouts, non-finite output, silence, or missing notes,

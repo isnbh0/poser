@@ -51,7 +51,10 @@ def test_failures_do_not_mutate_project(tmp_path: Path, monkeypatch: pytest.Monk
     ignore = tmp_path / ".gitignore"
     ignore.write_text("existing\n")
     assert main([str(tmp_path), "--setup", "surge"]) == 2
-    assert sorted(p.name for p in tmp_path.iterdir()) == [".gitignore"]
+    assert sorted(p.name for p in tmp_path.iterdir()) == [".gitignore", ".poser-init"]
+    namespace = tmp_path / ".poser-init"
+    assert sorted(p.name for p in namespace.iterdir()) == ["identity", "lock"]
+    lock_inode = (namespace / "lock").stat().st_ino
     assert ignore.read_text() == "existing\n"
     plugin = tmp_path / "plugin.vst3"
     plugin.mkdir()
@@ -59,6 +62,8 @@ def test_failures_do_not_mutate_project(tmp_path: Path, monkeypatch: pytest.Monk
     assert main([str(tmp_path), "--setup", "surge", "--plugin-path", str(plugin)]) == 2
     assert ignore.read_text() == "existing\n"
     assert (tmp_path / "AGENTS.md").read_text() == "owned"
+    assert (namespace / "lock").stat().st_ino == lock_inode
+    assert sorted(p.name for p in namespace.iterdir()) == ["identity", "lock"]
 
 
 def test_gitignore_symlink_refused(tmp_path: Path) -> None:
@@ -71,4 +76,8 @@ def test_gitignore_symlink_refused(tmp_path: Path) -> None:
     (project / ".gitignore").symlink_to(outside)
     assert main([str(project), "--setup", "surge", "--plugin-path", str(plugin)]) == 2
     assert outside.read_text() == "untouched"
-    assert sorted(p.name for p in project.iterdir()) == [".gitignore"]
+    assert sorted(p.name for p in project.iterdir()) == [".gitignore", ".poser-init"]
+    assert (project / ".gitignore").is_symlink()
+    assert (project / ".gitignore").resolve() == outside
+    namespace = project / ".poser-init"
+    assert sorted(p.name for p in namespace.iterdir()) == ["identity", "lock"]

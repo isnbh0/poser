@@ -1,25 +1,30 @@
 # Composing with poser
 
-## Composing here
+## Operational contract
 
-poser renders songs through configured instruments and measures the result. Compose here by looping:
-1. Reuse intent and preferences in `AGENTS.md`; ask only for consequential missing choices,
-   accepting delegated choices with stated provisional defaults. Keep the demo and owner's work.
-2. Write a new song in a format enabled by `poser.toml`'s `adapters.song_formats`.
-3. Render it: `uv run render-song <song>`; analyze it: `uv run analyze-song <song> --json`.
-4. Read the report, spectrograms, and history; revise against the brief and actual results.
-5. Invite the person to audition, or listen when a usable route and permission exist. Starting
-   a player is not listening. If unable to listen, disclose "not auditioned" and invite feedback;
-   this need not block a technically verified draft.
-6. For delivery, verify editable source bytes stay unchanged across a successful render followed
-   by successful analysis. Inspect that analysis's report and reported mix path; preserve source,
-   report, and mix together before another run replaces outputs. Include local source dependencies
-   for scripts; unchanged source alone cannot reproduce external state. Never deliver an earlier
-   mix as current after a failed attempt. Give files or accessible paths, report/image locations,
-   analysis results, brief interpretation, and listening limitations; disclose mutable output paths.
-   A historical report alone does not prove matching audio when its mix path is mutable.
+poser renders songs through configured instruments and measures the result. Creator intent and
+owner requirements in `AGENTS.md` remain authoritative with advice on or off. Preserve owner work.
+If composition was requested, continue after successful setup; ask only for missing consequential
+intent or permissions, not authorization to compose a second time.
+Playback requires permission. Starting a player is not listening; disclose "not auditioned"
+when no actual listening occurred. Analysis finds defects; it does not say a song is good.
+Never deliver an earlier mix as current after a failed attempt.
 When the script format is enabled, song scripts import `poser` directly, without a PEP 723
 header, in this project's environment.
+
+For a poser-verified matching delivery, use
+`uv run export-song <song> --destination <new-directory>`; render/analyze remain available for
+experiments. Export loads once, renders, analyzes, and publishes matching source, audio, report,
+images, and a hash manifest only on success. The destination must be unused and outside mutable
+stores. Repeat `--include <source-relative-file>` for declared local source dependencies.
+Export accepts `--config`, `--sounds-dir`, `--output-dir`, `--force`, and `--json`.
+Exit codes are 0 for publication, 1 for execution/analysis, changed inputs or I/O failure,
+2 for invalid arguments/configuration, and 3 for song contention.
+Hashes establish byte correspondence, not musical quality or complete Python reproducibility:
+external state, undeclared imports, and plugin nondeterminism remain outside that guarantee.
+The manifest records `listening: "not_auditioned"`; actual audition is separate evidence.
+Opaque report section payloads are preserved but their embedded paths are not verified portable.
+A historical report alone does not prove matching audio when its mix path is mutable.
 
 ## Songs
 
@@ -56,35 +61,12 @@ the chain's end.
 With the script format enabled, this short song shows the form rather than a finished piece:
 
 ```python
-from poser import ControlChange, Song, Track, chord, degree, humanize, notes, pitch, scale
+from poser import Song, Track, notes
 
 
 def build() -> Song:
-    key = scale(pitch("A4"), "minor")
-    line = notes([degree(key, i) for i in (0, 2, 4, 7, 6, 4, 2, 0)], 0, 0.5, 100, step=0.5)
-    lead = Track(
-        name="lead",
-        sound="{first_instrument}",
-        notes=humanize(line, seed=1, velocity=8),
-        gain=-2,
-        cc=(
-            ControlChange(beat=0, control=1, value=0, shape="linear"),
-            ControlChange(beat=4, control=1, value=127),
-        ),
-    )
-    bass = Track(
-        name="bass",
-        sound="{first_instrument}",
-        notes=notes([pitch("A2")], 0, 2, 100) + notes([pitch("F2")], 2, 2, 100),
-        gain=-5,
-    )
-    pad = Track(
-        name="pad",
-        sound="{first_instrument}",
-        notes=notes(chord(pitch("A3"), "min"), 0, 4, 70),
-        gain=-8,
-    )
-    return Song(bpm=100, tracks=(lead, bass, pad))
+    track = Track(name="example", sound="{first_instrument}", notes=notes([60], 0, 1, 100))
+    return Song(bpm=100, tracks=(track,))
 ```
 
 Music helpers, from `poser`; their docstrings give the parameters:
@@ -120,9 +102,13 @@ Rendering uses previous-block feedback; timing is the declared delay, without la
 ## Sounds
 
 A `sound` is `<instrument>` (its default) or `<instrument>:<name>`, as `uv run list-sounds` prints.
-Each instrument has its own names; choose by track role. See "Instruments here" for this workspace.
-
-`list-sounds` exits 0 when all sounds are listed, 1 for a source problem, and 2 for unreadable config.
+Each instrument has its own names. See "Instruments here" for this workspace.
+`uv run list-sounds --json` returns machine-readable listings. Repeat `--instrument <name>`
+for exact configured instrument names; `--match <substring>` filters IDs and descriptions
+case-insensitively, preserving listing order. Unselected instruments are not scanned.
+A listing is not an audition or evidence of musical suitability.
+`list-sounds` exits 0 for success (including empty matches), 1 for selected-source problems even
+when entries are filtered out, and 2 for unreadable config or unknown instruments.
 
 ## Rendering
 
@@ -160,17 +146,16 @@ run's report and images. Report fields whose meaning is not obvious from their n
 | `sections` | Extra analysis from configured report sections, by name; each has a `version` and either `data` with its own `defects`, or an `error` |
 
 Node measurements are of that node's own output: the sound as played, or the effect's output
-before `gain`; mix measurements are after it. Band levels are relative, so compare them between
-nodes and versions, not against a target.
+before `gain`; mix measurements are after it. Band levels are relative and uncalibrated, not absolute targets.
 
 The bands are `sub` 20–60 Hz, `bass` 60–250 Hz, `low_mid` 250–500 Hz, `mid` 500–2000 Hz,
 `high_mid` 2000–6000 Hz, and `high` 6000–20000 Hz.
 
 Track statuses from `render-song`: `rendered`, `silent`, `unknown_sound`, `load_failed`,
 `crashed`, `timed_out`, and `upstream_failed`, which means a node's upstream did not render, so
-neither does this one; fix the upstream it names and render again. Node statuses from
+neither does this one. Node statuses from
 `analyze-song`: `analyzed`, `missing_stem`, and `stale_stem`, which means the stem no longer
-matches the song or its sound; `detail` says why, and rendering again fixes it.
+matches the song or its sound; `detail` says why.
 
 Defects fail the analysis: `silent`, for a node or the mix; `clipping`, for mix samples beyond
 full scale; and `headroom`, for a mix peak above -1 dBFS. A section's defects and errors also
@@ -192,8 +177,10 @@ Edit `AGENTS.md` for studio preferences and instrument `guide` notes in `poser.t
 instrument instructions. `POSER.md` is generated from these instrument notes and poser and adapter
 guides; adapter maintainers own their backend-specific guides.
 
-## Judging a revision
-
-Analysis finds defects and measures; it does not say a song is good. Compare a revision against an
-earlier record, and treat a band or bar difference under 1 dB as possible render noise. Keep the
-mix peak at or below -1 dBFS by lowering track `gain`.
+Advice selection is persistent: `[guidance] advice = false` in `poser.toml` excludes packaged
+creative/workflow advice after `uv run update-guide`; missing settings default to true.
+`uv run init-workspace --setup surge --advice off` selects it for a new studio.
+Instrument `guide` notes and legacy adapter `guide` properties are required reference, not
+semantically sanitized. Adapter authors put optional coaching in a package-data-only `advice`
+property; inline instrument `advice` is reserved and rejected. This switch does not rewrite
+owner instructions, control repository access, or erase a model's previous exposure.

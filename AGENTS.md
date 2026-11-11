@@ -3,13 +3,14 @@
 poser renders songs written as code through instrument backends and measures the result. This guide is
 for changing poser itself. A studio's `AGENTS.md` is copied once from
 `src/poser/scaffold/agents.md` and belongs to its owner. `update-guide` generates `POSER.md` from
-the core guide, `src/poser/scaffold/guide.md`, instrument notes in `poser.toml`, and adapter guides.
+the core reference, `src/poser/scaffold/guide.md`, instrument notes in `poser.toml`, and adapter
+reference, plus packaged advice when `[guidance] advice` is enabled.
 Studio preferences belong in its `AGENTS.md`; instrument notes belong in its `poser.toml`.
 
 ## Layout
 
 - `src/poser/core/`: the models, the ports (`core/ports.py`), and the use cases (`loading`,
-  `rendering`, `checking`, `capturing`, and `analysis`). The core imports only the standard
+  `rendering`, `checking`, `capturing`, `analysis`, and `delivery`). The core imports only the standard
   library, numpy, and itself.
 - `src/poser/adapters/`: the adapters behind the ports, such as the Pedalboard instrument in
   `adapters/pedalboard/`, the file render store, and the analysis adapters.

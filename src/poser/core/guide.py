@@ -14,6 +14,20 @@ FIRST_INSTRUMENT_PLACEHOLDER = '"{first_instrument}"'
 
 
 @dataclass(frozen=True)
+class GuideBlock:
+    text: str
+    advice: bool = False
+
+
+def observed_advice(text: str) -> bool | None:
+    """Recognize only the generated marker at its defined location."""
+    lines = text.splitlines()
+    if len(lines) < 2 or lines[0] != GENERATED:
+        return None
+    return {"Advice: on": True, "Advice: off": False}.get(lines[1])
+
+
+@dataclass(frozen=True)
 class InstrumentNote:
     name: Identifier
     adapter: str  # The short name or import path from poser.toml.
@@ -30,7 +44,13 @@ def _instrument_item(note: InstrumentNote) -> str:
     return "\n".join(lines)
 
 
-def compose_guide(core: str, instruments: Sequence[InstrumentNote], parts: Sequence[str]) -> str:
+def compose_guide(
+    core: str,
+    instruments: Sequence[InstrumentNote],
+    parts: Sequence[str | GuideBlock],
+    *,
+    advice: bool = True,
+) -> str:
     """Return the workspace guide: GENERATED, the core guide, the instruments, then each part.
 
     Blocks are separated by single blank lines, and the guide ends in one newline. The core
@@ -42,10 +62,18 @@ def compose_guide(core: str, instruments: Sequence[InstrumentNote], parts: Seque
     if instruments:
         core = core.replace(FIRST_INSTRUMENT_PLACEHOLDER, f'"{instruments[0].name}"')
     listing = "\n".join([INSTRUMENTS_HEADING, "", *map(_instrument_item, instruments)]).strip()
-    blocks = [GENERATED, core.strip(), listing]
+    # Select authored blocks before Markdown rendering; legacy strings are required reference.
+    selected = [
+        part.text if isinstance(part, GuideBlock) else part
+        for part in parts
+        if not isinstance(part, GuideBlock) or not part.advice or advice
+    ]
+    blocks = [f"{GENERATED}\nAdvice: {'on' if advice else 'off'}", core.strip(), listing]
     seen: set[str] = set()
-    for part in parts:
+    for part in selected:
         text = part.strip()
+        if instruments:
+            text = text.replace(FIRST_INSTRUMENT_PLACEHOLDER, f'"{instruments[0].name}"')
         if not text.startswith("## "):
             raise ValueError(f"a guide part must start with a '## ' heading, got {text[:40]!r}")
         if text not in seen:

@@ -20,7 +20,7 @@ def test_blocks_come_in_order_with_one_blank_line_between() -> None:
     guide = compose_guide(CORE, [SERUM, PLAIN], ["## Store\n\nFiles.\n", "\n## Plots\n\nPNGs."])
 
     assert guide == (
-        f"{GENERATED}\n"
+        f"{GENERATED}\nAdvice: on\n"
         "\n"
         "# Composing\n\nWrite songs.\n"
         "\n"

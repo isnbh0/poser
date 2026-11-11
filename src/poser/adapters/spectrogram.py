@@ -27,8 +27,7 @@ GUIDE = """\
 
 Each analyzed track and the mix get a spectrogram, a PNG image that you can open and view. Time
 in seconds runs left to right, frequency runs up on a logarithmic axis from 20 Hz to 20 kHz, and
-color shows power in dB, brighter for louder. Look for energy in the wrong band, notes that ring
-past their end, and parts that mask each other.
+color shows power in dB, brighter for louder.
 """
 
 
@@ -76,6 +75,14 @@ class SpectrogramVisualizer:
     @property
     def guide(self) -> str:
         return GUIDE
+
+    @property
+    def advice(self) -> str:
+        return (
+            "## Reading spectrograms\n\n"
+            "Look for energy in the wrong band, notes that ring past their end, "
+            "and parts that mask each other.\n"
+        )
 
     def draw(self, audio: Audio, path: Path, title: str) -> None:
         write_spectrogram(audio.samples, path, title)

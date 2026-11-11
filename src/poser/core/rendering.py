@@ -48,6 +48,7 @@ from poser.core.ports import (
     SongStore,
     SoundFailure,
 )
+from poser.core.session import song_session
 from poser.core.song import Song, is_number, song_graph
 from poser.core.sounds import parse_sound_ref
 from poser.core.statuses import RenderFailureStatus, RenderStatus, SoundFailureStatus, StemStatus
@@ -278,48 +279,61 @@ def render_song(
     a node's inputs do not sum to finite audio.
     """
     require_stem_format(renders, audio_files)
-    store = renders.song(song_id)
+    with song_session(renders, song_id) as store:
+        return _render(song, store, instruments, audio_files, effects, timeout_s, force=force)
+
+
+def _render(
+    song: Song | Graph,
+    store: SongStore,
+    instruments: Mapping[Identifier, Instrument],
+    audio_files: AudioFiles,
+    effects: Mapping[Identifier, Effect],
+    timeout_s: float,
+    *,
+    force: bool,
+) -> list[TrackResult]:
+    """Render inside a caller-owned song session; never acquire a second lock."""
     graph = song_graph(song, [*effects])
     groups = cycle_groups(graph)
     frames = stem_samples(song)
-    with store.lock():
-        # Results from older stems must not survive a render.
-        store.clear_latest()
-        keys: dict[NodeName, str] = {}
-        results: dict[NodeName, TrackResult] = {}
-        for group in graph.groups():
-            if len(group) == 1 and group[0].name not in groups:
-                results[NodeName(group[0].name)] = _render_node(
-                    song,
+    # Results from older stems must not survive a render.
+    store.clear_latest()
+    keys: dict[NodeName, str] = {}
+    results: dict[NodeName, TrackResult] = {}
+    for group in graph.groups():
+        if len(group) == 1 and group[0].name not in groups:
+            results[NodeName(group[0].name)] = _render_node(
+                song,
+                graph,
+                group[0],
+                store,
+                instruments,
+                effects,
+                audio_files,
+                keys,
+                results,
+                groups,
+                timeout_s=timeout_s,
+                force=force,
+            )
+        else:
+            results.update(
+                _render_group(
                     graph,
-                    group[0],
+                    group,
                     store,
-                    instruments,
                     effects,
                     audio_files,
                     keys,
                     results,
                     groups,
+                    frames,
                     timeout_s=timeout_s,
                     force=force,
                 )
-            else:
-                results.update(
-                    _render_group(
-                        graph,
-                        group,
-                        store,
-                        effects,
-                        audio_files,
-                        keys,
-                        results,
-                        groups,
-                        frames,
-                        timeout_s=timeout_s,
-                        force=force,
-                    )
-                )
-        return list(results.values())
+            )
+    return list(results.values())
 
 
 def _render_node(

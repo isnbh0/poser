@@ -25,6 +25,7 @@ Repository = "https://github.com/isnbh0/poser"
 [project.scripts]
 render-song = "poser.cli.render:main"
 analyze-song = "poser.cli.analyze:main"
+export-song = "poser.cli.export:main"
 check-instruments = "poser.cli.check:main"
 list-sounds = "poser.cli.sounds:list_main"
 save-sound = "poser.cli.sounds:save_main"

@@ -6,7 +6,7 @@ adapter-owned payloads as `Json`, names as name types, and failure statuses as e
 every collection is a tuple, so nothing a receiver does to a value can change what another sees.
 """
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from pathlib import Path
@@ -46,6 +46,16 @@ def _tuple_of[T](owner: str, field: str, value: object, kind: type[T]) -> tuple[
         if not isinstance(item, kind):
             raise ValueError(f"{owner}.{field} must hold only {kind.__name__}, got {item!r}")
     return cast("tuple[T, ...]", items)
+
+
+class WorkspaceInitializer(Protocol):
+    """Own recovery, preparation's lock lifetime, and no-clobber publication."""
+
+    def session(self) -> AbstractContextManager[None]: ...
+
+    def publish(
+        self, outputs: Mapping[str, bytes], *, expected_ignore: bytes | None = None
+    ) -> None: ...
 
 
 # Song files
@@ -143,6 +153,16 @@ class Guided(Protocol):
     @property
     def guide(self) -> str:
         """Markdown starting with a `## ` heading. Reads package data only; never fails."""
+        ...
+
+
+@runtime_checkable
+class AdviceProvider(Protocol):
+    """Optional creative/workflow coaching, separate from required legacy Guided.guide."""
+
+    @property
+    def advice(self) -> str:
+        """Markdown starting with `## `. Reads package data only; never loads plugins."""
         ...
 
 
@@ -646,6 +666,38 @@ class ReportSection(Protocol):
     def mix(self, request: SectionInput) -> SectionResult:
         """Analyze the mix."""
         ...
+
+
+# Verified delivery publication
+
+
+@runtime_checkable
+class ProtectedRenderRoots(Protocol):
+    """Optional promise: all store writes and cleanup stay within these resolved roots.
+
+    The promise covers this configured store's lifetime, including previews and analysis.
+    The method may inspect files; construction must not.
+    """
+
+    def protected_roots(self) -> tuple[Path, ...]: ...
+
+
+@runtime_checkable
+class StagedDelivery(Protocol):
+    """A complete private stage, cleaned on context exit unless published."""
+
+    def publish(self) -> None:
+        """Atomically publish with no-clobber semantics, or raise OSError."""
+        ...
+
+
+@runtime_checkable
+class DeliveryWriter(Protocol):
+    """Stage immutable bytes without exposing a partial destination."""
+
+    def stage(
+        self, destination: Path, files: Mapping[Path, bytes]
+    ) -> AbstractContextManager[StagedDelivery]: ...
 
 
 # The render store

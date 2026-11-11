@@ -64,7 +64,7 @@ def test_missing_workspace_names_the_start_and_the_fix(tmp_path: Path) -> None:
 
     assert str(error.value) == (
         f"no poser.toml in {tmp_path.resolve()} or any parent; "
-        "run `uv run init-workspace` to create a workspace"
+        "run `uv run init-workspace --setup surge` to create a workspace"
     )
 
 

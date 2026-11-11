@@ -51,7 +51,7 @@ def find_workspace(start: Path | None = None) -> Workspace:
             return Workspace(directory)
     raise WorkspaceError(
         f"no {CONFIG_NAME} in {start} or any parent; "
-        "run `uv run init-workspace` to create a workspace"
+        "run `uv run init-workspace --setup surge` to create a workspace"
     )
 
 
