@@ -1,6 +1,7 @@
 """Tests for the song model. No plugins, files, or rendering."""
 
 from collections.abc import Callable
+from dataclasses import FrozenInstanceError
 from typing import cast
 
 import pytest
@@ -563,3 +564,22 @@ def test_generator_of_notes_is_a_song_error() -> None:
         make_track(notes=(n for n in (Note(0, 60, 1, 100),)))
 
     assert [p.split(":")[0] for p in error.value.problems] == ["Track.notes"]
+
+
+def test_song_graph_compiles_and_is_frozen() -> None:
+    song = helper_song()
+    graph = song.graph()
+
+    assert [node.name for node in graph.nodes] == ["lead", "pad"]
+    assert graph.bpm == song.bpm
+    assert graph.wires == ()
+    node = graph.nodes[0]
+    assert node.gain_db == song.tracks[0].gain
+    assert node.notes == song.tracks[0].notes
+    # No mutable state is aliased: the graph holds tuples, and the node refuses assignment.
+    assert isinstance(graph.nodes, tuple)
+    assert isinstance(node.notes, tuple)
+    with pytest.raises(FrozenInstanceError):
+        node.gain_db = 3.0  # ty: ignore[invalid-assignment]
+    with pytest.raises(FrozenInstanceError):
+        graph.nodes = ()  # ty: ignore[invalid-assignment]
