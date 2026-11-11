@@ -123,7 +123,7 @@ Retained measurements, per-run JSON, envelope traces, source snapshots, audio, a
 
 ## Representative delivery and listening
 
-**Pass (technical export); pending (listening):** a fresh export of the tracked
+**Pass (technical export and owner-confirmed audible music):** a fresh export of the tracked
 [Surge showcase source](../src/poser/reference_setups/surge/showcase.py) at `64d0c7f` is retained for review.
 The piece has an opening, layered middle, and closing return. Its discovered presets are Digibass,
 Past Tense, and Flute 1. This selection is not a test of a confirmed tempo-synchronized pulse.
@@ -138,17 +138,21 @@ hash was independently checked. Stereo 48 kHz float WAV duration is 37.27777 sec
 - Mix SHA-256: `e92dae68a286a010e5a7a5590c3ffe57a18244367787f33baf51b07a70006dee`
 - Manifest SHA-256: `9872bbb361cd27e27f0c6821a5699cbaf159a86488de564299c76b1b92488e66`
 - Local retained bundle: `.local/publication-verification/release-listen/`.
-- Listener and timing/ending observations: **pending; not auditioned**.
+- Listener: the owner reported **“i heard music.”** in response to reviewing this retained mix.
+  This confirms audible music, not full-duration listening, timing correctness, an intact ending,
+  or musical approval.
 
-Automated analysis cannot establish correct internal rhythm or an intact release. Rendering adds
-only two seconds after the last authored event. Actual full-piece listening, including entrances
-and ending, remains required. Later listening testimony must identify the delivered mix hash;
-the export manifest's `listening: "not_auditioned"` field remains unchanged.
+No subjective timing or ending approval is required for this check. Without a defined expected
+result, listening cannot distinguish a composition choice from a rendering defect. Stronger
+correctness claims require a controlled example and an explicit expected result. Rendering's
+fixed two-second tail remains a documented limitation, not a newly verified behavior here.
+The export manifest's `listening: "not_auditioned"` field remains unchanged; the owner's later
+report is separate evidence associated with the mix hash above.
 
 Exact review artifacts are retained locally outside Git under `.local/publication-verification/`
 in the verification checkout, not published. This is a local handoff location, not a portable
-public download. The owner approved local retention through review on 2026-11-12 and will review the mix;
-listener observations remain pending. If artifacts are lost, any later record must disclose that exact audio is unavailable;
+public download. The owner approved local retention through review on 2026-11-12 and subsequently
+confirmed hearing music. If artifacts are lost, any later record must disclose that exact audio is unavailable;
 source and hashes cannot reconstruct nondeterministic output.
 
 ## Installation checks
