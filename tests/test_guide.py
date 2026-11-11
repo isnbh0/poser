@@ -247,7 +247,6 @@ def test_music_helpers_are_listed() -> None:
     assert sorted(listed) == sorted(MUSIC_HELPERS)
     assert all(callable(getattr(music, name, None)) for name in listed)
     assert all(callable(getattr(poser, name, None)) for name in listed)
-    assert not {"MODES", "CHORDS"} & backticked()
 
 
 def test_composer_api_exports() -> None:

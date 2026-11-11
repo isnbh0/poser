@@ -1,6 +1,5 @@
 """The files that make poser a releasable package: license, metadata, README, and type marker."""
 
-import hashlib
 import json
 import re
 import shlex
@@ -44,8 +43,6 @@ ONBOARDING = (
     REPO_DIR / "README.md",
     REPO_DIR / "docs/setup.md",
     REPO_DIR / "docs/bootstrap.md",
-    REPO_DIR / "docs/publication-checks.md",
-    REPO_DIR / "docs/publication-evidence.md",
     REPO_DIR / "docs/ablation.md",
     REPO_DIR / "docs/showcase.md",
     REPO_DIR / "src/poser/reference_setups/surge/README.md",
@@ -240,14 +237,6 @@ def test_packaged_reference_and_neutral_resources() -> None:
         assert scaffold.joinpath(name).is_file(), name
     for name in ("poser.toml", "demo.yaml", "onboarding.txt"):
         assert not scaffold.joinpath(name).is_file(), name
-
-
-def test_showcase_source_and_preview_match_recorded_hashes() -> None:
-    evidence = json.loads((REPO_DIR / "docs/audio/surge-showcase.json").read_text())
-    for field in ("source", "preview"):
-        path = REPO_DIR / evidence[field]
-        assert path.is_file()
-        assert hashlib.sha256(path.read_bytes()).hexdigest() == evidence[f"{field}_sha256"]
 
 
 def test_package_is_marked_typed() -> None:

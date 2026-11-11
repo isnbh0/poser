@@ -190,7 +190,7 @@ share. In a uv workspace, make the workspace a package (`[tool.uv] package = tru
 `make check` runs format, lint, types, and the tests that need no plugins. `make test-real` loads
 real plugins; it reads a `poser.toml` at the repository root, so copy
 `src/poser/reference_setups/surge/poser.toml` there and edit its paths first. [AGENTS.md](AGENTS.md) describes
-the layout and rules. See the [publication checklist](docs/publication-checks.md) before release.
+the layout and rules.
 For controlled composition experiments, see [advice ablation](docs/ablation.md).
 
 ## License

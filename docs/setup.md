@@ -34,16 +34,15 @@ The chain stops at the first failure. After `cd` succeeds, your shell stays in t
 Use the Git dependency shown here, not the unrelated PyPI package named `poser`. If adapting
 these steps to an existing project, inspect its files and dependencies first. The studio's `uv.lock`
 records the resolved Git commit; retain it with the project for reproducibility. A newly resolved
-unqualified Git URL can select a later commit. Choosing an explicit revision is optional, not a
-missing locking feature; do not discard an existing lockfile. The initializer
+unqualified Git URL can select a later commit. The initializer
 refuses to overwrite its owned output files; it merges required entries into an existing
 `.gitignore`.
 
 The setup copies `poser.toml` and `songs/demo.yaml` into your studio. Edit `poser.toml` for your
 instruments and create new files for your songs; preserve `songs/demo.yaml` as the smoke-test demo.
 Put studio-specific agent instructions in `AGENTS.md`; `CLAUDE.md` points to those instructions.
-`POSER.md` is generated from poser, the current configuration, and its adapters. After changing `poser.toml` or other guide inputs, run `uv run update-guide` from the
-studio; use `uv run update-guide --check` to check whether the guide is current. Your `AGENTS.md`
+`POSER.md` is generated from poser, the current configuration, and its adapters. After changing
+`poser.toml` or other guide inputs, run `uv run update-guide` from the studio; use `uv run update-guide --check` to check whether the guide is current. Your `AGENTS.md`
 edits remain yours.
 
 Advice is optional and independent of instrument settings. For first-run advice-free generation,
@@ -60,27 +59,20 @@ workspace error. `repeatable` reports exact sample-value equality between two re
 tolerance, not perceptual quality. A `pass` with `REPEATABLE no` (JSON `repeatable: false`) is
 valid. Clipping is informational in instrument checking, unlike clipping defects in song analysis.
 
-After successful demo rendering and analysis, invite the person to listen to
-`renders/songs/demo.yaml/latest/mix.wav`; its report and spectrograms are also under
-`renders/songs/demo.yaml/latest/`. Audition yourself only with a usable listening route and
-permission. Starting a player is not evidence you heard the result. If you cannot listen, disclose
-that it is not auditioned and ask the person to audition. Lack of audition does not invalidate
-technical setup verification.
+The demo mix is `renders/songs/demo.yaml/latest/mix.wav`; its report and spectrograms are in
+the same `latest/` directory. Listen with permission if useful. Listening is optional; report
+whether it occurred. Analysis checks technical defects, not musical quality.
 
 ## Compose your first song (optional)
 
-If composition was already requested, continue after successful setup without asking for that
-permission again. Otherwise offer to continue to a first song. Setup-only is a complete outcome;
-declining needs no creative questionnaire. Reuse preferences already provided. Ask only for
-consequential missing intent, such as mood, approximate length, or references; accept delegated
-choices and state provisional defaults.
+If a song was requested, continue after setup; otherwise offer to compose one. Reuse the owner's
+preferences and ask only for missing creative direction, such as mood or approximate length.
 
 Read the studio's `AGENTS.md` and generated `POSER.md`, and run `uv run list-sounds`.
 For large listings use `uv run list-sounds --instrument surge --match pad --json`; instrument
 selection is exact and repeatable, and matching searches IDs/descriptions case-insensitively.
-A listing is not evidence of audition or musical suitability. Create a
-new song without overwriting the demo or the owner's work. In the commands below, replace
-`<song-path>` with that new source's path (YAML or Python); it is a placeholder, not a musical brief.
+A listing identifies available presets; it does not audition them. Create a new song without
+overwriting the demo or the owner's work. Replace `<song-path>` below with its YAML or Python path.
 Run from the studio:
 
 ```bash
@@ -88,11 +80,9 @@ uv run render-song <song-path> &&
 uv run analyze-song <song-path> --json
 ```
 
-Inspect the JSON report's node and mix defects and spectrograms. Revise in response to the brief
-and actual results, then render and analyze again. Invite the person to listen, or audition with
-a usable route and permission, as for the demo. Disclose when you cannot listen and request the
-person's audition; do not block delivery of a technically verified draft for lack of listening.
-Analysis success is not artistic approval or a mastering guarantee.
+Inspect the JSON report's node and mix defects and spectrograms. Revise against the brief and
+results, then render and analyze again. Listening feedback can guide further revisions, but is
+not required to deliver a draft.
 
 ### Final handoff
 
@@ -111,13 +101,7 @@ Share that bundle, or accessible paths to it, with analysis interpretation and l
 For Surge the mix is WAV; other adapters may use another format. Later renders do not replace
 this bundle. Failed export publishes no successful delivery; never substitute an earlier mix.
 
-The manifest records raw source/artifact hashes separately from `song_sha256` (the serialized
-loaded song digest), plus configuration/lockfile evidence. It always records
-`listening: "not_auditioned"`; actual listener evidence is separate. Export does not sandbox
-Python, discover undeclared imports/external state, copy private configuration or plugins, or
-promise deterministic audio. Opaque analysis section payloads are preserved, not made portable;
-only schema-owned artifact paths have the bundle portability guarantee. See the
-[export contract](#export-contract) for outcomes and evidence boundaries.
+See the [export contract](#export-contract) for exit codes, manifest fields, and portability limits.
 
 ## Recover from a failure
 

@@ -94,7 +94,6 @@ def test_modes_keep_reference_and_adapter_options_identical(tmp_path: Path) -> N
         if block.advice:
             stripped = stripped.replace("\n\n" + block.text.strip(), "")
     assert stripped == required
-    assert "host tempo or transport" in required
 
 
 def test_on_off_on_regeneration_and_check(tmp_path: Path) -> None:

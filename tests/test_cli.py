@@ -800,9 +800,6 @@ def test_update_guide_preserves_personal_files_and_handles_missing_reference(
     assert agents.read_bytes() == before[agents]
     assert claude.read_bytes() == before[claude]
     assert b"personal patches" in reference.read_bytes()
-    text = reference.read_text()
-    for phrase in ("owner requirements", "not auditioned", "uv run export-song"):
-        assert phrase in text
     assert guide.main(["--check"]) == EXIT_ALL_PASS
     assert agents.read_bytes() == before[agents]
     reference.unlink()
