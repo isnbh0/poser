@@ -1,5 +1,9 @@
 # Before publishing
 
+See [verification evidence](publication-evidence.md) for tested versions, observations, and
+outstanding checks. A pending check is not a pass; run independent packaging checks even when
+listening or public access is unavailable.
+
 1. Run `make check`. CI also installs the wheel and source distribution into clean environments
    and exercises commands and packaged resources. Its empty plugin fixture does not test audio.
 2. Follow the [studio setup guide](setup.md) in a new studio using the public Git dependency,

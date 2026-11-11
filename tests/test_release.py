@@ -45,6 +45,7 @@ ONBOARDING = (
     REPO_DIR / "docs/setup.md",
     REPO_DIR / "docs/bootstrap.md",
     REPO_DIR / "docs/publication-checks.md",
+    REPO_DIR / "docs/publication-evidence.md",
     REPO_DIR / "docs/ablation.md",
     REPO_DIR / "docs/showcase.md",
     REPO_DIR / "src/poser/reference_setups/surge/README.md",

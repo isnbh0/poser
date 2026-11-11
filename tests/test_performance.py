@@ -77,6 +77,25 @@ def test_beats_convert_to_samples_at_bpm() -> None:
     ]
 
 
+def test_scaled_beats_and_tempo_preserve_sample_timed_performance() -> None:
+    slow = Track("lead", "Serum", (Note(1, 60, 2, 100),), cc=(ControlChange(2, 1, 64),))
+    fast = Track("lead", "Serum", (Note(2, 60, 4, 100),), cc=(ControlChange(4, 1, 64),))
+
+    assert perform(make_song(slow, bpm=60), slow) == perform(make_song(fast, bpm=120), fast)
+
+
+def test_fixed_beats_follow_song_tempo() -> None:
+    track = make_track("lead", Note(1, 60, 2, 100))
+
+    slow = perform(make_song(track, bpm=60), track)
+    fast = perform(make_song(track, bpm=120), track)
+
+    assert slow.events == (NoteOn(48000, 60, 100), NoteOff(144000, 60))
+    assert fast.events == (NoteOn(24000, 60, 100), NoteOff(72000, 60))
+    assert slow.samples == int(5 * SAMPLE_RATE)
+    assert fast.samples == int(3.5 * SAMPLE_RATE)
+
+
 def test_note_velocity_reaches_the_event() -> None:
     (on, _) = performed(make_track("lead", Note(0, 60, 1, 37))).events
     assert on == NoteOn(0, 60, 37)

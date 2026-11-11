@@ -14,6 +14,10 @@ A Pedalboard instrument plays a VST3 or Audio Unit plugin. A track names one of 
 `uv run list-sounds` prints every name a song can use, with a description of each. Choose sounds
 from that list rather than guessing names.
 
+Song BPM schedules authored notes and controllers. Poser does not supply song BPM as plugin
+host tempo or transport; a preset's internal tempo-synced LFOs, sequences, or delays are not
+guaranteed to follow it. Changing note spacing is not evidence that an internal pulse synchronized.
+
 `save-sound` opens the plugin's window so the owner can shape a sound by hand and save it under
 `saved/`. It waits for a person to close the window, so it is not for agents.
 
