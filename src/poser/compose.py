@@ -5,7 +5,7 @@ path in `BUILTINS`, so importing it loads no adapter library, and building impor
 adapters a command uses. A workspace selects any other adapter by import path, `module:attribute`,
 naming a factory:
 
-- an instrument's factory takes `(name, options, context)`;
+- an instrument's or effect's factory takes `(name, options, context)`;
 - the render store's takes `(options, context, stem_suffix)`;
 - every other one takes `(options, context)`.
 
@@ -36,6 +36,7 @@ from poser.core.ports import (
     AdapterContext,
     AudioFiles,
     ConfigError,
+    Effect,
     Guided,
     Instrument,
     Measurer,
@@ -48,9 +49,13 @@ from poser.core.ports import (
 )
 
 INSTRUMENT = "instrument"
+EFFECT = "effect"
 BUILTINS: Mapping[str, Mapping[str, str]] = MappingProxyType(
     {
         INSTRUMENT: MappingProxyType({"pedalboard": "poser.adapters.pedalboard.instrument:create"}),
+        EFFECT: MappingProxyType(
+            {"pedalboard": "poser.adapters.pedalboard.instrument:create_effect"}
+        ),
         "song_formats": MappingProxyType(
             {
                 "yaml": "poser.adapters.song_formats:create_yaml",
@@ -81,7 +86,7 @@ DEFAULTS: Mapping[str, str | tuple[str, ...]] = MappingProxyType(
 )
 # List keys that cannot be empty: a workspace with no song format can load no song.
 NON_EMPTY_LISTS = frozenset({"song_formats"})
-TOP_LEVEL_KEYS = frozenset({"instruments", "adapters"})
+TOP_LEVEL_KEYS = frozenset({"instruments", "effects", "adapters"})
 ADAPTER_KEY = "adapter"  # An instrument table's spelling of `use`.
 GUIDE_KEY = "guide"  # An instrument table's note for the guide; compose's, not the adapter's.
 USE_KEY = "use"
@@ -112,9 +117,16 @@ class InstrumentSpec:
 
 
 @dataclass(frozen=True)
+class EffectSpec:
+    name: Identifier
+    spec: AdapterSpec
+
+
+@dataclass(frozen=True)
 class WorkspaceConfig:
     path: Path
     instruments: tuple[InstrumentSpec, ...]
+    effects: tuple[EffectSpec, ...]
     # Every `[adapters]` key, with defaults filled in; list keys hold tuples.
     adapters: Mapping[str, AdapterSpec | tuple[AdapterSpec, ...]]
 
@@ -161,39 +173,54 @@ def _spec(path: Path, where: str, key: str, value: object) -> AdapterSpec:
     return AdapterSpec(use, _options(path, where, rest))
 
 
-def _instruments(path: Path, value: object) -> tuple[InstrumentSpec, ...]:
+def _recipes(
+    path: Path, value: object, where: str, key: str, noun: str, *, guides: bool
+) -> list[tuple[Identifier, AdapterSpec, str | None]]:
+    """Read an `[instruments]` or `[effects]` table: unique names, each naming an adapter."""
     table = _table(value)
     if table is None:
-        raise ConfigError(f"{path}: instruments: must be a table of instruments")
-    if not table:
-        raise ConfigError(f"{path}: instruments: must name at least one instrument")
-    specs: list[InstrumentSpec] = []
+        raise ConfigError(f"{path}: {where}: must be a table of {noun}s")
+    specs: list[tuple[Identifier, AdapterSpec, str | None]] = []
     seen: dict[str, str] = {}
     for name, item in table.items():
-        where = f"instruments.{name}"
+        owner = f"{where}.{name}"
         if not Identifier.PATTERN.fullmatch(name):
             raise ConfigError(
-                f"{path}: {where}: the name does not match {Identifier.PATTERN.pattern}"
+                f"{path}: {owner}: the name does not match {Identifier.PATTERN.pattern}"
             )
         if (other := seen.get(name.lower())) is not None:
-            raise ConfigError(f"{path}: {where}: the name differs only in case from {other!r}")
+            raise ConfigError(f"{path}: {owner}: the name differs only in case from {other!r}")
         seen[name.lower()] = name
         body = _table(item)
         if body is None:
-            raise ConfigError(f"{path}: {where}: must be a table")
+            raise ConfigError(f"{path}: {owner}: must be a table")
         adapter = body.get(ADAPTER_KEY)
         if not isinstance(adapter, str):
-            raise ConfigError(f"{path}: {where}.{ADAPTER_KEY}: must be a string")
-        _check_use(path, f"{where}.{ADAPTER_KEY}", INSTRUMENT, adapter)
+            raise ConfigError(f"{path}: {owner}.{ADAPTER_KEY}: must be a string")
+        _check_use(path, f"{owner}.{ADAPTER_KEY}", key, adapter)
         guide = body.get(GUIDE_KEY)
-        if GUIDE_KEY in body and not (isinstance(guide, str) and guide.strip()):
-            raise ConfigError(f"{path}: {where}.{GUIDE_KEY}: must be non-blank text")
-        rest = {key: item for key, item in body.items() if key not in {ADAPTER_KEY, GUIDE_KEY}}
-        spec = AdapterSpec(adapter, _options(path, where, rest))
-        specs.append(
-            InstrumentSpec(Identifier(name), spec, guide if isinstance(guide, str) else None)
-        )
-    return tuple(specs)
+        if guides and GUIDE_KEY in body and not (isinstance(guide, str) and guide.strip()):
+            raise ConfigError(f"{path}: {owner}.{GUIDE_KEY}: must be non-blank text")
+        skip = {ADAPTER_KEY, GUIDE_KEY} if guides else {ADAPTER_KEY}
+        rest = {n: v for n, v in body.items() if n not in skip}
+        spec = AdapterSpec(adapter, _options(path, owner, rest))
+        specs.append((Identifier(name), spec, guide if isinstance(guide, str) else None))
+    return specs
+
+
+def _instruments(path: Path, value: object) -> tuple[InstrumentSpec, ...]:
+    specs = _recipes(path, value, "instruments", INSTRUMENT, "instrument", guides=True)
+    if not specs:
+        raise ConfigError(f"{path}: instruments: must name at least one instrument")
+    return tuple(InstrumentSpec(name, spec, guide) for name, spec, guide in specs)
+
+
+def _effects(path: Path, value: object) -> tuple[EffectSpec, ...]:
+    """Read the optional `[effects]` table: zero effects is valid."""
+    return tuple(
+        EffectSpec(name, spec)
+        for name, spec, _ in _recipes(path, value, "effects", EFFECT, "effect", guides=False)
+    )
 
 
 def _adapters(path: Path, value: object) -> dict[str, AdapterSpec | tuple[AdapterSpec, ...]]:
@@ -232,12 +259,15 @@ def read_config(path: Path) -> WorkspaceConfig:
         raise ConfigError(f"{path}: cannot read: {error}") from error
     for key in data:
         if key not in TOP_LEVEL_KEYS:
-            raise ConfigError(f"{path}: {key}: unknown key; use `instruments` and `adapters`")
+            raise ConfigError(
+                f"{path}: {key}: unknown key; use `instruments`, `effects`, and `adapters`"
+            )
     if "instruments" not in data:
         raise ConfigError(f"{path}: instruments: missing; name at least one instrument")
     instruments = _instruments(path, data["instruments"])
+    effects = _effects(path, data.get("effects", {}))
     adapters = _adapters(path, data.get("adapters", {}))
-    return WorkspaceConfig(path, instruments, adapters)
+    return WorkspaceConfig(path, instruments, effects, adapters)
 
 
 # Building adapters
@@ -344,6 +374,37 @@ class Composition:
             return MappingProxyType(built)
 
         return self._cached("instruments", build)
+
+    def effects(self) -> Mapping[Identifier, Effect]:
+        """Every effect recipe, by name, in config order."""
+
+        def build() -> Mapping[Identifier, Effect]:
+            built: dict[Identifier, Effect] = {}
+            for item in self._config.effects:
+                where = f"effects.{item.name}"
+                spec = item.spec
+                options = self._options(spec)
+                effect = self._make(
+                    where,
+                    EFFECT,
+                    spec,
+                    Effect,
+                    item.name,
+                    options,
+                    self._context,
+                    owner=f"effect {item.name!r}",
+                )
+                if not isinstance(effect.adapter_id, Identifier):
+                    raise self._fail(
+                        where, f"adapter_id {effect.adapter_id!r} is not an Identifier"
+                    )
+                version = effect.adapter_version
+                if not (isinstance(version, str) and version):
+                    raise self._fail(where, f"adapter_version {version!r} is not a non-empty str")
+                built[item.name] = effect
+            return MappingProxyType(built)
+
+        return self._cached("effects", build)
 
     def _plain[T](self, key: str, port: type[T]) -> T:
         spec = self._single(key)
@@ -466,6 +527,7 @@ class Composition:
         adapters: list[tuple[str, object]] = [
             (f"instruments.{name}", instrument) for name, instrument in self.instruments().items()
         ]
+        adapters += [(f"effects.{name}", effect) for name, effect in self.effects().items()]
         adapters += [(f"adapters.song_formats[{i}]", f) for i, f in enumerate(self.song_formats())]
         adapters += [
             ("adapters.record_writer", self.record_writer()),

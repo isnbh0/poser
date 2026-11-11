@@ -64,7 +64,7 @@ def node_key(
 
 
 def sound_key(adapter_id: str, adapter_version: str, identity: str) -> str:
-    """Return a digest of a resolved sound, as its instrument adapter identifies it."""
+    """Return a digest of a resolved sound or recipe, as its adapter identifies it."""
     if not adapter_version:
         raise ValueError("sound_key needs a non-empty adapter version")
     return digest({"adapter": adapter_id, "version": adapter_version, "identity": identity})

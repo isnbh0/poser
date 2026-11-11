@@ -1,4 +1,5 @@
-"""A Pedalboard instrument's options: its plugin, its preset sources, and its preset formats."""
+"""A Pedalboard instrument's or effect's options: its plugin, its preset sources, and its preset
+formats."""
 
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -14,6 +15,7 @@ INITIALIZATION_TIMEOUT_S = 30.0
 SAVED_SOURCE = "saved"
 DEFAULT_FORMATS = ("fxp", "saved")
 OPTION_KEYS = frozenset({"path", "plugin_name", "sources", "formats"})
+EFFECT_OPTION_KEYS = frozenset({"path", "builtin", "parameters"})
 
 
 @dataclass(frozen=True)
@@ -114,4 +116,68 @@ def from_options(name: str, options: Mapping[str, JsonValue], base: Path) -> Ped
         plugin_name=plugin_name if isinstance(plugin_name, str) else None,
         sources=sources,
         formats=formats,
+    )
+
+
+@dataclass(frozen=True)
+class EffectConfig:
+    """One effect recipe: a plugin file, or a Pedalboard-native class with its parameters."""
+
+    name: Identifier
+    path: Path | None  # Absolute, when the recipe is a VST3 or Audio Unit effect.
+    builtin: str | None  # A pedalboard-native class name, such as `Gain`.
+    parameters: Mapping[str, JsonValue]  # For a builtin; read-only.
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.name, Identifier):
+            raise ConfigError(f"effect name must be an Identifier, got {self.name!r}")
+        owner = f"effect {self.name!r}"
+        if self.path is not None and not (isinstance(self.path, Path) and self.path.is_absolute()):
+            raise ConfigError(f"{owner}: path must be an absolute path, got {self.path!r}")
+        if self.builtin is not None and not (
+            isinstance(self.builtin, str) and self.builtin.strip()
+        ):
+            raise ConfigError(f"{owner}: builtin must be non-empty text")
+        if (self.path is None) == (self.builtin is None):
+            raise ConfigError(f"{owner}: name exactly one of `path` or `builtin`")
+        if self.path is not None and self.parameters:
+            raise ConfigError(f"{owner}: parameters belong to a builtin, not to a plugin file")
+        if not isinstance(self.parameters, Mapping):
+            raise ConfigError(f"{owner}: parameters must be a table, got {self.parameters!r}")
+        object.__setattr__(self, "parameters", MappingProxyType(dict(self.parameters)))
+
+
+def effect_from_options(name: str, options: Mapping[str, JsonValue], base: Path) -> EffectConfig:
+    """Return the config an effect recipe's options give, resolving a relative path against `base`.
+
+    Raises ConfigError naming the effect for any option it cannot use.
+    """
+    owner = f"effect {name!r}"
+    try:
+        identifier = Identifier(name)
+    except ValueError as error:
+        raise ConfigError(f"{owner}: {error}") from error
+    if unknown := sorted(set(options) - EFFECT_OPTION_KEYS):
+        raise ConfigError(f"{owner}: unknown option {unknown[0]!r}")
+
+    path = _text(options.get("path"))
+    builtin = _text(options.get("builtin"))
+    if path is not None and builtin is not None:
+        raise ConfigError(f"{owner}: name exactly one of `path` or `builtin`")
+    if path is None and "builtin" not in options:
+        raise ConfigError(f"{owner}: path must be non-empty text")
+    if path is None and builtin is None:
+        raise ConfigError(f"{owner}: builtin must be non-empty text")
+    if builtin is not None and not Identifier.PATTERN.fullmatch(builtin):
+        raise ConfigError(f"{owner}: builtin must name a pedalboard-native class, got {builtin!r}")
+
+    raw_parameters = options.get("parameters", {})
+    if not isinstance(raw_parameters, dict):
+        raise ConfigError(f"{owner}: parameters must be a table, got {raw_parameters!r}")
+
+    return EffectConfig(
+        name=identifier,
+        path=None if path is None else base / path,
+        builtin=builtin,
+        parameters=raw_parameters,
     )

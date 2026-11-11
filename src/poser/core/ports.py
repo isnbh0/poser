@@ -14,11 +14,12 @@ from typing import Protocol, cast, runtime_checkable
 
 from poser.core.audio import Audio
 from poser.core.cache import Stamp, StampProblem
+from poser.core.graph import Node
 from poser.core.jsonvalue import Json
-from poser.core.names import Identifier, SongId, Suffix, TrackName
+from poser.core.names import Identifier, NodeName, SongId, Suffix
 from poser.core.performance import Performance
 from poser.core.report import Levels, Measurements
-from poser.core.song import Song, Track, is_int, is_number
+from poser.core.song import Song, is_int, is_number
 from poser.core.sounds import SoundEntry, SoundRef
 from poser.core.statuses import RenderFailureStatus, SoundFailureStatus
 
@@ -208,7 +209,7 @@ class RenderRequest:
 
 @dataclass(frozen=True)
 class RenderFailure:
-    """Why an instrument could not render."""
+    """Why an instrument or an effect could not render."""
 
     status: RenderFailureStatus
     detail: str
@@ -263,6 +264,79 @@ class Instrument(Protocol):
         finished. Never raises for plugin failures; anything it raises is a poser bug.
         LOAD_FAILED means a plugin or state that does not load, CRASHED a worker that died, and
         TIMED_OUT one past `timeout_s`.
+        """
+        ...
+
+
+# Effects
+
+
+@dataclass(frozen=True)
+class ResolvedEffect:
+    """An effect recipe an adapter resolved, ready to render."""
+
+    recipe: str  # The configured recipe name the adapter resolved.
+    identity: str  # A recipe: equal when the render inputs are equal. Samples may still differ.
+    payload: Json  # The adapter's own data for rendering. The core never reads it.
+
+    def __post_init__(self) -> None:
+        _text("ResolvedEffect", "recipe", self.recipe)
+        _text("ResolvedEffect", "identity", self.identity)
+        _require("ResolvedEffect", "payload", self.payload, Json)
+
+
+@dataclass(frozen=True)
+class EffectRenderRequest:
+    """One effect render: the summed upstream audio, the resolved recipe, and where to write."""
+
+    audio: Audio
+    recipe: ResolvedEffect  # From this adapter's own `resolve`.
+    audio_path: Path  # Where to write the result with write_raw_audio.
+
+    def __post_init__(self) -> None:
+        _require("EffectRenderRequest", "audio", self.audio, Audio)
+        _require("EffectRenderRequest", "recipe", self.recipe, ResolvedEffect)
+        _require("EffectRenderRequest", "audio_path", self.audio_path, Path)
+
+
+@runtime_checkable
+class Effect(Protocol):
+    """Something that resolves one configured effect recipe and renders audio through it.
+
+    The contract every effect meets:
+
+    - `resolve()` loads no plugin code and runs in the parent process.
+    - `resolve(recipe)` receives only the name this effect is configured under; the effect holds
+      one recipe, so its identity is fixed at build time and `resolve` never fails for a
+      configured one.
+    - `identity` is a recipe identity: equal when the render inputs are equal, without promising
+      identical samples. It covers every input the adapter controls and can read cheaply.
+    - `adapter_version` rises whenever the adapter's own code renders one identity differently.
+    """
+
+    @property
+    def adapter_id(self) -> Identifier:
+        """The adapter's name, such as `pedalboard`."""
+        ...
+
+    @property
+    def adapter_version(self) -> str:
+        """Non-empty; raised when the output for one identity changes."""
+        ...
+
+    def resolve(self, recipe: str) -> ResolvedEffect | SoundFailure:
+        """Return the recipe ready to render, or say why it cannot be used."""
+        ...
+
+    def render(self, request: EffectRenderRequest, timeout_s: float) -> RenderFailure | None:
+        """Render the audio through the recipe, or return why it could not.
+
+        Writes exactly as many frames as `request.audio` carries, at `SAMPLE_RATE` and
+        `NUM_CHANNELS`, to `request.audio_path` with `write_raw_audio` and returns None, or
+        returns a RenderFailure and may leave the file absent. Returns only after every writer of
+        `audio_path` has finished. Never raises for plugin failures; anything it raises is a poser
+        bug. LOAD_FAILED means a plugin or recipe that does not load, CRASHED a worker that died,
+        and TIMED_OUT one past `timeout_s`.
         """
         ...
 
@@ -347,12 +421,12 @@ class SoundCapture(Protocol):
 class MixInput:
     """One stem going into the mix, and the gain to apply to it."""
 
-    track: TrackName
+    track: NodeName  # The stem's node; a leaf, so its name may hold dots.
     audio: Audio
     gain_db: float  # Finite.
 
     def __post_init__(self) -> None:
-        _require("MixInput", "track", self.track, TrackName)
+        _require("MixInput", "track", self.track, NodeName)
         _require("MixInput", "audio", self.audio, Audio)
         if not is_number(self.gain_db):
             raise ValueError(f"MixInput.gain_db must be a finite number, got {self.gain_db!r}")
@@ -398,17 +472,17 @@ class Visualizer(Protocol):
 
 @dataclass(frozen=True)
 class SectionInput:
-    """What a report section sees for one track or the mix."""
+    """What a report section sees for one node or the mix."""
 
     song: Song
-    track: Track | None  # None for the mix.
-    audio: Audio  # The stem before gain, or the mix.
+    node: Node | None  # None for the mix.
+    audio: Audio  # The node's stem before gain, or the mix.
     measurements: Measurements
 
     def __post_init__(self) -> None:
         _require("SectionInput", "song", self.song, Song)
-        if self.track is not None:
-            _require("SectionInput", "track", self.track, Track)
+        if self.node is not None:
+            _require("SectionInput", "node", self.node, Node)
         _require("SectionInput", "audio", self.audio, Audio)
         _require("SectionInput", "measurements", self.measurements, Measurements)
 
@@ -446,7 +520,7 @@ class ReportSection(Protocol):
         ...
 
     def track(self, request: SectionInput) -> SectionResult:
-        """Analyze one track's stem, before gain."""
+        """Analyze one node's stem, before gain."""
         ...
 
     def mix(self, request: SectionInput) -> SectionResult:
@@ -487,21 +561,21 @@ class SongStore(Protocol):
         holds it. Released when the process dies."""
         ...
 
-    def stem_path(self, track: TrackName) -> Path:
-        """Where the track's stem lives. Parent exists on return."""
+    def stem_path(self, node: NodeName) -> Path:
+        """Where the node's stem lives. Parent exists on return."""
         ...
 
-    def read_stamp(self, track: TrackName) -> Stamp | StampProblem:
-        """The track's stamp, MISSING when there is none or it cannot be read, or CHANGED when
+    def read_stamp(self, node: NodeName) -> Stamp | StampProblem:
+        """The node's stamp, MISSING when there is none or it cannot be read, or CHANGED when
         the stem is no longer the file the stamp recorded."""
         ...
 
-    def write_stamp(self, track: TrackName, stamp: Stamp) -> None:
+    def write_stamp(self, node: NodeName, stamp: Stamp) -> None:
         """Called right after the stem is written; records that this stem is the one stamped.
         Atomic."""
         ...
 
-    def discard(self, track: TrackName) -> None:
+    def discard(self, node: NodeName) -> None:
         """Remove the stamp, then the stem."""
         ...
 
@@ -509,8 +583,8 @@ class SongStore(Protocol):
         """Remove the latest report, mix, and images, and nothing else."""
         ...
 
-    def image_path(self, track: TrackName | None, suffix: Suffix) -> Path:
-        """A track's latest image, or the mix's for None. Parent exists on return."""
+    def image_path(self, node: NodeName | None, suffix: Suffix) -> Path:
+        """A node's latest image, or the mix's for None. Parent exists on return."""
         ...
 
     def mix_path(self) -> Path:
@@ -525,8 +599,8 @@ class SongStore(Protocol):
         """Create the next record holding the song text as `song<suffix>`."""
         ...
 
-    def keep_image(self, record: Record, track: TrackName | None, suffix: Suffix) -> Path:
-        """Copy image_path(track, suffix) into the record and return the copy's path."""
+    def keep_image(self, record: Record, node: NodeName | None, suffix: Suffix) -> Path:
+        """Copy image_path(node, suffix) into the record and return the copy's path."""
         ...
 
     def finish_record(self, record: Record, report_text: str) -> None:

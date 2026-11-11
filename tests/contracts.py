@@ -22,7 +22,7 @@ from poser.core.audio import (
     stem_samples,
 )
 from poser.core.cache import Stamp, StampProblem
-from poser.core.names import Identifier, SongId, Suffix, TrackName
+from poser.core.names import Identifier, NodeName, SongId, Suffix, TrackName
 from poser.core.performance import perform
 from poser.core.ports import (
     AudioFileError,
@@ -283,7 +283,7 @@ def _rewrite(path: Path, data: bytes) -> None:
 def check_render_store_contract(
     make: Callable[[Path], object],
     tmp_path: Path,
-    spoil_stamp: Callable[[SongStore, TrackName], None],
+    spoil_stamp: Callable[[SongStore, NodeName], None],
 ) -> None:
     """Check a RenderStore built by `make(root)` and its song stores.
 
@@ -430,7 +430,7 @@ def check_section_contract(section: object) -> None:
     frames = stem_samples(song)  # Analysis hands sections whole stems, tail included.
     assert frames >= CONTRACT_FRAMES
     audio = constant_audio(0.1, frames)
-    track = section.track(SectionInput(song, song.tracks[0], audio, measurements))
+    track = section.track(SectionInput(song, song.graph().nodes[0], audio, measurements))
     assert isinstance(track, SectionResult), f"track returned a {type(track).__name__}"
     mix = section.mix(SectionInput(song, None, audio, measurements))
     assert isinstance(mix, SectionResult), f"mix returned a {type(mix).__name__}"

@@ -51,6 +51,10 @@ def check_status(status: SoundFailureStatus | RenderFailureStatus) -> CheckStatu
             return CheckStatus.CRASHED
         case RenderFailureStatus.TIMED_OUT:
             return CheckStatus.TIMED_OUT
+        # A check has no upstream, so this status cannot reach here; a render it could not
+        # complete is a crash of the check.
+        case RenderFailureStatus.UPSTREAM_FAILED:
+            return CheckStatus.CRASHED
         case _:
             assert_never(status)
 

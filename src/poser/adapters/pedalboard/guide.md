@@ -16,3 +16,17 @@ from that list rather than guessing names.
 
 `save-sound` opens the plugin's window so the owner can shape a sound by hand and save it under
 `saved/`. It waits for a person to close the window, so it is not for agents.
+
+## Pedalboard effects
+
+An `[effects.<name>]` table in `poser.toml` is one effect recipe, which a track's `effects` list
+names. Two shapes are allowed:
+
+- `adapter = "pedalboard"` with `path`: a VST3 or Audio Unit **effect** plugin (multi-plugin
+  bundles are not supported here; an instrument plugin refuses with `is not an effect`).
+- `adapter = "pedalboard"` with `builtin`: a Pedalboard-native effect class, such as `Gain`,
+  `Reverb`, or `Distortion`, and optional `parameters`, a table of the class's keyword arguments
+  (`gain_db = -6`). Native effects need no vendor plugin and render headlessly.
+
+A recipe processes whatever its node is fed, so a chain node named `<track>.<effect>` hears its
+track. Changing `parameters` re-renders that node and everything downstream of it.

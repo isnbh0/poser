@@ -10,7 +10,7 @@ from contracts import check_render_store_contract
 
 from poser.adapters.filestore import FileRenderStore, FileSongStore
 from poser.core.cache import Stamp, StampProblem
-from poser.core.names import Identifier, SongId, Suffix, TrackName
+from poser.core.names import Identifier, NodeName, SongId, Suffix, TrackName
 from poser.core.ports import SongBusyError, SongStore
 from poser.core.statuses import StemStatus
 
@@ -19,7 +19,7 @@ LEAD, BASS = TrackName("lead"), TrackName("bass")
 STAMP = Stamp("a" * 64, "b" * 64, StemStatus.RENDERED, -6.0)
 
 
-def spoil_stamp(store: SongStore, track: TrackName) -> None:
+def spoil_stamp(store: SongStore, track: NodeName) -> None:
     assert isinstance(store, FileSongStore)
     path = store.stem_path(track).parent.parent / "stamps" / f"{track}.json"
     assert path.is_file()
@@ -270,4 +270,4 @@ def test_guide_names_each_kept_directory(tmp_path: Path) -> None:
     assert guide.startswith("## ")
     for directory in ("stems/", "latest/", "history/"):
         assert directory in guide
-    assert "<track>.wav" in guide
+    assert "<node>.wav" in guide

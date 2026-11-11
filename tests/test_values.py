@@ -11,7 +11,7 @@ from poser.core.audio import NUM_CHANNELS, Audio, AudioFault, AudioProblem, make
 from poser.core.cache import Stamp, sound_key
 from poser.core.checks import CheckStatus, check_status
 from poser.core.jsonvalue import Json
-from poser.core.names import Identifier, SongId, Suffix, TrackName
+from poser.core.names import Identifier, NodeName, SongId, Suffix, TrackName
 from poser.core.performance import Control, NoteOff, NoteOn, Performance
 from poser.core.report import (
     BANDS,
@@ -87,6 +87,16 @@ def test_track_name() -> None:
     assert TrackName("lead_1-a") == "lead_1-a"
     for value in ("", "a b", "../x", "a/b", "a.b", True, 1):
         _bad(TrackName, value)
+
+
+def test_node_name() -> None:
+    """A node's name may carry dots, as a compiled chain instance's does; a track's may not."""
+    for value in ("lead", "lead.drive", "lead.drive.2"):
+        assert NodeName(value) == value
+    assert isinstance(NodeName("lead.drive"), NodeName)
+    assert isinstance(TrackName("lead"), NodeName)
+    for value in ("", "a b", "../x", "a/b", "a[b]", ".lead", "lead.", "lead..drive", True, 1):
+        _bad(NodeName, value)
 
 
 def test_identifier() -> None:
@@ -472,6 +482,8 @@ CHECK_STATUS_TABLE = [
     (RenderFailureStatus.LOAD_FAILED, CheckStatus.LOAD_FAILED),
     (RenderFailureStatus.CRASHED, CheckStatus.CRASHED),
     (RenderFailureStatus.TIMED_OUT, CheckStatus.TIMED_OUT),
+    # A check has no upstream, so the status cannot occur there; it maps to a crashed check.
+    (RenderFailureStatus.UPSTREAM_FAILED, CheckStatus.CRASHED),
 ]
 
 

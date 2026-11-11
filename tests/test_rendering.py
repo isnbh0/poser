@@ -2,13 +2,14 @@
 
 import dataclasses
 import os
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 import numpy as np
 import pytest
 from fakes import (
     BadOutput,
+    FakeEffect,
     FakeInstrument,
     FakeMeasurer,
     FakeMixer,
@@ -24,10 +25,11 @@ from poser.core import cache, rendering
 from poser.core.analysis import AnalysisTools, analyze_song
 from poser.core.cache import Stamp, StampProblem, node_key, sound_key
 from poser.core.graph import Node
-from poser.core.names import Identifier, SongId, TrackName
+from poser.core.names import Identifier, NodeName, SongId, TrackName
 from poser.core.performance import perform
-from poser.core.ports import Instrument, RenderFailure, SongBusyError, SoundFailure
+from poser.core.ports import Effect, Instrument, RenderFailure, SongBusyError, SoundFailure
 from poser.core.rendering import ResolvedNode, TrackResult, render_song, resolve_node
+from poser.core.report import AnalysisStatus, NodeReport, Report
 from poser.core.song import Note, Song, Track
 from poser.core.statuses import RenderFailureStatus, SoundFailureStatus, StemStatus
 
@@ -50,8 +52,21 @@ def make_instrument(**sounds: FakeSound) -> FakeInstrument:
 class Setup:
     """A fake instrument, store, and audio files, and a way to render a song on them."""
 
-    def __init__(self, tmp_path: Path, instrument: FakeInstrument | None = None) -> None:
+    def __init__(
+        self,
+        tmp_path: Path,
+        instrument: FakeInstrument | None = None,
+        effect: FakeEffect | None = None,
+        effects: FakeEffect | Sequence[FakeEffect] | None = None,
+    ) -> None:
         self.instrument = instrument or make_instrument()
+        self.effect = effect
+        if effects is None:
+            self.extra: tuple[FakeEffect, ...] = ()
+        elif isinstance(effects, FakeEffect):
+            self.extra = (effects,)
+        else:
+            self.extra = tuple(effects)
         self.renders = FakeRenderStore(tmp_path / "renders")
         self.store: FakeSongStore = self.renders.song(SONG_ID)
         self.audio_files = NpyAudioFiles()
@@ -60,6 +75,14 @@ class Setup:
     def instruments(self) -> Mapping[Identifier, Instrument]:
         return {self.instrument.name: self.instrument}
 
+    @property
+    def effects(self) -> Mapping[Identifier, Effect]:
+        """The configured effects, with `effect` replacing its own entry, so a test can swap it."""
+        configured = {each.name: each for each in self.extra}
+        if self.effect is not None:
+            configured[self.effect.name] = self.effect
+        return configured
+
     def render(self, song: Song, *, force: bool = False) -> list[TrackResult]:
         return render_song(
             song,
@@ -67,8 +90,23 @@ class Setup:
             SONG_ID,
             self.instruments,
             self.audio_files,
+            effects=self.effects,
             timeout_s=10.0,
             force=force,
+        )
+
+    def analyze(self, song: Song) -> Report:
+        tools = AnalysisTools(FakeMixer(), FakeMeasurer(), FakeVisualizer())
+        return analyze_song(
+            song,
+            "demo",
+            self.renders,
+            SONG_ID,
+            self.instruments,
+            self.audio_files,
+            FakeRecordWriter(),
+            tools,
+            effects=self.effects,
         )
 
 
@@ -82,7 +120,7 @@ def same(seen: list[object], expected: list[object]) -> bool:
     return len(seen) == len(expected) and all(a is b for a, b in zip(seen, expected, strict=True))
 
 
-def by_name(results: list[TrackResult]) -> dict[TrackName, TrackResult]:
+def by_name(results: list[TrackResult]) -> dict[NodeName, TrackResult]:
     """One render's results keyed by the node's name, so tests need no render order."""
     return {result.track: result for result in results}
 
@@ -488,3 +526,197 @@ def test_render_order_is_topological_and_report_order_is_song_order(tmp_path: Pa
     assert [node.name for node in report.nodes] == [node.name for node in graph.nodes]
     assert [node.name for node in report.nodes] == ["lead", "bass"]
     assert store.stem_path(BASS).is_file()
+
+
+# Effect chains (RC1, C6, C8, C9, C10, C18): wired rendering, exercised headlessly.
+
+
+DRIVE = NodeName("lead.drive")
+
+
+def chain_song(*, gain: float = 0.0, notes: tuple[Note, ...] = NOTE) -> Song:
+    """A lead through one drive, and an untouched bass."""
+    return Song(
+        120,
+        (
+            Track("lead", "fake", notes, gain=gain, effects=("drive",)),
+            Track("bass", "fake:pad", NOTE),
+        ),
+    )
+
+
+def chain_setup(tmp_path: Path, **effect: object) -> Setup:
+    return Setup(tmp_path, effect=FakeEffect("drive", **effect))  # ty: ignore[invalid-argument-type]
+
+
+def lead_frames(song: Song) -> int:
+    return perform(song, song.tracks[0]).samples
+
+
+def by_node(report: Report) -> dict[NodeName, NodeReport]:
+    return {NodeName(node.name): node for node in report.nodes}
+
+
+def test_a_chain_renders_track_then_effect_and_the_mix_sums_the_leaf(tmp_path: Path) -> None:
+    drive_effect = FakeEffect("drive", amount=2.0)
+    setup = Setup(tmp_path, effect=drive_effect)
+    song = chain_song(gain=-6.0)
+
+    first = by_name(setup.render(song))
+    lead, drive = first[LEAD], first[DRIVE]
+
+    assert same(statuses([lead, drive]), [StemStatus.RENDERED] * 2)
+    assert not lead.cached
+    assert not drive.cached
+    stem = setup.audio_files.read(setup.store.stem_path(DRIVE), lead_frames(song))
+    # The effect's output is the track's stem, scaled by the recipe's amount.
+    assert np.allclose(stem.samples, 1.0)
+    again = by_name(setup.render(song))
+    assert [result.cached for result in again.values()] == [True, True, True]
+    assert len(setup.instrument.renders) == 2  # The bass, and the lead once.
+    assert len(drive_effect.renders) == 1
+
+    report = setup.analyze(song)
+    nodes = by_node(report)
+    assert nodes[DRIVE].upstream == ("lead",)
+    assert nodes[DRIVE].kind == "effect"
+    assert nodes[DRIVE].gain_db == -6.0  # The fader compiled onto the chain's leaf.
+    mix = setup.audio_files.read(setup.store.mix_path(), lead_frames(song))
+    # The mix sums the leaf, at the leaf's gain_db, and never the track's dry stem.
+    assert np.allclose(mix.samples, 0.5 * 2.0 * 10 ** (-6 / 20) + 0.2)
+
+
+def test_a_gain_edit_renders_nothing_and_reaches_only_the_mix(tmp_path: Path) -> None:
+    drive_effect = FakeEffect("drive")
+    setup = Setup(tmp_path, effect=drive_effect)
+    setup.render(chain_song())
+
+    results = by_name(setup.render(chain_song(gain=-6.0)))
+
+    assert [result.cached for result in results.values()] == [True, True, True]
+    assert len(drive_effect.renders) == 1
+    report = setup.analyze(chain_song(gain=-6.0))
+    assert report.mix is not None
+    mix = setup.audio_files.read(setup.store.mix_path(), lead_frames(chain_song()))
+    assert np.allclose(mix.samples, 0.5 * 2.0 * 10 ** (-6 / 20) + 0.2)
+
+
+def test_changing_the_effect_re_renders_exactly_the_effect_node(tmp_path: Path) -> None:
+    setup = chain_setup(tmp_path)
+    setup.render(chain_song())
+    setup.effect = FakeEffect("drive", identity="drive, edited", amount=3.0)
+
+    results = by_name(setup.render(chain_song()))
+
+    assert [results[LEAD].cached, results[DRIVE].cached] == [True, False]
+    assert len(setup.instrument.renders) == 2  # No new instrument render at all.
+    stem = setup.audio_files.read(setup.store.stem_path(DRIVE), lead_frames(chain_song()))
+    assert np.allclose(stem.samples, 1.5)
+
+
+def test_changing_the_track_re_renders_its_chain(tmp_path: Path) -> None:
+    """C9's closure: an edit upstream moves every node downstream of it."""
+    setup = chain_setup(tmp_path)
+    setup.render(chain_song())
+
+    # A note inside the old horizon, so the song's length does not change every key.
+    results = by_name(setup.render(chain_song(notes=(*NOTE, Note(0.5, 64, 0.5, 90)))))
+
+    assert [results[LEAD].cached, results[DRIVE].cached, results[BASS].cached] == [
+        False,
+        False,
+        True,
+    ]
+
+
+def test_a_changed_sound_identity_re_renders_the_chain(tmp_path: Path) -> None:
+    """C2's forward contract on a chain: the recipe closure sees the sound change."""
+    setup = chain_setup(tmp_path)
+    setup.render(chain_song())
+    setup.instrument = FakeInstrument(
+        "fake",
+        {None: FakeSound("the default, edited", "edited"), "pad": FakeSound("a pad", "pad", 0.2)},
+    )
+
+    results = by_name(setup.render(chain_song()))
+
+    assert [results[LEAD].cached, results[DRIVE].cached, results[BASS].cached] == [
+        False,
+        False,
+        True,
+    ]
+
+
+def test_an_effect_that_fails_leaves_its_downstream_upstream_failed(tmp_path: Path) -> None:
+    crashed = RenderFailure(RenderFailureStatus.CRASHED, "the effect died")
+    setup = Setup(
+        tmp_path,
+        effects=(
+            FakeEffect("drive", render_failure=crashed),
+            FakeEffect("crush", identity="crush"),
+        ),
+    )
+    song = Song(
+        120,
+        (Track("lead", "fake", NOTE, effects=("drive", "crush")), Track("bass", "fake:pad", NOTE)),
+    )
+    crush = NodeName("lead.crush")
+
+    results = by_name(setup.render(song))
+
+    assert results[LEAD].status is StemStatus.RENDERED
+    assert results[DRIVE].status is RenderFailureStatus.CRASHED
+    assert results[crush].status is RenderFailureStatus.UPSTREAM_FAILED
+    detail = results[crush].detail
+    assert detail is not None
+    assert "lead.drive" in detail
+    assert not setup.store.stem_path(crush).exists()
+    assert setup.store.read_stamp(crush) is StampProblem.MISSING
+
+    report = setup.analyze(song)
+    nodes = by_node(report)
+    # The failed node and the node it fed left no stems; the track itself is analyzed.
+    assert nodes[LEAD].status is AnalysisStatus.ANALYZED
+    assert nodes[DRIVE].status is AnalysisStatus.MISSING_STEM
+    assert nodes[crush].status is AnalysisStatus.MISSING_STEM
+
+
+def test_a_failed_track_leaves_its_chain_upstream_failed(tmp_path: Path) -> None:
+    failure = RenderFailure(RenderFailureStatus.CRASHED, "the worker failed")
+    setup = Setup(
+        tmp_path,
+        make_instrument(pad=FakeSound("a pad", "pad", 0.2, render_failure=failure)),
+        FakeEffect("drive"),
+    )
+    song = Song(120, (Track("lead", "fake:pad", NOTE, effects=("drive",)),))
+
+    results = by_name(setup.render(song))
+
+    assert results[LEAD].status is RenderFailureStatus.CRASHED
+    assert results[DRIVE].status is RenderFailureStatus.UPSTREAM_FAILED
+    detail = results[DRIVE].detail
+    assert detail is not None
+    assert "lead" in detail
+
+    report = setup.analyze(song)
+    nodes = by_node(report)
+    assert nodes[LEAD].status is AnalysisStatus.MISSING_STEM
+    assert nodes[DRIVE].status is AnalysisStatus.MISSING_STEM
+    assert report.mix is None
+
+
+def test_an_effect_refusing_an_instrument_reports_load_failed(tmp_path: Path) -> None:
+    """C8's role-aware refusal, at the fake level; the real one lives in the worker."""
+    setup = chain_setup(
+        tmp_path,
+        render_failure=RenderFailure(RenderFailureStatus.LOAD_FAILED, "'x.vst3' is not an effect"),
+    )
+    song = chain_song()
+
+    results = by_name(setup.render(song))
+
+    assert results[LEAD].status is StemStatus.RENDERED
+    assert results[DRIVE].status is RenderFailureStatus.LOAD_FAILED
+    detail = results[DRIVE].detail
+    assert detail is not None
+    assert "is not an effect" in detail

@@ -69,6 +69,34 @@ def instrument(name, options, context):
     )
 
 
+class MetaEffect:
+    def __init__(self, name, adapter_id, adapter_version):
+        self._id = adapter_id
+        self._version = adapter_version
+
+    @property
+    def adapter_id(self):
+        return self._id
+
+    @property
+    def adapter_version(self):
+        return self._version
+
+    def resolve(self, recipe):
+        from poser.core.jsonvalue import Json
+        from poser.core.ports import ResolvedEffect
+
+        return ResolvedEffect(recipe, "fake effect", Json.of({}))
+
+    def render(self, request, timeout_s):
+        return None
+
+
+def effect(name, options, context):
+    SEEN.append(("effect", (name, options, context)))
+    return MetaEffect(name, options.get("adapter_id"), options.get("adapter_version"))
+
+
 def mixer(options, context):
     SEEN.append(("mixer", (options, context)))
     return FakeMixer()
@@ -123,6 +151,10 @@ def plain_name_section(options, context):
 
 
 def not_a_port(options, context):
+    return object()
+
+
+def not_an_effect(name, options, context):
     return object()
 
 
@@ -242,6 +274,35 @@ CONFIG_ERRORS = {
         "adapters.sections[0]",
         "'probe' is not an import path module:attribute",
     ),
+    "effects-not-a-table": ("effects = 3\n" + SERUM, "effects", "must be a table of effects"),
+    "effect-bad-name": (
+        SERUM + '[effects."bad name"]\nadapter = "pedalboard"\nbuiltin = "Gain"\n',
+        "effects.bad name",
+        "does not match",
+    ),
+    "effect-name-differs-in-case": (
+        SERUM
+        + '[effects.Drive]\nadapter = "pedalboard"\nbuiltin = "Gain"\n'
+        + '[effects.drive]\nadapter = "pedalboard"\nbuiltin = "Gain"\n',
+        "effects.drive",
+        "differs only in case from 'Drive'",
+    ),
+    "effect-not-a-table": (SERUM + "[effects]\ndrive = 3\n", "effects.drive", "a table"),
+    "no-effect-adapter": (
+        SERUM + "[effects.drive]\nbuiltin = 'Gain'\n",
+        "effects.drive.adapter",
+        "string",
+    ),
+    "unknown-effect-adapter": (
+        SERUM + '[effects.drive]\nadapter = "loudness"\n',
+        "effects.drive.adapter",
+        "'loudness' is not a built-in ('pedalboard') or an import path",
+    ),
+    "effect-option-not-json": (
+        SERUM + '[effects.drive]\nadapter = "pedalboard"\nbuiltin = "Gain"\nwhen = 1979-05-27\n',
+        "effects.drive.when",
+        "not a JSON",
+    ),
 }
 
 
@@ -280,6 +341,7 @@ def test_building_every_built_in_adapter_starts_no_process_and_writes_no_file(
     monkeypatch.setattr(subprocess, "run", refuse)
 
     composition.instruments()
+    composition.effects()
     composition.song_formats()
     composition.record_writer()
     composition.render_store()
@@ -509,6 +571,61 @@ def test_a_pedalboard_option_error_names_the_key(tmp_path: Path) -> None:
     )
 
 
+def test_an_empty_effects_table_is_valid_and_builds_nothing(tmp_path: Path) -> None:
+    composition = compose(tmp_path, SERUM + "[effects]\n")
+
+    assert composition.config.effects == ()
+    assert composition.effects() == {}
+
+
+def test_an_effect_factory_error_names_the_file_and_the_effect(tmp_path: Path) -> None:
+    composition = compose(tmp_path, SERUM + '[effects.drive]\nadapter = "pedalboard"\n')
+
+    with pytest.raises(ConfigError) as error:
+        composition.effects()
+
+    assert str(error.value) == (
+        f"{tmp_path / 'poser.toml'}: effects.drive: path must be non-empty text"
+    )
+
+
+def test_an_effect_factory_that_cannot_build_the_port_is_a_config_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = adapters_module(tmp_path, monkeypatch)
+    composition = compose(
+        tmp_path,
+        SERUM + '[effects.drive]\nadapter = "{module}:not_an_effect"\n',
+        module.__name__,
+    )
+
+    with pytest.raises(ConfigError) as error:
+        composition.effects()
+
+    assert str(error.value) == (
+        f"{tmp_path / 'poser.toml'}: effects.drive: "
+        f"'{module.__name__}:not_an_effect' made a object, which is not a Effect"
+    )
+
+
+def test_effects_build_with_their_options_and_metadata_is_checked(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = adapters_module(tmp_path, monkeypatch)
+    composition = compose(
+        tmp_path,
+        SERUM + '[effects.drive]\nadapter = "{module}:effect"\nadapter_id = "fake"\n',
+        module.__name__,
+    )
+
+    with pytest.raises(ConfigError) as error:
+        composition.effects()
+
+    assert str(error.value) == (
+        f"{tmp_path / 'poser.toml'}: effects.drive: adapter_id 'fake' is not an Identifier"
+    )
+
+
 def test_load_imports_no_adapter_module(tmp_path: Path) -> None:
     path = write_config(tmp_path, SERUM)
     script = (
@@ -536,6 +653,7 @@ def test_each_method_builds_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     composition = compose(tmp_path, text, module.__name__)
 
     assert composition.instruments() is composition.instruments()
+    assert composition.effects() is composition.effects()
     assert composition.mixer() is composition.mixer()
     composition.analysis_tools()
     composition.guide_parts()

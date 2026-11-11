@@ -3,12 +3,12 @@
 A song's directory is `<renders dir>/<song id>`, and it holds:
 
 - `.lock`, held for a whole run;
-- `stems/<track><stem>`, each track's stem;
-- `stamps/<track>.json`, each stem's render stamp, with the stem file's size and modification
+- `stems/<node><stem>`, each node's stem;
+- `stamps/<node>.json`, each stem's render stamp, with the stem file's size and modification
   time when it was stamped;
-- `latest/`, the latest results: `report.json`, `mix<stem>`, and `images/<track or [mix]><image>`;
+- `latest/`, the latest results: `report.json`, `mix<stem>`, and `images/<node or [mix]><image>`;
 - `history/<run>/`, the records: `song<record>`, `report.json`, and
-  `images/<track or [mix]><image>`.
+  `images/<node or [mix]><image>`.
 
 Every run takes the lock, so every song directory that holds anything holds `.lock`, and
 `song` refuses an id whose directory would be inside another song's, or hold one. `lock` checks
@@ -29,7 +29,7 @@ from pathlib import Path
 from poser.adapters.loading import refuse_options
 from poser.core.cache import Stamp, StampProblem
 from poser.core.jsonvalue import JsonValue, json_object
-from poser.core.names import Identifier, SongId, Suffix, TrackName
+from poser.core.names import Identifier, NodeName, SongId, Suffix
 from poser.core.ports import AdapterContext, Record, SongBusyError
 from poser.core.song import is_int, is_number
 from poser.core.statuses import StemStatus
@@ -43,7 +43,7 @@ IMAGES_DIR = "images"
 HISTORY_DIR = "history"
 REPORT_NAME = "report.json"
 MIX_NAME = "mix"
-MIX_IMAGE = "[mix]"  # Brackets cannot appear in a track name.
+MIX_IMAGE = "[mix]"  # Brackets cannot appear in a node name.
 SONG_NAME = "song"
 PREVIEWS_DIR = ".sound-previews"  # The leading dot keeps it apart from every song's directory.
 STAMP_KEYS = frozenset(
@@ -56,18 +56,18 @@ GUIDE = """\
 Each song's results are under `renders/<song path>/`, such as `renders/songs/demo.yaml/` for
 `songs/demo.yaml`:
 
-- `stems/`: each track's rendered stem, as `<track>{stem}`. A later render reuses a stem whose
-  track and sound are unchanged.
-- `latest/`: the latest analysis: `report.json`, the mix as `mix{stem}`, and an image per track
-  and one for the mix (`[mix]`) in `latest/images/`. It exists only when every track analyzed.
+- `stems/`: each node's rendered stem, as `<node>{stem}`. A later render reuses a stem whose
+  node and sound are unchanged.
+- `latest/`: the latest analysis: `report.json`, the mix as `mix{stem}`, and an image per node
+  and one for the mix (`[mix]`) in `latest/images/`. It exists only when every node analyzed.
 - `history/<n>/`: one record per analysis, numbered from 1: the song as it was analyzed (`song`
   with the record's suffix, such as `song.yaml`), that run's `report.json`, and its images in
   the record's `images/` directory.
 """
 
 
-def _image_name(track: TrackName | None, suffix: Suffix) -> str:
-    return f"{MIX_IMAGE if track is None else track}{suffix}"
+def _image_name(node: NodeName | None, suffix: Suffix) -> str:
+    return f"{MIX_IMAGE if node is None else node}{suffix}"
 
 
 def _write_atomic(path: Path, text: str) -> None:
@@ -187,19 +187,19 @@ class FileSongStore:
         if any(self._directory.rglob(LOCK_NAME)):
             raise ValueError(_holding_another_song(self._song_id))
 
-    def _stem_file(self, track: TrackName) -> Path:
-        return self._directory / STEMS_DIR / f"{track}{self._stem_suffix}"
+    def _stem_file(self, node: NodeName) -> Path:
+        return self._directory / STEMS_DIR / f"{node}{self._stem_suffix}"
 
-    def stem_path(self, track: TrackName) -> Path:
+    def stem_path(self, node: NodeName) -> Path:
         self._dir(STEMS_DIR)
-        return self._stem_file(track)
+        return self._stem_file(node)
 
-    def _stamp_path(self, track: TrackName) -> Path:
-        return self._directory / STAMPS_DIR / f"{track}.json"
+    def _stamp_path(self, node: NodeName) -> Path:
+        return self._directory / STAMPS_DIR / f"{node}.json"
 
-    def read_stamp(self, track: TrackName) -> Stamp | StampProblem:
+    def read_stamp(self, node: NodeName) -> Stamp | StampProblem:
         try:
-            text = self._stamp_path(track).read_text(encoding="utf-8")
+            text = self._stamp_path(node).read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
             return StampProblem.MISSING
         parsed = _parse_stamp(text)
@@ -207,15 +207,15 @@ class FileSongStore:
             return StampProblem.MISSING
         stamp, size, mtime = parsed
         try:
-            info = self._stem_file(track).stat()
+            info = self._stem_file(node).stat()
         except OSError:
             return StampProblem.CHANGED
         if (info.st_size, info.st_mtime_ns) != (size, mtime):
             return StampProblem.CHANGED
         return stamp
 
-    def write_stamp(self, track: TrackName, stamp: Stamp) -> None:
-        info = self.stem_path(track).stat()
+    def write_stamp(self, node: NodeName, stamp: Stamp) -> None:
+        info = self.stem_path(node).stat()
         fields = {
             "track_key": stamp.track_key,
             "sound_key": stamp.sound_key,
@@ -225,17 +225,17 @@ class FileSongStore:
             "stem_mtime_ns": info.st_mtime_ns,
         }
         self._dir(STAMPS_DIR)
-        _write_atomic(self._stamp_path(track), json.dumps(fields, allow_nan=False) + "\n")
+        _write_atomic(self._stamp_path(node), json.dumps(fields, allow_nan=False) + "\n")
 
-    def discard(self, track: TrackName) -> None:
-        self._stamp_path(track).unlink(missing_ok=True)
-        self._stem_file(track).unlink(missing_ok=True)
+    def discard(self, node: NodeName) -> None:
+        self._stamp_path(node).unlink(missing_ok=True)
+        self._stem_file(node).unlink(missing_ok=True)
 
     def clear_latest(self) -> None:
         shutil.rmtree(self._directory / LATEST_DIR, ignore_errors=True)
 
-    def image_path(self, track: TrackName | None, suffix: Suffix) -> Path:
-        return self._dir(LATEST_DIR, IMAGES_DIR) / _image_name(track, suffix)
+    def image_path(self, node: NodeName | None, suffix: Suffix) -> Path:
+        return self._dir(LATEST_DIR, IMAGES_DIR) / _image_name(node, suffix)
 
     def mix_path(self) -> Path:
         return self._dir(LATEST_DIR) / f"{MIX_NAME}{self._stem_suffix}"
@@ -253,11 +253,11 @@ class FileSongStore:
         _write_atomic(record / f"{SONG_NAME}{suffix}", song_text)
         return Record(run, record)
 
-    def keep_image(self, record: Record, track: TrackName | None, suffix: Suffix) -> Path:
+    def keep_image(self, record: Record, node: NodeName | None, suffix: Suffix) -> Path:
         images = record.path / IMAGES_DIR
         images.mkdir(exist_ok=True)
-        target = images / _image_name(track, suffix)
-        shutil.copyfile(self.image_path(track, suffix), target)
+        target = images / _image_name(node, suffix)
+        shutil.copyfile(self.image_path(node, suffix), target)
         return target
 
     def finish_record(self, record: Record, report_text: str) -> None:

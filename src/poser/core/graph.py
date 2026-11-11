@@ -8,13 +8,12 @@ from typing import Literal
 from poser.core.rules import (
     GAIN_MAX_DB,
     GAIN_MIN_DB,
-    TRACK_NAME,
+    NODE_NAME,
     ControlChange,
     Note,
     _duplicate_name_problems,
     _length_problems,
     _song_field_problems,
-    _track_field_problems,
     _track_problems,
     is_int,
     is_number,
@@ -30,10 +29,12 @@ WIRE_KINDS: tuple[WireKind, ...] = ("audio", "control")
 MODES: tuple[Mode, ...] = ("acyclic", "feedback")
 
 # Which incoming wires each kind of node accepts, per wire kind: the most wires of that kind the
-# node takes, or None for any number. P3 to P5 widen this table; the acceptance rule never changes.
+# node takes, or None for any number. An effect node takes any number of audio wires this phase,
+# including none at all (it then renders the silence it is fed); P4 to P5 widen this table further;
+# the acceptance rule never changes.
 ACCEPTS_WIRES: dict[NodeKind, dict[WireKind, int | None]] = {
     "track": {"audio": 0, "control": 0},
-    "effect": {"audio": 0, "control": 0},
+    "effect": {"audio": None, "control": 0},
     "delay": {"audio": 0, "control": 0},
 }
 
@@ -84,9 +85,10 @@ class Wire:
         problems: list[str] = []
         for field in ("from_name", "to_name"):
             value = getattr(self, field)
-            if not (isinstance(value, str) and TRACK_NAME.fullmatch(value)):
+            if not (isinstance(value, str) and NODE_NAME.fullmatch(value)):
                 problems.append(
-                    f"Wire.{field}: must contain only letters, digits, '_', and '-', got {value!r}"
+                    f"Wire.{field}: must contain only letters, digits, '_', '-', and '.', "
+                    f"got {value!r}"
                 )
         if self.kind not in WIRE_KINDS:
             problems.append(f"Wire.kind: must be audio or control, got {self.kind!r}")
@@ -162,7 +164,13 @@ def _gain_problems(gain_db: object, where: str) -> list[str]:
 def _node_problems(node: Node) -> list[str]:
     """Check a node's name, fader, and the payload its kind carries."""
     # A node's name becomes a file name under stems/ and images/, where `[mix]` names the mix.
-    problems = _track_field_problems({"name": node.name}, "Node")
+    # Chain nodes carry their track's name and recipe with dots between, so dots are legal here
+    # where a track's own name forbids them.
+    problems: list[str] = []
+    if not (isinstance(node.name, str) and NODE_NAME.fullmatch(node.name)):
+        problems.append(
+            f"Node.name: must contain only letters, digits, '_', '-', and '.', got {node.name!r}"
+        )
     if node.kind not in NODE_KINDS:
         problems.append(f"Node.kind: must be track, effect, or delay, got {node.kind!r}")
     problems += _gain_problems(node.gain_db, "Node.gain_db")

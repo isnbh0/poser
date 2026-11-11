@@ -23,6 +23,7 @@ class RenderFailureStatus(StrEnum):
     LOAD_FAILED = "load_failed"
     CRASHED = "crashed"
     TIMED_OUT = "timed_out"
+    UPSTREAM_FAILED = "upstream_failed"
 
 
 type RenderStatus = StemStatus | SoundFailureStatus | RenderFailureStatus

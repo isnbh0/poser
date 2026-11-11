@@ -583,3 +583,117 @@ def test_song_graph_compiles_and_is_frozen() -> None:
         node.gain_db = 3.0  # ty: ignore[invalid-assignment]
     with pytest.raises(FrozenInstanceError):
         graph.nodes = ()  # ty: ignore[invalid-assignment]
+
+
+# Effect chains (C6, C7, C10): a track's `effects` compiles to named chain nodes.
+
+
+def chain_song(*effects: str, name: str = "bass", gain: float = -6.0) -> Song:
+    return Song(120, (make_track(name=name, gain=gain, effects=effects),))
+
+
+def test_effects_round_trip_through_song_to_data_and_parse() -> None:
+    song = chain_song("drive", "crush")
+
+    data = song_to_data(song)
+    parsed = parse_song(data)
+
+    assert parsed == song
+    assert data["tracks"][0]["effects"] == ["drive", "crush"]
+    assert list(data["tracks"][0]) == ["name", "sound", "effects", "gain", "notes"]
+
+
+def test_empty_or_absent_effects_mean_the_same_song() -> None:
+    assert make_track().effects == ()
+    data = valid_song()
+    first_track(data)["effects"] = []
+    parsed = parse_song(data)
+    assert parsed.tracks[0].effects == ()
+    assert parsed == parse_song(valid_song())
+    assert "effects" not in song_to_data(parsed)["tracks"][0]
+
+
+@pytest.mark.parametrize(
+    ("change", "message"),
+    [
+        (lambda t: t.update(effects="drive"), "effects: must be a list of effect recipe names"),
+        (lambda t: t.update(effects=[1]), "effects[0]: must be non-empty text, got 1"),
+        (lambda t: t.update(effects=[""]), "effects[0]: must be non-empty text, got ''"),
+    ],
+    ids=["not-a-list", "number", "blank"],
+)
+def test_bad_effects_are_reported_with_other_problems(
+    change: Callable[[dict[str, object]], object], message: str
+) -> None:
+    song = valid_song()
+    change(first_track(song))
+    set_bpm(song, -1)
+
+    with pytest.raises(SongError) as raised:
+        parse_song(song)
+
+    assert any(message in p for p in raised.value.problems)
+    assert any(p.startswith("bpm") for p in raised.value.problems)
+
+
+def test_an_unknown_recipe_name_is_a_compile_problem_naming_it() -> None:
+    with pytest.raises(SongError) as raised:
+        chain_song("drive").graph(("crush",))
+
+    assert raised.value.problems == ["tracks[0]: no effect recipe 'drive' in poser.toml"]
+    # Without the configured names, every recipe is unknown, as a caller without the mapping.
+    with pytest.raises(SongError):
+        chain_song("drive").graph()
+
+
+def test_a_chain_compiles_in_series_with_the_fader_on_its_leaf() -> None:
+    graph = chain_song("drive", "crush").graph(("drive", "crush"))
+
+    assert [node.name for node in graph.nodes] == ["bass", "bass.drive", "bass.crush"]
+    assert [node.kind for node in graph.nodes] == ["track", "effect", "effect"]
+    assert [node.gain_db for node in graph.nodes] == [0.0, 0.0, -6.0]
+    assert [(w.from_name, w.to_name, w.kind, w.gain_db) for w in graph.wires] == [
+        ("bass", "bass.drive", "audio", 0.0),
+        ("bass.drive", "bass.crush", "audio", 0.0),
+    ]
+    (track_node, drive, crush) = graph.nodes
+    assert track_node.sound == "serum"
+    assert (drive.effect, crush.effect) == ("drive", "crush")
+
+
+def test_a_track_without_effects_compiles_as_before() -> None:
+    song = chain_song()
+    graph = song.graph(("drive",))
+
+    assert [node.name for node in graph.nodes] == ["bass"]
+    assert graph.wires == ()
+    assert graph.nodes[0].gain_db == -6.0
+
+
+def test_repeated_recipe_instances_take_ordinals() -> None:
+    graph = chain_song("drive", "crush", "drive").graph(("drive", "crush"))
+
+    assert [node.name for node in graph.nodes] == [
+        "bass",
+        "bass.drive",
+        "bass.crush",
+        "bass.drive.2",
+    ]
+    assert [(w.from_name, w.to_name) for w in graph.wires] == [
+        ("bass", "bass.drive"),
+        ("bass.drive", "bass.crush"),
+        ("bass.crush", "bass.drive.2"),
+    ]
+
+
+def test_two_tracks_chains_stay_distinct_and_the_compile_is_deterministic() -> None:
+    song = Song(
+        120,
+        (make_track(name="a", effects=("drive",)), make_track(name="b", effects=("drive",))),
+    )
+
+    graph = song.graph(("drive",))
+    again = song.graph(("drive",))
+
+    assert [node.name for node in graph.nodes] == ["a", "a.drive", "b", "b.drive"]
+    assert graph == again

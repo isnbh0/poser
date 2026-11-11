@@ -7,6 +7,7 @@ import sys
 from importlib import metadata
 from pathlib import Path
 
+import numpy as np
 import pytest
 from contracts import check_instrument_contract
 from helpers import (
@@ -25,7 +26,7 @@ from poser.adapters.pedalboard.state import component_state
 from poser.core.audio import SAMPLE_RATE, SILENCE_DBFS, Audio, measure_peak_dbfs, read_raw_audio
 from poser.core.names import Identifier
 from poser.core.performance import NoteOff, NoteOn, Performance, perform
-from poser.core.ports import RenderRequest, ResolvedSound
+from poser.core.ports import EffectRenderRequest, RenderRequest, ResolvedEffect, ResolvedSound
 from poser.core.song import Note, Song, Track
 from poser.core.sounds import SoundRef
 
@@ -126,3 +127,22 @@ def test_a_long_release_preset_is_silent_until_its_note(tmp_path: Path, preset: 
     assert after > SILENCE_DBFS, (
         f"{preset} is silent after its note at {after:.1f} dBFS ({versions})"
     )
+
+
+def test_each_effect_renders_the_same_frames_and_repeats(tmp_path: Path) -> None:
+    """A configured effect renders in = out frame counts, and two renders agree byte for byte."""
+    composition = real_composition(tmp_path)
+    effects = composition.effects()
+    if not effects:
+        pytest.skip("the root poser.toml names no [effects] recipes")
+    audio_in = Audio(np.full((2, SAMPLE_RATE), 0.5, dtype=np.float32))
+    for name, effect in effects.items():
+        resolved = effect.resolve(name)
+        assert isinstance(resolved, ResolvedEffect), resolved
+        first, second = tmp_path / f"{name}-1.npy", tmp_path / f"{name}-2.npy"
+        failure = effect.render(EffectRenderRequest(audio_in, resolved, first), 120)
+        assert failure is None, f"{name}: {failure}"
+        rendered = read_raw_audio(first, SAMPLE_RATE)
+        assert isinstance(rendered, Audio), rendered
+        assert effect.render(EffectRenderRequest(audio_in, resolved, second), 120) is None
+        assert first.read_bytes() == second.read_bytes()

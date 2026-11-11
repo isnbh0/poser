@@ -26,6 +26,7 @@ within one hour: its last note end or controller change falls at most 3600 secon
 | `tracks` | song | list of tracks | names unique |
 | `name` | track | text | letters, digits, `_`, `-` |
 | `sound` | track | text | a name from `uv run list-sounds` |
+| `effects` | track, optional | list of recipe names | names from `poser.toml` `[effects]` |
 | `notes` | track | list of notes | |
 | `gain` | track, optional | decibels | -60 to 12 |
 | `cc` | track, optional | list of controller changes, in time order | |
@@ -39,6 +40,11 @@ within one hour: its last note end or controller change falls at most 3600 secon
 
 A `step` change holds its value until the next change to that controller. A `linear` change ramps
 to the next change to the same controller, so it needs a later one.
+
+A track with `effects` runs its sound through those recipes in order, as one chain per track: the
+first recipe hears the track, the next hears the first, and so on. A chain's nodes are named
+`<track>.<effect>`, with a repeat taking an ordinal (`bass.drive.2`). The track's `gain` still
+fades the chain's end, so the fader works as before.
 
 A short song script, showing the form rather than a finished piece:
 
@@ -96,10 +102,11 @@ names. Choose sounds by the role each track plays. This workspace's instruments 
 
 ## Rendering
 
-`uv run render-song songs/<name>.py` writes one stem per track and prints each stem's path. Stems
-are cached by their inputs, so only changed tracks render, and a gain-only edit renders nothing.
-Every track's inputs include the song's tempo and total length, so lengthening the song re-renders
-every track. `--force` re-renders every track. Add `--json` for a machine-readable report.
+`uv run render-song songs/<name>.py` writes one stem per node and prints each stem's path. Stems
+are cached by their inputs, so only changed nodes render, and a gain-only edit renders nothing.
+Every node's inputs include the song's tempo and total length, so lengthening the song re-renders
+every node. Changing a track re-renders its chain. `--force` re-renders every node. Add `--json`
+for a machine-readable report.
 
 Exit codes, for both `render-song` and `analyze-song`:
 
@@ -120,8 +127,8 @@ run's report and images. Report fields whose meaning is not obvious from their n
 |---|---|
 | `run` | This analysis's record number |
 | `song_sha256` | Digest of the song version analyzed; equal digests mean the same song |
-| `node_key` | Digest of the node's render inputs: everything but `gain`, including the song's length and the sound it resolved to |
-| `sound_key` | Digest of the sound itself; it changes when a preset or saved sound file changes |
+| `node_key` | Digest of the node's render inputs: everything but `gain`, including the song's length, the sound or recipe it resolved to, and the keys of the stems fed into it |
+| `sound_key` | Digest of the sound or recipe itself; it changes when a preset, saved sound file, or effect parameters change |
 | `gain_db` | The node's `gain` |
 | `peak_dbfs` | Highest sample level, in dB relative to full scale |
 | `integrated_lufs` | Loudness over the whole song |
@@ -130,16 +137,18 @@ run's report and images. Report fields whose meaning is not obvious from their n
 | `detail` | Why a node has no measurements |
 | `sections` | Extra analysis from configured report sections, by name; each has a `version` and either `data` with its own `defects`, or an `error` |
 
-Node measurements are of the stem before `gain`; mix measurements are after it. Band levels are
-relative, so compare them between nodes and versions, not against a target.
+Node measurements are of that node's own output: the sound as played, or the effect's output
+before `gain`; mix measurements are after it. Band levels are relative, so compare them between
+nodes and versions, not against a target.
 
 The bands are `sub` 20–60 Hz, `bass` 60–250 Hz, `low_mid` 250–500 Hz, `mid` 500–2000 Hz,
 `high_mid` 2000–6000 Hz, and `high` 6000–20000 Hz.
 
 Track statuses from `render-song`: `rendered`, `silent`, `unknown_sound`, `load_failed`,
-`crashed`, and `timed_out`. Node statuses from `analyze-song`: `analyzed`, `missing_stem`, and
-`stale_stem`, which means the stem no longer matches the song or its sound; `detail` says why, and
-rendering again fixes it.
+`crashed`, `timed_out`, and `upstream_failed`, which means a node's upstream did not render, so
+neither does this one; fix the upstream it names and render again. Node statuses from
+`analyze-song`: `analyzed`, `missing_stem`, and `stale_stem`, which means the stem no longer
+matches the song or its sound; `detail` says why, and rendering again fixes it.
 
 Defects fail the analysis: `silent`, for a node or the mix; `clipping`, for mix samples beyond
 full scale; and `headroom`, for a mix peak above -1 dBFS. A section's defects and errors also

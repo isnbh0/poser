@@ -9,16 +9,24 @@ Serum's default patch does not repeat between renders, and its stems are still c
 import fcntl
 import os
 import plistlib
+import tempfile
 import threading
 import xml.parsers.expat
 from collections.abc import Generator, Mapping
 from contextlib import contextmanager
 from importlib import metadata, resources
 from pathlib import Path
+from typing import cast
 
 from poser.adapters.isolation import WorkerCrashedError, WorkerTimedOutError, run_isolated
 from poser.adapters.loading import load_object
-from poser.adapters.pedalboard.config import SAVED_SOURCE, PedalboardConfig, from_options
+from poser.adapters.pedalboard.config import (
+    SAVED_SOURCE,
+    EffectConfig,
+    PedalboardConfig,
+    effect_from_options,
+    from_options,
+)
 from poser.adapters.pedalboard.formats import (
     PRESET_FORMATS,
     PresetError,
@@ -39,7 +47,8 @@ from poser.adapters.pedalboard.sources import (
     scan_saved,
 )
 from poser.adapters.pedalboard.state import decode_state, encode_state
-from poser.adapters.pedalboard.worker import capture_job, render_job
+from poser.adapters.pedalboard.worker import capture_job, render_effect, render_job
+from poser.core.audio import write_raw_audio
 from poser.core.jsonvalue import Json, JsonValue, digest, json_object
 from poser.core.names import Identifier, Suffix
 from poser.core.performance import performance_to_data
@@ -49,8 +58,10 @@ from poser.core.ports import (
     CaptureFailure,
     CaptureRequest,
     ConfigError,
+    EffectRenderRequest,
     RenderFailure,
     RenderRequest,
+    ResolvedEffect,
     ResolvedSound,
     SoundFailure,
     SoundListing,
@@ -301,6 +312,92 @@ class PedalboardInstrument:
         return self._ref(f"{SAVED_SOURCE}/{name}")
 
 
+class PedalboardEffect:
+    """One configured effect recipe: a plugin file or a Pedalboard-native class, rendered
+    through the effect worker verb.
+
+    Building one reads nothing and starts nothing. `resolve` reads the plugin bundle's version
+    for a path recipe; a builtin's recipe is fixed at build time.
+    """
+
+    def __init__(self, config: EffectConfig) -> None:
+        self._config = config
+        self._plugin_version: tuple[str | None] | None = None
+
+    @property
+    def adapter_id(self) -> Identifier:
+        return Identifier("pedalboard")
+
+    @property
+    def adapter_version(self) -> str:
+        return "1"
+
+    @property
+    def guide(self) -> str:
+        return resources.files(__package__).joinpath("guide.md").read_text(encoding="utf-8")
+
+    def _version(self) -> str | None:
+        if self._config.path is None:
+            return None
+        if self._plugin_version is None:
+            self._plugin_version = (plugin_version(self._config.path),)
+        return self._plugin_version[0]
+
+    def resolve(self, recipe: str) -> ResolvedEffect | SoundFailure:
+        if recipe != self._config.name:
+            return SoundFailure(
+                SoundFailureStatus.UNKNOWN_SOUND, f"no effect {recipe!r} in poser.toml"
+            )
+        identity = digest(
+            {
+                "path": None if self._config.path is None else str(self._config.path),
+                "plugin_version": self._version(),
+                "pedalboard": metadata.version("pedalboard"),
+                "builtin": self._config.builtin,
+                "parameters": dict(self._config.parameters),
+            }
+        )
+        payload = Json.of(
+            {
+                "path": None if self._config.path is None else str(self._config.path),
+                "builtin": self._config.builtin,
+                "parameters": dict(self._config.parameters),
+            }
+        )
+        return ResolvedEffect(recipe, identity, payload)
+
+    def render(self, request: EffectRenderRequest, timeout_s: float) -> RenderFailure | None:
+        fields = json_object(request.recipe.payload.value())
+        if fields is None or set(fields) != {"path", "builtin", "parameters"}:
+            raise ValueError(f"not a Pedalboard effect payload: {request.recipe.payload.text}")
+        job: dict[str, JsonValue] = {
+            "path": cast("JsonValue", fields["path"]),
+            "builtin": cast("JsonValue", fields["builtin"]),
+            "parameters": cast("JsonValue", fields["parameters"]),
+            "frames": request.audio.frames,
+            "audio_path": "",
+            "output_path": str(request.audio_path),
+        }
+        try:
+            # The input crosses as a file, so plugin-sized audio never crosses as JSON.
+            with tempfile.TemporaryDirectory() as directory:
+                input_path = Path(directory) / "input.npy"
+                write_raw_audio(input_path, request.audio.samples)
+                job["audio_path"] = str(input_path)
+                result = run_isolated(render_effect, job, timeout_s)
+        except WorkerTimedOutError as error:
+            return RenderFailure(RenderFailureStatus.TIMED_OUT, str(error))
+        except WorkerCrashedError as error:
+            return RenderFailure(RenderFailureStatus.CRASHED, str(error))
+        match result:
+            case {"status": "ok", **rest} if not rest:
+                return None
+            case {"status": "load_failed", "detail": str(detail), **rest} if detail and not rest:
+                return RenderFailure(RenderFailureStatus.LOAD_FAILED, detail)
+            case _:
+                return RenderFailure(RenderFailureStatus.CRASHED, MALFORMED_RESULT)
+
+
 def _preset_format(owner: str, entry: str) -> PresetFormat:
     """Return the preset format a `formats` entry names: a built-in name, or an import path to a
     factory taking no arguments."""
@@ -340,3 +437,11 @@ def create(
             raise ConfigError(f"{owner}: two preset formats read {fmt.suffix!r} files")
         formats[fmt.suffix] = fmt
     return PedalboardInstrument(config, context.sounds_dir, formats)
+
+
+def create_effect(
+    name: Identifier, options: Mapping[str, JsonValue], context: AdapterContext
+) -> PedalboardEffect:
+    """The factory for an effect recipe. A relative `path` resolves against the workspace root."""
+    config = effect_from_options(name, options, context.root)
+    return PedalboardEffect(config)

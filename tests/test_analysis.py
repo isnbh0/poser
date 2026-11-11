@@ -28,8 +28,16 @@ from poser.core.audio import Audio, measure_peak_dbfs, stem_samples, write_raw_a
 from poser.core.cache import Stamp, node_key
 from poser.core.jsonvalue import Json
 from poser.core.names import Identifier, SongId, TrackName
-from poser.core.ports import Instrument, Mixer, MixInput, ReportSection, SectionInput, SectionResult
-from poser.core.rendering import ResolvedNode, render_song, resolve_node
+from poser.core.ports import (
+    Instrument,
+    Mixer,
+    MixInput,
+    ReportSection,
+    SectionInput,
+    SectionResult,
+    SoundFailure,
+)
+from poser.core.rendering import render_song, resolve_node
 from poser.core.report import (
     BANDS,
     AnalysisStatus,
@@ -131,18 +139,13 @@ def tree(directory: Path) -> list[str]:
     return sorted(path.relative_to(directory).as_posix() for path in directory.rglob("*"))
 
 
-def node_key_of(song: Song, index: int, setup: Setup, *, resolve: bool) -> str:
-    """The key the report records for the song's index'th node.
-
-    Analysis resolves the sound only when a stem exists to read, so without one it digests None.
-    """
+def node_key_of(song: Song, index: int, setup: Setup) -> str:
+    """The key the report records for the song's index'th node: its resolved sound, digested
+    even when the stem itself is missing, which is what a render would stamp."""
     graph = song.graph()
     node = graph.nodes[index]
-    identity = None
-    if resolve:
-        resolved = resolve_node(node, setup.instruments)
-        if isinstance(resolved, ResolvedNode):
-            identity = resolved.sound_key
+    resolved = resolve_node(node, setup.instruments)
+    identity = None if isinstance(resolved, SoundFailure) else resolved.sound_key
     return node_key(graph, node, identity, ())
 
 
@@ -358,10 +361,8 @@ def test_unusable_stem_fails_the_run_and_removes_earlier_results(
     assert lead.spectrogram is None
     assert bass.status is status
     assert bass.detail == detail
-    assert bass.node_key == node_key_of(
-        song, 1, setup, resolve=case not in {"missing", "missing_and_unresolved"}
-    )
-    if case in {"missing", "missing_and_unresolved", "unresolved", "unknown_instrument"}:
+    assert bass.node_key == node_key_of(song, 1, setup)
+    if case in {"missing_and_unresolved", "unresolved", "unknown_instrument"}:
         assert bass.sound_key is None
     else:
         assert bass.sound_key is not None
@@ -436,7 +437,7 @@ def test_section_data_reaches_every_node_and_the_mix(tmp_path: Path) -> None:
     expected = {"tempo": SectionData(1, Json.of({"steady": True}), ())}
     assert [dict(node.sections) for node in report.nodes] == [expected, expected]
     assert dict(report.mix.sections) == expected
-    assert [request.track for request in section.seen] == [*make_song().tracks, None]
+    assert [request.node for request in section.seen] == [*make_song().graph().nodes, None]
     assert section.parts == ["track", "track", "mix"]
     assert not report_failed(report)
 

@@ -35,7 +35,7 @@ from test_song import gain_song
 
 from poser.core.audio import Audio
 from poser.core.jsonvalue import Json
-from poser.core.names import Identifier, SongId, Suffix, TrackName
+from poser.core.names import Identifier, NodeName, SongId, Suffix
 from poser.core.ports import (
     Captured,
     MixInput,
@@ -67,7 +67,7 @@ def captured(instrument: object) -> Captured:
     return Captured(Json.of({"name": "contract", "amplitude": 0.3}))
 
 
-def spoil(store: SongStore, track: TrackName) -> None:
+def spoil(store: SongStore, track: NodeName) -> None:
     assert isinstance(store, FakeSongStore)
     store.spoil_stamp(track)
 
@@ -126,16 +126,16 @@ class ReplacingInstrument(FakeInstrument):
 
 class StampKeepingSongStore(FakeSongStore):
     @override
-    def discard(self, track: TrackName) -> None:
-        self.stem_path(track).unlink(missing_ok=True)
+    def discard(self, node: NodeName) -> None:
+        self.stem_path(node).unlink(missing_ok=True)
 
 
 class SongImageSongStore(FakeSongStore):
     @override
-    def image_path(self, track: TrackName | None, suffix: Suffix) -> Path:
-        if track == "song":
-            return self.stem_path(track)
-        return super().image_path(track, suffix)
+    def image_path(self, node: NodeName | None, suffix: Suffix) -> Path:
+        if node == "song":
+            return self.stem_path(node)
+        return super().image_path(node, suffix)
 
 
 def broken_store(kind: type[FakeSongStore]) -> Callable[[Path], FakeRenderStore]:

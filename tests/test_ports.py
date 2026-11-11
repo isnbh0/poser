@@ -16,9 +16,11 @@ from poser.core.names import Identifier, TrackName
 from poser.core.ports import (
     AdapterContext,
     CaptureFailure,
+    EffectRenderRequest,
     MixInput,
     Record,
     RenderFailure,
+    ResolvedEffect,
     ResolvedSound,
     SectionResult,
     SoundFailure,
@@ -31,6 +33,7 @@ from poser.core.statuses import RenderFailureStatus, SoundFailureStatus, StemSta
 FAKE = Identifier("fake")
 REF = SoundRef(FAKE)
 AUDIO = Audio(np.zeros((2, 100), dtype=np.float32))
+RECIPE = ResolvedEffect("drive", "a drive recipe", Json.of({"gain_db": 6}))
 
 
 def test_types_refuse_what_their_rules_forbid() -> None:
@@ -134,3 +137,18 @@ def test_section_result_holds_json_data_only() -> None:
         SectionResult(Json.of({"a": float("nan")}))
     with pytest.raises(ValueError, match="data"):
         SectionResult({"a": [1]})  # ty: ignore[invalid-argument-type]
+
+
+def test_effect_types_refuse_what_their_rules_forbid() -> None:
+    with pytest.raises(ValueError, match="recipe"):
+        ResolvedEffect("", "identity", Json.of(None))
+    with pytest.raises(ValueError, match="identity"):
+        ResolvedEffect("drive", "", Json.of(None))
+    with pytest.raises(ValueError, match="payload"):
+        ResolvedEffect("drive", "identity", {"gain_db": 6})  # ty: ignore[invalid-argument-type]
+    with pytest.raises(ValueError, match="audio"):
+        EffectRenderRequest(np.zeros((2, 10)), RECIPE, Path("out.npy"))  # ty: ignore[invalid-argument-type]
+    with pytest.raises(ValueError, match="recipe"):
+        EffectRenderRequest(AUDIO, "drive", Path("out.npy"))  # ty: ignore[invalid-argument-type]
+    with pytest.raises(ValueError, match="audio_path"):
+        EffectRenderRequest(AUDIO, RECIPE, "out.npy")  # ty: ignore[invalid-argument-type]

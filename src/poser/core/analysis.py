@@ -17,10 +17,11 @@ import numpy as np
 from poser.core.audio import Audio, measure_peak_dbfs, stem_samples
 from poser.core.cache import StampProblem, node_key
 from poser.core.graph import Graph, Node
-from poser.core.names import Identifier, SongId, TrackName
+from poser.core.names import Identifier, NodeName, SongId
 from poser.core.ports import (
     AudioFileError,
     AudioFiles,
+    Effect,
     Instrument,
     Measurer,
     Mixer,
@@ -34,7 +35,7 @@ from poser.core.ports import (
     SoundFailure,
     Visualizer,
 )
-from poser.core.rendering import require_stem_format, resolve_node
+from poser.core.rendering import EMPTY_EFFECTS, require_stem_format, resolve_node
 from poser.core.report import (
     BAR_BEATS,
     MIX_NAME,
@@ -102,7 +103,7 @@ class StaleStemError(Exception):
 
 def read_stem(
     store: SongStore,
-    track: TrackName,
+    node: NodeName,
     keys: tuple[str, str],
     audio_files: AudioFiles,
     frames: int,
@@ -112,7 +113,7 @@ def read_stem(
     `keys` are the node's current `node_key` and `sound_key`. Its stamp must still describe the
     stem file and record both.
     """
-    stamp = store.read_stamp(track)
+    stamp = store.read_stamp(node)
     if isinstance(stamp, StampProblem):
         raise StaleStemError(stamp.value)
     # The sound is checked first, because the node key digests it and would mask which input
@@ -122,7 +123,7 @@ def read_stem(
     if stamp.track_key != keys[0]:
         raise StaleStemError("song changed since this stem was rendered")
     try:
-        return audio_files.read(store.stem_path(track), frames)
+        return audio_files.read(store.stem_path(node), frames)
     except AudioFileError as error:
         raise StaleStemError(str(error)) from error
 
@@ -142,18 +143,23 @@ def analyze_song(
     audio_files: AudioFiles,
     record_writer: RecordWriter,
     tools: AnalysisTools,
+    *,
+    effects: Mapping[Identifier, Effect] = EMPTY_EFFECTS,
 ) -> Report:
     """Mix and measure a song's stems, and keep the analysis as the next record.
 
-    `song_name` is the song file's name without its suffix. Raises SongBusyError when another run
-    holds the song's lock, and ValueError when the store's stem suffix differs from the audio
-    files' or the mixer returns the wrong length. An OSError from the store, the audio files, the
-    mixer, or the visualizer propagates after the lock is released.
+    `song_name` is the song file's name without its suffix. Raises SongError for a track naming
+    an unknown effect recipe, SongBusyError when another run holds the song's lock, and
+    ValueError when the store's stem suffix differs from the audio files' or the mixer returns
+    the wrong length. An OSError from the store, the audio files, the mixer, or the visualizer
+    propagates after the lock is released.
     """
     require_stem_format(renders, audio_files)
     store = renders.song(song_id)
     with store.lock():
-        return _analyze(song, song_name, store, instruments, audio_files, record_writer, tools)
+        return _analyze(
+            song, song_name, store, instruments, effects, audio_files, record_writer, tools
+        )
 
 
 def _analyze(
@@ -161,38 +167,42 @@ def _analyze(
     song_name: str,
     store: SongStore,
     instruments: Mapping[Identifier, Instrument],
+    effects: Mapping[Identifier, Effect],
     audio_files: AudioFiles,
     record_writer: RecordWriter,
     tools: AnalysisTools,
 ) -> Report:
-    graph = song.graph()
+    graph = song.graph([*effects])
     frames = stem_samples(song)
-    sound_keys: dict[TrackName, str] = {}
-    stems: dict[TrackName, Audio] = {}
-    failures: dict[TrackName, NodeReport] = {}
-    # Report rows stay positionally aligned with the graph's nodes, which compilation sets to
-    # song order.
-    for _track, node in zip(song.tracks, graph.nodes, strict=True):
-        name = TrackName(node.name)
-        # Without a resolved sound there is no identity to digest, so the key digests None.
-        key = node_key(graph, node, None, ())
+    keys: dict[NodeName, str] = {}
+    sound_keys: dict[NodeName, str] = {}
+    stems: dict[NodeName, Audio] = {}
+    failures: dict[NodeName, NodeReport] = {}
+    # Keys are computed in the graph's topological order, because a node's key digests its
+    # upstream keys. Report rows stay positionally aligned with the graph's nodes, which
+    # compilation sets to song order.
+    for node in graph.topological():
+        name = NodeName(node.name)
+        upstream = _upstream_keys(graph, node, keys)
+        resolved = resolve_node(node, instruments, effects)
+        identity = None if isinstance(resolved, SoundFailure) else resolved.sound_key
+        keys[name] = node_key(graph, node, identity, upstream)
         if not store.stem_path(name).is_file():
             failures[name] = NodeReport(
                 node.name,
                 AnalysisStatus.MISSING_STEM,
-                key,
-                None,
+                keys[name],
+                identity,
                 node.kind,
                 _upstream(graph, node),
                 gain_db=node.gain_db,
             )
             continue
-        resolved = resolve_node(node, instruments)
         if isinstance(resolved, SoundFailure):
             failures[name] = NodeReport(
                 node.name,
                 AnalysisStatus.STALE_STEM,
-                key,
+                keys[name],
                 None,
                 node.kind,
                 _upstream(graph, node),
@@ -201,14 +211,15 @@ def _analyze(
             )
             continue
         sound_keys[name] = resolved.sound_key
-        key = node_key(graph, node, resolved.sound_key, ())
         try:
-            stems[name] = read_stem(store, name, (key, resolved.sound_key), audio_files, frames)
+            stems[name] = read_stem(
+                store, name, (keys[name], resolved.sound_key), audio_files, frames
+            )
         except StaleStemError as error:
             failures[name] = NodeReport(
                 node.name,
                 AnalysisStatus.STALE_STEM,
-                key,
+                keys[name],
                 resolved.sound_key,
                 node.kind,
                 _upstream(graph, node),
@@ -225,14 +236,14 @@ def _analyze(
     suffix = tools.visualizer.suffix
 
     nodes: list[NodeReport] = []
-    for track, node in zip(song.tracks, graph.nodes, strict=True):
-        name = TrackName(node.name)
+    for node in graph.nodes:
+        name = NodeName(node.name)
         if name in failures:
             nodes.append(failures[name])
             continue
         audio = stems[name]
         measurements = measure(audio, song, tools.measurer)
-        sections = _sections(tools.sections, SectionInput(song, track, audio, measurements))
+        sections = _sections(tools.sections, SectionInput(song, node, audio, measurements))
         image = None
         if complete:
             image = store.image_path(name, suffix)
@@ -241,7 +252,7 @@ def _analyze(
             NodeReport(
                 node.name,
                 AnalysisStatus.ANALYZED,
-                node_key(graph, node, sound_keys[name], ()),
+                keys[name],
                 sound_keys[name],
                 node.kind,
                 _upstream(graph, node),
@@ -260,8 +271,8 @@ def _analyze(
     mix = None
     if complete:
         inputs = tuple(
-            MixInput(TrackName(node.name), stems[TrackName(node.name)], node.gain_db)
-            for node in graph.nodes
+            MixInput(NodeName(node.name), stems[NodeName(node.name)], node.gain_db)
+            for node in _leaves(graph)
         )
         mixed = tools.mixer.mix(inputs, frames)
         if mixed.frames != frames:
@@ -295,7 +306,7 @@ def _analyze(
         if report_node.spectrogram is None
         else replace(
             report_node,
-            spectrogram=str(store.keep_image(record, TrackName(node.name), suffix)),
+            spectrogram=str(store.keep_image(record, NodeName(node.name), suffix)),
         )
         for node, report_node in zip(graph.nodes, report.nodes, strict=True)
     )
@@ -313,6 +324,28 @@ def _upstream(graph: Graph, node: Node) -> tuple[str, ...]:
     return tuple(wire.from_name for wire in graph.wires if wire.to_name == node.name)
 
 
+def _upstream_keys(
+    graph: Graph, node: Node, keys: Mapping[NodeName, str]
+) -> tuple[tuple[str, str, float], ...]:
+    """Return each feeding wire's upstream key, wire kind, and wire gain, in wire order.
+
+    Keys are computed in the graph's topological order, so every upstream's key exists when this
+    node's is computed.
+    """
+    return tuple(
+        (keys[NodeName(wire.from_name)], wire.kind, wire.gain_db)
+        for wire in graph.wires
+        if wire.to_name == node.name
+    )
+
+
+def _leaves(graph: Graph) -> tuple[Node, ...]:
+    """Return the nodes no wire feeds from: the ones whose stems the mix sums, each at its own
+    `gain_db`. Without wires, every node is a leaf, so the mix is the song's stems as before."""
+    fed = {wire.from_name for wire in graph.wires}
+    return tuple(node for node in graph.nodes if node.name not in fed)
+
+
 def _sections(
     sections: Sequence[ReportSection], request: SectionInput
 ) -> Mapping[str, SectionReport]:
@@ -323,7 +356,7 @@ def _sections(
 def _section(section: ReportSection, request: SectionInput) -> SectionReport:
     version = section.version
     try:
-        result = section.mix(request) if request.track is None else section.track(request)
+        result = section.mix(request) if request.node is None else section.track(request)
         if not isinstance(result, SectionResult):
             raise TypeError(f"returned {type(result).__name__}, not a SectionResult")  # noqa: TRY301
     except Exception as error:  # noqa: BLE001 -- a section's failure is reported, not raised.

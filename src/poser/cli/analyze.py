@@ -99,6 +99,7 @@ def main(argv: list[str] | None = None) -> int:
         composition = load_composition(args)
         formats = composition.song_formats()
         instruments = composition.instruments()
+        effects = composition.effects()
         audio_files = composition.audio_files()
         renders = composition.render_store()
         record_writer = composition.record_writer()
@@ -123,6 +124,7 @@ def main(argv: list[str] | None = None) -> int:
             audio_files,
             record_writer,
             tools,
+            effects=effects,
         )
     except SongError as error:
         fail(PROG, error)

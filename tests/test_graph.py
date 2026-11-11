@@ -41,6 +41,11 @@ def named_nodes(*names: str) -> tuple[Node, ...]:
     return tuple(make_node(name=name) for name in names)
 
 
+def effect_nodes(*names: str) -> tuple[Node, ...]:
+    """Effect nodes, which accept audio wires, for the wiring fixtures."""
+    return tuple(make_node(name=name, kind="effect", effect="drive") for name in names)
+
+
 def make_graph(**changes: object) -> Graph:
     values: dict[str, object] = {"bpm": 120, "nodes": named_nodes("lead")}
     return construct(Graph, **(values | changes))
@@ -97,7 +102,7 @@ def cycle_in(problem: str) -> tuple[str, ...] | None:
 
 
 def table_accepts(wire: Wire, wires: tuple[Wire, ...], nodes: tuple[Node, ...]) -> bool:
-    """Whether the acceptance table lets the wire into its target. P3 to P5 widen this fixture."""
+    """Whether the acceptance table lets the wire into its target."""
     kinds = {node.name: node.kind for node in nodes}
     limit = ACCEPTS_WIRES[kinds[wire.to_name]].get(wire.kind, 0)
     if limit is None:
@@ -122,7 +127,7 @@ def test_the_three_wire_enumeration_is_complete() -> None:
     "edges", THREE_WIRE_SETS, ids=[edge_id(edges) for edges in THREE_WIRE_SETS]
 )
 def test_three_wire_sets_obey_the_laws(edges: tuple[tuple[str, str], ...]) -> None:
-    nodes = named_nodes(*NAMES)
+    nodes = effect_nodes(*NAMES)
     wires = tuple(Wire(x, y, "audio") for x, y in edges)
     closed = cycles_in(edges)
     accepted = all(table_accepts(wire, wires, nodes) for wire in wires)
@@ -152,7 +157,7 @@ def test_three_wire_sets_obey_the_laws(edges: tuple[tuple[str, str], ...]) -> No
 
 
 def test_cycle_message_names_the_cycle() -> None:
-    nodes = named_nodes(*NAMES)
+    nodes = effect_nodes(*NAMES)
     wires = (Wire("a", "b", "audio"), Wire("b", "c", "audio"), Wire("c", "a", "audio"))
     with pytest.raises(GraphError) as raised:
         Graph(120, nodes, wires)
@@ -163,7 +168,7 @@ def test_cycle_message_names_the_cycle() -> None:
 
 
 def test_self_edge_is_a_cycle_of_length_one() -> None:
-    nodes = (make_node(name="a"),)
+    nodes = effect_nodes("a")
     with pytest.raises(GraphError) as raised:
         Graph(120, nodes, (Wire("a", "a", "audio"),))
     walks = [walk for problem in raised.value.problems if (walk := cycle_in(problem))]
@@ -179,6 +184,36 @@ def test_wire_kinds_are_distinct() -> None:
     assert audio != control
     assert audio.kind == "audio"
     assert control.kind == "control"
+
+
+def test_a_track_node_rejects_every_incoming_wire() -> None:
+    for kind in ("audio", "control"):
+        with pytest.raises(GraphError) as raised:
+            Graph(120, named_nodes("lead", "wet"), (Wire("wet", "lead", kind),))
+        assert raised.value.problems == [
+            f"Graph.wires[0]: node 'lead' of kind 'track' accepts no {kind} wires"
+        ]
+
+
+def test_an_effect_node_accepts_any_number_of_audio_wires_and_no_control_wires() -> None:
+    nodes = (make_node(name="lead"), *effect_nodes("bus", "other"))
+    one = Graph(120, nodes, (Wire("lead", "bus", "audio"),))
+    assert [wire.to_name for wire in one.wires] == ["bus"]
+    two = Graph(120, nodes, (Wire("lead", "bus", "audio"), Wire("other", "bus", "audio")))
+    assert len(two.wires) == 2
+    with pytest.raises(GraphError) as raised:
+        Graph(120, nodes, (Wire("lead", "bus", "control"),))
+    assert raised.value.problems == [
+        "Graph.wires[0]: node 'bus' of kind 'effect' accepts no control wires"
+    ]
+
+
+def test_a_zero_input_effect_node_is_accepted() -> None:
+    """An effect with no wires renders from silence (C2's uniform audio law), so it constructs."""
+    graph = Graph(120, effect_nodes("lead"))
+    assert [node.name for node in graph.nodes] == ["lead"]
+    wired = Graph(120, effect_nodes("lead", "wet"), (Wire("wet", "lead", "audio"),))
+    assert [node.name for node in wired.topological()] == ["wet", "lead"]
 
 
 @pytest.mark.parametrize(
@@ -263,7 +298,18 @@ def test_node_name_must_be_safe_as_a_file_name(name: str) -> None:
     with pytest.raises(GraphError) as raised:
         make_node(name=name)
     assert raised.value.problems == [
-        f"Node.name: must contain only letters, digits, '_', and '-', got {name!r}"
+        f"Node.name: must contain only letters, digits, '_', '-', and '.', got {name!r}"
+    ]
+
+
+def test_a_chain_instance_name_is_a_legal_node_name() -> None:
+    assert Node("lead.drive", "effect", effect="drive").name == "lead.drive"
+    assert Node("lead.drive.2", "effect", effect="drive").name == "lead.drive.2"
+    assert Wire("lead", "lead.drive", "audio").to_name == "lead.drive"
+    with pytest.raises(GraphError) as raised:
+        make_node(name="lead..drive")
+    assert raised.value.problems == [
+        "Node.name: must contain only letters, digits, '_', '-', and '.', got 'lead..drive'"
     ]
 
 

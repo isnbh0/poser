@@ -22,30 +22,36 @@ from contracts import check_instrument_contract, check_sound_capture_contract
 from helpers import fxp_bytes
 from test_performance import cc_track, performed
 
-from poser.adapters.isolation import WorkerTimedOutError
+from poser.adapters.isolation import WorkerCrashedError, WorkerTimedOutError
 from poser.adapters.pedalboard import instrument as instrument_module
 from poser.adapters.pedalboard.config import (
     INITIALIZATION_TIMEOUT_S,
+    EffectConfig,
     PedalboardConfig,
+    effect_from_options,
     from_options,
 )
 from poser.adapters.pedalboard.formats import PRESET_FORMATS, PresetFormat
 from poser.adapters.pedalboard.instrument import (
     MALFORMED_RESULT,
+    PedalboardEffect,
     PedalboardInstrument,
     payload_state,
     plugin_version,
 )
 from poser.adapters.pedalboard.state import build_state, encode_state
 from poser.adapters.pedalboard.worker import (
+    BUFFER_SIZE,
+    MalformedJobError,
     NotLoaded,
     capture_job,
     performance_messages,
     render_duration_s,
+    render_effect,
     render_fresh,
     render_job,
 )
-from poser.core.audio import SAMPLE_RATE, Audio, read_raw_audio
+from poser.core.audio import SAMPLE_RATE, Audio, read_raw_audio, write_raw_audio
 from poser.core.jsonvalue import Json, JsonValue
 from poser.core.names import Identifier, Suffix
 from poser.core.performance import Control, NoteOff, NoteOn, Performance, performance_to_data
@@ -55,8 +61,10 @@ from poser.core.ports import (
     CaptureFailure,
     CaptureRequest,
     ConfigError,
+    EffectRenderRequest,
     RenderFailure,
     RenderRequest,
+    ResolvedEffect,
     ResolvedSound,
     SoundFailure,
 )
@@ -1205,17 +1213,19 @@ class FakeLoader:
 
     def __init__(self) -> None:
         self.loads: list[tuple[str, str | None, float]] = []
-        self.queue: list[FakePlugin] = []
-        self.made: list[weakref.ref[FakePlugin]] = []
+        self.queue: list[FakePlugin | FakeEffectPlugin] = []
+        self.made: list[weakref.ref[FakePlugin | FakeEffectPlugin]] = []
         self.error: Exception | None = None
 
     def __call__(
         self, path: str, plugin_name: str | None = None, initialization_timeout: float = 0
-    ) -> FakePlugin:
+    ) -> "FakePlugin | FakeEffectPlugin":
         self.loads.append((path, plugin_name, initialization_timeout))
         if self.error is not None:
             raise self.error
-        plugin = self.queue.pop(0) if self.queue else FakePlugin(len(self.made) + 1)
+        plugin: FakePlugin | FakeEffectPlugin = (
+            self.queue.pop(0) if self.queue else FakePlugin(len(self.made) + 1)
+        )
         self.made.append(weakref.ref(plugin))
         return plugin
 
@@ -1409,3 +1419,263 @@ def test_capture_job_refuses_a_preview_plugin_that_is_not_an_instrument(
     }
     assert preview.calls == []
     assert not preview_path.exists()
+
+
+# Effect recipes: config, worker verb, and the adapter, all headless.
+
+
+def effect_config_fields(tmp_path: Path) -> dict[str, object]:
+    return {
+        "name": Identifier("drive"),
+        "path": None,
+        "builtin": "Gain",
+        "parameters": {"gain_db": -6},
+    }
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "problem"),
+    [
+        ("name", "drive", "must be an Identifier"),
+        ("path", Path("Drive.vst3"), "path must be an absolute path"),
+        ("builtin", " ", "builtin must be non-empty text"),
+        ("parameters", [], "parameters must be a table"),
+    ],
+    ids=["name", "relative path", "blank builtin", "parameters list"],
+)
+def test_effect_config_refuses(tmp_path: Path, field: str, value: object, problem: str) -> None:
+    fields = dict(effect_config_fields(tmp_path))
+    if field == "path" and value is not None:
+        fields = fields | {"path": value, "builtin": None}
+    else:
+        fields = fields | {field: value}
+    with pytest.raises(ConfigError, match=problem):
+        EffectConfig(**fields)  # ty: ignore[invalid-argument-type]
+
+
+def test_effect_config_accepts_a_path_recipe(tmp_path: Path) -> None:
+    config = EffectConfig(Identifier("crush"), tmp_path / "Crush.vst3", None, {})
+    assert config.path == tmp_path / "Crush.vst3"
+    assert config.parameters == {}
+
+
+@pytest.mark.parametrize(
+    ("name", "options", "problem"),
+    [
+        ("dr:ive", {"builtin": "Gain"}, r"^effect 'dr:ive': "),
+        ("drive", {"builtin": "Gain", "loud": True}, "unknown option 'loud'"),
+        ("drive", {}, "path must be non-empty text"),
+        ("drive", {"path": "/a.vst3", "builtin": "Gain"}, "name exactly one of"),
+        ("drive", {"path": " "}, "path must be non-empty text"),
+        ("drive", {"builtin": 3}, "builtin must be non-empty text"),
+        ("drive", {"builtin": "pedalboard_native.Gain"}, "must name a pedalboard-native class"),
+        ("drive", {"path": "/a.vst3", "parameters": {"x": 1}}, "parameters belong to a builtin"),
+        ("drive", {"builtin": "Gain", "parameters": [1]}, "parameters must be a table"),
+    ],
+    ids=[
+        "name",
+        "unknown option",
+        "neither",
+        "both",
+        "blank path",
+        "number builtin",
+        "dotted builtin",
+        "parameters with path",
+        "parameters list",
+    ],
+)
+def test_effect_from_options_refuses(
+    tmp_path: Path, name: str, options: dict[str, JsonValue], problem: str
+) -> None:
+    with pytest.raises(ConfigError, match=problem):
+        effect_from_options(name, options, tmp_path)
+
+
+def test_effect_from_options_resolves_the_path_against_base(tmp_path: Path) -> None:
+    config = effect_from_options("drive", {"path": "plugins/Drive.vst3"}, tmp_path)
+    assert config.path == tmp_path / "plugins" / "Drive.vst3"
+    builtin = effect_from_options(
+        "drive", {"builtin": "Gain", "parameters": {"gain_db": 6}}, tmp_path
+    )
+    assert (builtin.builtin, builtin.parameters) == ("Gain", {"gain_db": 6})
+
+
+def write_effect_input(tmp_path: Path, frames: int = 480, fill: float = 0.5) -> Path:
+    path = tmp_path / "input.npy"
+    write_raw_audio(path, np.full((2, frames), fill, np.float32))
+    return path
+
+
+def effect_job(tmp_path: Path, **fields: JsonValue) -> dict[str, JsonValue]:
+    job: dict[str, JsonValue] = {
+        "path": None,
+        "builtin": "Gain",
+        "parameters": {"gain_db": -6},
+        "frames": 480,
+        "audio_path": str(write_effect_input(tmp_path)),
+        "output_path": str(tmp_path / "out.npy"),
+    }
+    job.update(fields)
+    return job
+
+
+def test_render_effect_processes_audio_through_a_native_builtin(tmp_path: Path) -> None:
+    output = tmp_path / "out.npy"
+
+    assert render_effect(effect_job(tmp_path)) == {"status": "ok"}
+
+    audio = read_raw_audio(output, 480)
+    assert isinstance(audio, Audio)
+    assert np.allclose(audio.samples, 0.5 * 10 ** (-6 / 20))
+
+
+def test_render_effect_refuses_a_job_that_is_not_exactly_its_keys(tmp_path: Path) -> None:
+    with pytest.raises(MalformedJobError):
+        render_effect({"path": None, "builtin": "Gain"})
+    with pytest.raises(MalformedJobError):
+        render_effect(effect_job(tmp_path, extra=1))
+    with pytest.raises(MalformedJobError):
+        render_effect(effect_job(tmp_path, path=None, builtin=None))
+    with pytest.raises(MalformedJobError):
+        render_effect(effect_job(tmp_path, frames=0))
+    with pytest.raises(MalformedJobError):
+        render_effect(effect_job(tmp_path, parameters=["gain_db"]))
+
+
+def test_render_effect_reports_an_unusable_input(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="the effect's input is unusable"):
+        render_effect(effect_job(tmp_path, audio_path=str(tmp_path / "absent.npy")))
+
+
+def test_render_effect_reports_an_unknown_builtin_class(tmp_path: Path) -> None:
+    result = render_effect(effect_job(tmp_path, builtin="NoSuchEffect"))
+
+    assert result == {
+        "status": "load_failed",
+        "detail": "module 'pedalboard_native' has no attribute 'NoSuchEffect'",
+    }
+
+
+class FakeEffectPlugin:
+    """A loaded effect that records its call and returns a constant."""
+
+    is_instrument = False
+
+    def __init__(self, fill: float = 0.25, frames_off: int = 0) -> None:
+        self.fill = fill
+        self.frames_off = frames_off
+        self.calls: list[tuple[tuple[int, int], int, dict[str, object]]] = []
+
+    def __call__(self, audio: np.ndarray, sample_rate: int, **kwargs: object) -> np.ndarray:
+        self.calls.append((audio.shape, sample_rate, kwargs))
+        return np.full((2, audio.shape[1] - self.frames_off), self.fill, np.float32)
+
+
+def test_render_effect_loads_a_path_plugin(loader: FakeLoader, tmp_path: Path) -> None:
+    plugin = FakeEffectPlugin(0.25)
+    loader.queue.append(plugin)
+
+    assert render_effect(effect_job(tmp_path, path="/Drive.vst3", builtin=None)) == {"status": "ok"}
+
+    assert loader.loads == [("/Drive.vst3", None, INITIALIZATION_TIMEOUT_S)]
+    [(shape, rate, kwargs)] = plugin.calls
+    assert shape == (2, 480)
+    assert (rate, kwargs) == (SAMPLE_RATE, {"buffer_size": BUFFER_SIZE})
+
+
+def test_render_effect_refuses_an_instrument_plugin(loader: FakeLoader, tmp_path: Path) -> None:
+    plugin = FakePlugin()
+    loader.queue.append(plugin)
+
+    assert render_effect(effect_job(tmp_path, path="/Serum.vst3", builtin=None)) == {
+        "status": "load_failed",
+        "detail": "/Serum.vst3 is not an effect",
+    }
+    assert plugin.calls == []
+
+
+def test_render_effect_reports_a_load_exception(loader: FakeLoader, tmp_path: Path) -> None:
+    loader.error = RuntimeError("bad bundle")
+
+    assert render_effect(effect_job(tmp_path, path="/Drive.vst3", builtin=None)) == {
+        "status": "load_failed",
+        "detail": "bad bundle",
+    }
+
+
+def test_render_effect_lets_a_frame_mismatch_raise(loader: FakeLoader, tmp_path: Path) -> None:
+    loader.queue.append(FakeEffectPlugin(frames_off=1))
+
+    with pytest.raises(ValueError, match="the effect returned"):
+        render_effect(effect_job(tmp_path, path="/Drive.vst3", builtin=None))
+
+
+def make_effect(tmp_path: Path, options: dict[str, JsonValue] | None = None) -> PedalboardEffect:
+    context = AdapterContext(tmp_path, tmp_path / "sounds", tmp_path / "renders")
+    return instrument_module.create_effect(
+        Identifier("drive"), options or {"builtin": "Gain", "parameters": {"gain_db": -6}}, context
+    )
+
+
+def test_the_effect_adapter_renders_headlessly_through_the_worker(tmp_path: Path) -> None:
+    effect = make_effect(tmp_path)
+    audio = Audio(np.full((2, 2400), 0.5, dtype=np.float32))
+    out = tmp_path / "out.npy"
+
+    assert effect.render(EffectRenderRequest(audio, resolved_recipe(effect), out), 60) is None
+
+    rendered = read_raw_audio(out, 2400)
+    assert isinstance(rendered, Audio)
+    assert np.allclose(rendered.samples, 0.5 * 10 ** (-6 / 20))
+    again = tmp_path / "again.npy"
+    assert effect.render(EffectRenderRequest(audio, resolved_recipe(effect), again), 60) is None
+    assert out.read_bytes() == again.read_bytes()
+
+
+def test_the_effect_adapter_maps_worker_failures(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    effect = make_effect(tmp_path)
+    request = EffectRenderRequest(
+        Audio(np.zeros((2, 2400), dtype=np.float32)), resolved_recipe(effect), tmp_path / "out.npy"
+    )
+
+    def time_out(target: object, job: object, timeout_s: float | None) -> NoReturn:
+        raise WorkerTimedOutError("worker exceeded 3 seconds")
+
+    monkeypatch.setattr(instrument_module, "run_isolated", time_out)
+    assert effect.render(request, 3) == RenderFailure(
+        RenderFailureStatus.TIMED_OUT, "worker exceeded 3 seconds"
+    )
+
+    def crash(target: object, job: object, timeout_s: float | None) -> NoReturn:
+        raise WorkerCrashedError("exit code 1: the plugin exploded")
+
+    monkeypatch.setattr(instrument_module, "run_isolated", crash)
+    assert effect.render(request, 3) == RenderFailure(
+        RenderFailureStatus.CRASHED, "exit code 1: the plugin exploded"
+    )
+
+    monkeypatch.setattr(
+        instrument_module, "run_isolated", lambda target, job, timeout_s: {"status": "fine"}
+    )
+    assert effect.render(request, 3) == RenderFailure(RenderFailureStatus.CRASHED, MALFORMED_RESULT)
+
+
+def test_the_effect_adapter_refuses_a_payload_that_is_not_its_own(tmp_path: Path) -> None:
+    effect = make_effect(tmp_path)
+    stranger = ResolvedEffect("drive", "identity", Json.of({"state": "x"}))
+
+    with pytest.raises(ValueError, match="not a Pedalboard effect payload"):
+        effect.render(
+            EffectRenderRequest(
+                Audio(np.zeros((2, 10), dtype=np.float32)), stranger, tmp_path / "o"
+            ),
+            60,
+        )
+
+
+def resolved_recipe(effect: PedalboardEffect) -> ResolvedEffect:
+    resolved = effect.resolve(Identifier("drive"))
+    assert isinstance(resolved, ResolvedEffect)
+    return resolved

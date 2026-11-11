@@ -4,7 +4,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import NotRequired, TypedDict, cast
 
-from poser.core.graph import Graph, Node
+from poser.core.graph import Graph, Node, Wire
 from poser.core.names import TrackName
 
 # `CONTROL_MAX` and `MAX_SONG_S` stay importable from here, where every module found them before.
@@ -20,6 +20,7 @@ from poser.core.rules import (
     _cc_problems,
     _control_change_problems,
     _duplicate_name_problems,
+    _effects_problems,
     _last_beat,
     _length_problems,
     _note_problems,
@@ -35,7 +36,7 @@ from poser.core.sounds import SoundRef, parse_sound_ref
 
 SONG_KEYS = {"bpm", "tracks"}
 TRACK_KEYS = {"name", "sound", "notes"}
-OPTIONAL_TRACK_KEYS = {"gain", "cc"}
+OPTIONAL_TRACK_KEYS = {"gain", "cc", "effects"}
 NOTE_KEYS = {"beat", "pitch", "length", "velocity"}
 CC_KEYS = {"beat", "control", "value"}
 OPTIONAL_CC_KEYS = {"shape"}
@@ -48,6 +49,7 @@ class Track:
     notes: tuple[Note, ...]
     gain: float = 0.0
     cc: tuple[ControlChange, ...] = ()
+    effects: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         values = {
@@ -56,12 +58,14 @@ class Track:
             "gain": self.gain,
             "notes": self.notes,
             "cc": self.cc,
+            "effects": self.effects,
         }
         if problems := _track_problems(values, "Track"):
             raise SongError(problems)
         # A list becomes a tuple, so a track built from lists equals one loaded from YAML.
         object.__setattr__(self, "notes", tuple(self.notes))
         object.__setattr__(self, "cc", tuple(self.cc))
+        object.__setattr__(self, "effects", tuple(self.effects))
         object.__setattr__(self, "gain", float(self.gain))
 
     @property
@@ -88,27 +92,86 @@ class Song:
     def seconds(self, beat: float) -> float:
         return beat * 60 / self.bpm
 
-    def graph(self) -> Graph:
-        """Compile the song to its graph: one track node per track, in song order, no wires."""
-        return Graph(
-            bpm=self.bpm,
-            nodes=tuple(
+    def graph(self, effects: Sequence[str] = ()) -> Graph:
+        """Compile the song to its graph: each track's node followed by its effect chain, wired
+        in series, in song order.
+
+        `effects` names the workspace's configured effect recipes; a track naming another one is
+        a problem naming it. Chain nodes are named `<track>.<effect>`, and a recipe a track lists
+        twice takes an ordinal: `<track>.drive.2`. The track's gain compiles onto the chain's
+        leaf, so the fader survives chains; the leaf's gain is in no key, so a gain-only edit
+        renders nothing.
+        """
+        known = set(effects)
+        problems = [
+            f"tracks[{index}]: no effect recipe {recipe!r} in poser.toml"
+            for index, track in enumerate(self.tracks)
+            for recipe in track.effects
+            if recipe not in known
+        ]
+        if problems:
+            raise SongError(problems)
+        authored = {track.name for track in self.tracks}
+        generated: set[str] = set()
+        nodes: list[Node] = []
+        wires: list[Wire] = []
+        for track in self.tracks:
+            nodes.append(
                 Node(
                     name=track.name,
                     kind="track",
-                    gain_db=track.gain,
+                    gain_db=0.0 if track.effects else track.gain,
                     sound=track.sound,
                     notes=track.notes,
                     cc=track.cc,
                 )
-                for track in self.tracks
-            ),
-        )
+            )
+            previous = track.name
+            counts: dict[str, int] = {}
+            for last, recipe in _marks(track.effects):
+                counts[recipe] = counts.get(recipe, 0) + 1
+                name = _instance_name(f"{track.name}.{recipe}", counts[recipe], generated)
+                if name in authored:
+                    raise SongError(
+                        [
+                            (
+                                f"tracks: effect instance {name!r} collides with the authored "
+                                f"node named {name!r}"
+                            )
+                        ]
+                    )
+                generated.add(name)
+                nodes.append(
+                    Node(
+                        name=name, kind="effect", gain_db=track.gain if last else 0.0, effect=recipe
+                    )
+                )
+                wires.append(Wire(previous, name, "audio"))
+                previous = name
+        return Graph(bpm=self.bpm, nodes=tuple(nodes), wires=tuple(wires))
 
 
 def song_last_beat(song: Song) -> float:
     """Return the latest note end or controller change across tracks."""
     return _last_beat(song.tracks)
+
+
+def _marks(recipes: Sequence[str]) -> Sequence[tuple[bool, str]]:
+    """Pair each of a chain's recipes with whether it is the chain's leaf."""
+    return [(index == len(recipes) - 1, recipe) for index, recipe in enumerate(recipes)]
+
+
+def _instance_name(base: str, ordinal: int, generated: set[str]) -> str:
+    """Return a chain node's name: `<track>.<effect>`, a repeat taking the next ordinal.
+
+    Ordinals keep instances distinct even from one recipe. A name an earlier chain already took
+    also moves to the next ordinal, so compilation never emits two nodes with one name.
+    """
+    name = base if ordinal == 1 else f"{base}.{ordinal}"
+    while name in generated:
+        ordinal += 1
+        name = f"{base}.{ordinal}"
+    return name
 
 
 class NoteData(TypedDict):
@@ -128,6 +191,7 @@ class ControlData(TypedDict):
 class TrackData(TypedDict):
     name: str
     sound: str
+    effects: NotRequired[list[str]]
     gain: NotRequired[float]
     notes: list[NoteData]
     cc: NotRequired[list[ControlData]]
@@ -244,6 +308,8 @@ def _parse_track(value: object, where: str, problems: list[str]) -> Track | None
 
     before = len(problems)
     problems += _track_field_problems(_present(data, TRACK_KEYS | OPTIONAL_TRACK_KEYS), where)
+    if "effects" in data:
+        problems += _effects_problems(data["effects"], where)
 
     raw_notes = data.get("notes")
     notes: list[Note | None] = []
@@ -260,6 +326,8 @@ def _parse_track(value: object, where: str, problems: list[str]) -> Track | None
 
     name, sound = data.get("name"), data.get("sound")
     gain = data.get("gain", 0.0)
+    raw_effects = data.get("effects", [])
+    effects = tuple(raw_effects) if isinstance(raw_effects, list) else ()
     # Each of these fails only when a problem was reported. A missing key reads as None.
     if len(problems) > before or not is_number(gain) or "notes" not in data:
         return None
@@ -271,6 +339,7 @@ def _parse_track(value: object, where: str, problems: list[str]) -> Track | None
         notes=tuple(n for n in notes if n is not None),
         gain=gain,
         cc=cc,
+        effects=effects,
     )
 
 
@@ -335,11 +404,14 @@ def _track_to_data(track: Track) -> TrackData:
     data: TrackData = {
         "name": track.name,
         "sound": track.sound,
+        "effects": list(track.effects),
         "gain": track.gain,
         "notes": [_note_to_data(note) for note in track.notes],
         "cc": [_control_to_data(change) for change in track.cc],
     }
     # Defaults are left out, so a song without gains or controller changes keeps its old text.
+    if not track.effects:
+        del data["effects"]
     if track.gain == 0:
         del data["gain"]
     if not track.cc:

@@ -17,16 +17,18 @@ import numpy as np
 from poser.core.audio import Audio, AudioProblem, read_raw_audio, write_raw_audio
 from poser.core.cache import Stamp, StampProblem
 from poser.core.jsonvalue import Json, JsonValue, json_object
-from poser.core.names import Identifier, SongId, Suffix, TrackName
+from poser.core.names import Identifier, NodeName, SongId, Suffix
 from poser.core.ports import (
     AudioFileError,
     Captured,
     CaptureFailure,
     CaptureRequest,
+    EffectRenderRequest,
     MixInput,
     Record,
     RenderFailure,
     RenderRequest,
+    ResolvedEffect,
     ResolvedSound,
     SectionInput,
     SectionResult,
@@ -235,6 +237,62 @@ class PlainInstrument:
         return self._inner.render(request, timeout_s)
 
 
+# Effects
+
+
+class FakeEffect:
+    """An effect that scales the audio by the amount its payload carries, recording every
+    request. Its failures are set by a test, like a FakeSound's are."""
+
+    def __init__(
+        self,
+        name: str,
+        identity: str = "drive",
+        amount: float = 2.0,
+        render_failure: RenderFailure | None = None,
+        bad_output: BadOutput | None = None,
+    ) -> None:
+        self.name = Identifier(name)
+        self._identity = identity
+        self._amount = amount
+        self._render_failure = render_failure
+        self._bad_output = bad_output
+        self.renders: list[EffectRenderRequest] = []
+
+    @property
+    def adapter_id(self) -> Identifier:
+        return Identifier("fake")
+
+    @property
+    def adapter_version(self) -> str:
+        return "1"
+
+    def resolve(self, recipe: str) -> ResolvedEffect | SoundFailure:
+        if recipe != self.name:
+            return SoundFailure(
+                SoundFailureStatus.UNKNOWN_SOUND, f"no effect {recipe!r} in poser.toml"
+            )
+        return ResolvedEffect(recipe, self._identity, Json.of({"amount": self._amount}))
+
+    def render(self, request: EffectRenderRequest, timeout_s: float) -> RenderFailure | None:
+        assert timeout_s > 0
+        self.renders.append(request)
+        if self._render_failure is not None:
+            return self._render_failure
+        payload = json_object(request.recipe.payload.value())
+        assert payload is not None
+        amount = float(payload["amount"])  # ty: ignore[invalid-argument-type]
+        samples = np.array(request.audio.samples, dtype=np.float64) * amount
+        frames = request.audio.frames
+        if self._bad_output == "wrong_length":
+            frames -= 1
+        if self._bad_output == "nan":
+            samples[:, frames // 2] = np.nan
+        if self._bad_output != "no_file":
+            write_raw_audio(request.audio_path, samples.astype(np.float32)[:, :frames])
+        return None
+
+
 # The render store
 
 _HELD: set[Path] = set()
@@ -248,9 +306,9 @@ def _file_key(path: Path) -> tuple[int, int]:
     return (info.st_size, info.st_mtime_ns)
 
 
-def _image_name(track: TrackName | None, suffix: Suffix) -> str:
-    # `[` is never in a track name, so the mix's image cannot share a track's.
-    return f"{'[mix]' if track is None else track}{suffix}"
+def _image_name(node: NodeName | None, suffix: Suffix) -> str:
+    # `[` is never in a node name, so the mix's image cannot share a node's.
+    return f"{'[mix]' if node is None else node}{suffix}"
 
 
 def _stamp_text(stamp: Stamp) -> str:
@@ -304,11 +362,11 @@ class FakeSongStore:
             with _HELD_LOCK:
                 _HELD.discard(self.directory)
 
-    def stem_path(self, track: TrackName) -> Path:
-        return self._path("stems", f"{track}{self._stem_suffix}")
+    def stem_path(self, node: NodeName) -> Path:
+        return self._path("stems", f"{node}{self._stem_suffix}")
 
-    def read_stamp(self, track: TrackName) -> Stamp | StampProblem:
-        stem = self.stem_path(track)
+    def read_stamp(self, node: NodeName) -> Stamp | StampProblem:
+        stem = self.stem_path(node)
         entry = self._stamps.get(stem)
         if entry is None:
             return StampProblem.MISSING
@@ -320,29 +378,29 @@ class FakeSongStore:
             return StampProblem.CHANGED
         return stamp
 
-    def write_stamp(self, track: TrackName, stamp: Stamp) -> None:
-        stem = self.stem_path(track)
+    def write_stamp(self, node: NodeName, stamp: Stamp) -> None:
+        stem = self.stem_path(node)
         self._stamps[stem] = (_stamp_text(stamp), _file_key(stem))
 
-    def forget_stamp(self, track: TrackName) -> None:
-        """Remove the track's stamp and keep its stem."""
-        self._stamps.pop(self.stem_path(track), None)
+    def forget_stamp(self, node: NodeName) -> None:
+        """Remove the node's stamp and keep its stem."""
+        self._stamps.pop(self.stem_path(node), None)
 
-    def spoil_stamp(self, track: TrackName) -> None:
-        """Replace the track's stamp with text that is not a stamp."""
-        stem = self.stem_path(track)
+    def spoil_stamp(self, node: NodeName) -> None:
+        """Replace the node's stamp with text that is not a stamp."""
+        stem = self.stem_path(node)
         self._stamps[stem] = ("garbage", _file_key(stem))
 
-    def discard(self, track: TrackName) -> None:
-        stem = self.stem_path(track)
+    def discard(self, node: NodeName) -> None:
+        stem = self.stem_path(node)
         self._stamps.pop(stem, None)
         stem.unlink(missing_ok=True)
 
     def clear_latest(self) -> None:
         shutil.rmtree(self.directory / "latest", ignore_errors=True)
 
-    def image_path(self, track: TrackName | None, suffix: Suffix) -> Path:
-        return self._path("latest", "images", _image_name(track, suffix))
+    def image_path(self, node: NodeName | None, suffix: Suffix) -> Path:
+        return self._path("latest", "images", _image_name(node, suffix))
 
     def mix_path(self) -> Path:
         return self._path("latest", f"mix{self._stem_suffix}")
@@ -363,10 +421,10 @@ class FakeSongStore:
         (path / f"song{suffix}").write_text(song_text, encoding="utf-8")
         return Record(run, path)
 
-    def keep_image(self, record: Record, track: TrackName | None, suffix: Suffix) -> Path:
-        kept = record.path / "images" / _image_name(track, suffix)
+    def keep_image(self, record: Record, node: NodeName | None, suffix: Suffix) -> Path:
+        kept = record.path / "images" / _image_name(node, suffix)
         kept.parent.mkdir(exist_ok=True)
-        shutil.copyfile(self.image_path(track, suffix), kept)
+        shutil.copyfile(self.image_path(node, suffix), kept)
         return kept
 
     def finish_record(self, record: Record, report_text: str) -> None:

@@ -6,10 +6,11 @@ from dataclasses import dataclass
 from itertools import pairwise
 from typing import Literal, Protocol, TypeGuard, cast
 
-from poser.core.names import Identifier, TrackName
+from poser.core.names import Identifier, NodeName, TrackName
 from poser.core.sounds import parse_sound_ref
 
 TRACK_NAME = TrackName.PATTERN
+NODE_NAME = NodeName.PATTERN
 
 # A track's level in decibels, applied at mixdown.
 GAIN_MIN_DB, GAIN_MAX_DB = -60, 12
@@ -250,7 +251,20 @@ def _track_problems(values: Mapping[str, object], where: str) -> list[str]:
         ]
         changes = [(i, c) for i, c in enumerate(items) if isinstance(c, ControlChange)]
         problems += _cc_order_problems(changes, where, complete=len(changes) == len(items))
+    if "effects" in values:
+        problems += _effects_problems(values["effects"], where)
     return problems
+
+
+def _effects_problems(effects: object, where: str) -> list[str]:
+    """Check that a track's effects are a list of recipe names."""
+    if not isinstance(effects, list | tuple):
+        return [f"{where}.effects: must be a list of effect recipe names, got {effects!r}"]
+    return [
+        f"{where}.effects[{index}]: must be non-empty text, got {entry!r}"
+        for index, entry in enumerate(effects)
+        if not (isinstance(entry, str) and entry)
+    ]
 
 
 def _song_field_problems(

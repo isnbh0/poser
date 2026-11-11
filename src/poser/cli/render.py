@@ -76,6 +76,7 @@ def main(argv: list[str] | None = None) -> int:
         composition = load_composition(args)
         formats = composition.song_formats()
         instruments = composition.instruments()
+        effects = composition.effects()
         audio_files = composition.audio_files()
         renders = composition.render_store()
     except (WorkspaceError, ConfigError) as error:
@@ -95,6 +96,7 @@ def main(argv: list[str] | None = None) -> int:
             song,
             instruments,
             audio_files,
+            effects=effects,
             timeout_s=RENDER_TIMEOUT_S,
             force=args.force,
         )

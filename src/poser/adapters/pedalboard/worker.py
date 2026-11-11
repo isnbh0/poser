@@ -9,7 +9,7 @@ just loaded.
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Protocol, cast
 
 import mido
 import numpy as np
@@ -17,9 +17,16 @@ import numpy as np
 from poser.adapters.isolation import MalformedJobError, job_fields, optional_str
 from poser.adapters.pedalboard.config import INITIALIZATION_TIMEOUT_S
 from poser.adapters.pedalboard.state import decode_state, encode_state
-from poser.core.audio import NUM_CHANNELS, SAMPLE_RATE, write_raw_audio
+from poser.core.audio import (
+    NUM_CHANNELS,
+    SAMPLE_RATE,
+    AudioProblem,
+    read_raw_audio,
+    write_raw_audio,
+)
 from poser.core.jsonvalue import JsonValue
 from poser.core.performance import Control, NoteOff, NoteOn, Performance, performance_from_data
+from poser.core.rules import is_int
 
 if TYPE_CHECKING:
     from pedalboard import AudioUnitPlugin, VST3Plugin
@@ -32,6 +39,7 @@ SETTLE_S = 0.1
 
 RENDER_KEYS = {"path", "plugin_name", "state", "performance", "audio_path"}
 CAPTURE_KEYS = {"path", "plugin_name", "state", "performance", "preview_path"}
+EFFECT_KEYS = {"path", "builtin", "parameters", "frames", "audio_path", "output_path"}
 
 
 def performance_messages(performance: Performance) -> list[mido.Message]:
@@ -101,6 +109,92 @@ class NotLoaded:
     """A plugin that could not be loaded as an instrument with its state, and why."""
 
     detail: str
+
+
+class LoadedEffect(Protocol):
+    """What an effect plugin offers: its role, and processing that returns what it was given."""
+
+    @property
+    def is_instrument(self) -> bool: ...
+
+    def __call__(self, audio: np.ndarray, sample_rate: int, **kwargs: int) -> np.ndarray: ...
+
+
+def load_effect(
+    path: str | None, builtin: str | None, parameters: Mapping[str, JsonValue]
+) -> LoadedEffect:
+    """Load an effect: a plugin from `path`, or the pedalboard-native class `builtin` names.
+
+    Raises whatever the plugin code raises, including AttributeError for an unknown class name.
+    """
+    if path is not None:
+        # Imported here so the parent never loads plugin code.
+        from pedalboard import load_plugin
+
+        return cast(
+            "LoadedEffect", load_plugin(path, initialization_timeout=INITIALIZATION_TIMEOUT_S)
+        )
+    # The builtin's name was checked at build time, but the class exists only where the native
+    # library does, so an unknown name is reported here, as a crashed worker.
+    import pedalboard_native
+
+    return getattr(pedalboard_native, cast("str", builtin))(**dict(parameters))
+
+
+def render_effect_fresh(
+    path: str | None, builtin: str | None, parameters: Mapping[str, JsonValue], audio: np.ndarray
+) -> np.ndarray | NotLoaded:
+    """Load the effect on a new instance and process `audio` through it.
+
+    An exception raised while processing escapes; the frame-count law is asserted below.
+    """
+    try:
+        plugin = load_effect(path, builtin, parameters)
+    except Exception as error:  # noqa: BLE001
+        return NotLoaded(str(error))
+    where = path if path is not None else cast("str", builtin)
+    if plugin.is_instrument:
+        return NotLoaded(f"{where} is not an effect")
+    return plugin(audio, SAMPLE_RATE, buffer_size=BUFFER_SIZE)
+
+
+def render_effect(job: JsonValue) -> JsonValue:
+    """Render audio through an effect and write it to `output_path` with write_raw_audio.
+
+    The audio is written unchecked; the core checks it. The frame-count law is asserted here: an
+    effect returns exactly the frames it was given, and one that does not is a crashed worker.
+    """
+    fields = job_fields(job, EFFECT_KEYS, "effect render job")
+    path, builtin, parameters = fields["path"], fields["builtin"], fields["parameters"]
+    frames, audio_path, output_path = fields["frames"], fields["audio_path"], fields["output_path"]
+    if not (
+        optional_str(path)
+        and optional_str(builtin)
+        and (path is None) != (builtin is None)
+        and isinstance(parameters, dict)
+        and is_int(frames)
+        and frames >= 1
+        and isinstance(audio_path, str)
+        and isinstance(output_path, str)
+    ):
+        raise MalformedJobError("effect render job", job)
+    problem = read_raw_audio(Path(audio_path), frames)
+    if isinstance(problem, AudioProblem):
+        # A wrong-type input crashes the worker, like every rule the input breaks.
+        raise ValueError(f"the effect's input is unusable: {problem.message}")  # noqa: TRY004
+    result = render_effect_fresh(
+        path, builtin, cast("Mapping[str, JsonValue]", parameters), problem.samples
+    )
+    if isinstance(result, NotLoaded):
+        return {"status": "load_failed", "detail": result.detail}
+    if not isinstance(result, np.ndarray) or result.shape != problem.samples.shape:
+        shape = getattr(result, "shape", type(result).__name__)
+        raise ValueError(
+            f"the effect returned {shape}, expected {problem.samples.shape}; an effect returns "
+            "exactly the frames it is given"
+        )
+    write_raw_audio(Path(output_path), result)
+    return {"status": "ok"}
 
 
 def render_fresh(
