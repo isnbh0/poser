@@ -10,9 +10,13 @@ license = "GPL-3.0-or-later"
 license-files = ["LICENSE"]
 requires-python = ">=3.13"
 dependencies = [
+    "poser==0.1.0",
     "numpy>=2.5.4",
     "scipy>=1.18.1",
 ]
+
+[tool.uv.sources]
+poser = { workspace = true }
 
 [build-system]
 requires = ["uv_build>=0.13.6,<0.14.0"]

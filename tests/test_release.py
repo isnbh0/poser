@@ -52,3 +52,11 @@ def test_makefile_checks_instruments() -> None:
 
 def test_package_is_marked_typed() -> None:
     assert (REPO_DIR / "src" / "poser" / "py.typed").is_file()
+
+
+def test_scsynth_distribution_declares_its_host_and_runtime_libraries() -> None:
+    requirements = metadata.requires("poser-scsynth")
+    assert requirements is not None
+    assert "poser==0.1.0" in requirements
+    assert any(requirement.startswith("numpy>=") for requirement in requirements)
+    assert any(requirement.startswith("scipy>=") for requirement in requirements)

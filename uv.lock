@@ -539,12 +539,14 @@ version = "0.1.0"
 source = { editable = "packages/poser-scsynth" }
 dependencies = [
     { name = "numpy" },
+    { name = "poser" },
     { name = "scipy" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "numpy", specifier = ">=2.5.4" },
+    { name = "poser", editable = "." },
     { name = "scipy", specifier = ">=1.18.1" },
 ]
 

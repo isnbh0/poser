@@ -11,10 +11,9 @@ machinery is needed. The render is total: exact frames or an exact failure, neve
 for an engine fault.
 """
 
-import base64
-import hashlib
 import json
 import os
+import struct
 import subprocess
 import tempfile
 import threading
@@ -28,7 +27,7 @@ import numpy as np
 from scipy.io import wavfile
 
 from poser.core.audio import NUM_CHANNELS, SAMPLE_RATE, write_raw_audio
-from poser.core.jsonvalue import Json, JsonValue, json_object
+from poser.core.jsonvalue import Json, JsonValue
 from poser.core.names import Identifier
 from poser.core.ports import (
     AdapterContext,
@@ -41,10 +40,11 @@ from poser.core.ports import (
 from poser.core.sounds import SoundEntry, SoundRef
 from poser.core.statuses import RenderFailureStatus, SoundFailureStatus
 from poser_scsynth.config import BUILTIN_SOURCE, SAVED_SOURCE, ScsynthConfig, from_options
-from poser_scsynth.scores import build_score, synthdef_name
+from poser_scsynth.formats import SoundRecipe
+from poser_scsynth.scores import compile_score
 from poser_scsynth.synthdefs import VOICE_BYTES, VOICE_META, VOICE_NAME
 
-ADAPTER_VERSION = "1"
+ADAPTER_VERSION = "2"
 SYNTHDEF_SUFFIX = ".scsyndef"
 META_SUFFIX = ".json"
 BUILTIN_SOUND = f"{BUILTIN_SOURCE}/{VOICE_NAME}"
@@ -173,18 +173,6 @@ def combine(*scans: SourceScan) -> SourceScan:
     )
 
 
-def _payload(payload: Json) -> tuple[str, dict[str, object]] | None:
-    """Return the base64 synthdef and the meta of a payload this instrument made, or None when
-    the payload is foreign."""
-    fields = json_object(payload.value())
-    if fields is None or set(fields) != {"synthdef", "meta"}:
-        return None
-    b64, meta = fields["synthdef"], fields["meta"]
-    if not isinstance(b64, str) or not isinstance(meta, dict):
-        return None
-    return b64, meta
-
-
 class ScsynthInstrument:
     """A SuperCollider engine, its sound sources, and the sounds saved with save-sound."""
 
@@ -247,7 +235,6 @@ class ScsynthInstrument:
             return SoundFailure(SoundFailureStatus.UNKNOWN_SOUND, detail)
         try:
             synthdef = path.read_bytes()
-            synthdef_name(synthdef)
         except (OSError, ValueError) as error:
             return SoundFailure(SoundFailureStatus.LOAD_FAILED, f"sound {ref}: {error}")
         try:
@@ -262,38 +249,16 @@ class ScsynthInstrument:
         self, ref: SoundRef, synthdef: bytes, meta: object
     ) -> ResolvedSound | SoundFailure:
         """Check the sound's meta, digest its identity, and build the render payload."""
-        if not isinstance(meta, dict):
-            return SoundFailure(
-                SoundFailureStatus.LOAD_FAILED, f"sound {ref}: its .json sidecar is not a table"
-            )
-        mapping = meta.get("cc", {})
-        if not isinstance(mapping, dict) or not all(
-            isinstance(key, str) and isinstance(value, str) for key, value in mapping.items()
-        ):
-            return SoundFailure(
-                SoundFailureStatus.LOAD_FAILED,
-                f"sound {ref}: its cc map must hold controller-number keys and param names",
-            )
         try:
-            canonical = Json.of(meta).text
+            recipe = SoundRecipe(synthdef, Json.of(meta))
         except ValueError as error:
             return SoundFailure(SoundFailureStatus.LOAD_FAILED, f"sound {ref}: {error}")
-        identity = hashlib.sha256(
-            b"\0".join([b"poser-scsynth", ADAPTER_VERSION.encode(), synthdef, canonical.encode()])
-        ).hexdigest()
-        payload = Json.of({"synthdef": base64.b64encode(synthdef).decode(), "meta": meta})
-        return ResolvedSound(ref, identity, payload)
+        return ResolvedSound(ref, recipe.identity(ADAPTER_VERSION), recipe.payload)
 
     def render(self, request: RenderRequest, timeout_s: float) -> RenderFailure | None:
-        payload = _payload(request.sound.payload)
-        if payload is None:
-            return RenderFailure(
-                RenderFailureStatus.LOAD_FAILED, "not a scsynth payload: wrong fields"
-            )
-        b64, meta = payload
         try:
-            synthdef = base64.b64decode(b64, validate=True)
-        except (ValueError, TypeError) as error:
+            recipe = SoundRecipe.from_payload(request.sound.payload)
+        except ValueError as error:
             return RenderFailure(RenderFailureStatus.LOAD_FAILED, f"scsynth payload: {error}")
         scsynth = self._config.scsynth
         if scsynth is None:
@@ -302,7 +267,7 @@ class ScsynthInstrument:
             return RenderFailure(
                 RenderFailureStatus.LOAD_FAILED, f"scsynth binary {scsynth} is missing"
             )
-        score = build_score(synthdef, meta, request.performance, SAMPLE_RATE)
+        score = compile_score(recipe, request.performance, SAMPLE_RATE)
         self._renders_dir.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(prefix=".scsynth-", dir=self._renders_dir) as directory:
             failure = self._run(scsynth, score, Path(directory), timeout_s)
@@ -310,10 +275,10 @@ class ScsynthInstrument:
                 return failure
             with warnings.catch_warnings():
                 # libsndfile writes chunks scipy warns it does not know.
-                warnings.simplefilter("ignore")
+                warnings.simplefilter("ignore", wavfile.WavFileWarning)
                 try:
                     rate, data = wavfile.read(Path(directory) / "output.wav")
-                except (OSError, ValueError) as error:
+                except (OSError, ValueError, EOFError, struct.error) as error:
                     return RenderFailure(
                         RenderFailureStatus.CRASHED, f"cannot read scsynth output: {error}"
                     )
@@ -347,9 +312,19 @@ class ScsynthInstrument:
             finished = subprocess.run(command, timeout=timeout_s, capture_output=True, check=False)
         except subprocess.TimeoutExpired as error:
             return RenderFailure(RenderFailureStatus.TIMED_OUT, f"scsynth: {error}")
+        except OSError as error:
+            return RenderFailure(RenderFailureStatus.LOAD_FAILED, f"cannot start scsynth: {error}")
         if finished.returncode != 0:
             tail = finished.stderr.decode(errors="replace")[-STDERR_TAIL:].strip()
-            return RenderFailure(RenderFailureStatus.CRASHED, f"scsynth: {tail}")
+            return RenderFailure(
+                RenderFailureStatus.CRASHED, f"scsynth exited {finished.returncode}: {tail}"
+            )
+        # scsynth reports command/load errors on stdout and can still exit zero with silence.
+        # Unknown control names are ignored by the engine and do not produce these diagnostics.
+        messages = (finished.stdout + finished.stderr).decode(errors="replace")
+        failures = ("FAILURE IN SERVER", "*** ERROR", "exception in GraphDef", "ERROR:")
+        if any(marker in messages for marker in failures):
+            return RenderFailure(RenderFailureStatus.LOAD_FAILED, messages[-STDERR_TAIL:].strip())
         if not output_path.is_file():
             return RenderFailure(RenderFailureStatus.CRASHED, "scsynth wrote no output file")
         return None
@@ -358,9 +333,12 @@ class ScsynthInstrument:
         """Reshape the engine's file to the exact stem and write it as raw audio.
 
         poser fixes the stem length (`core/audio.py`), so a short file is padded and a long one
-        truncated; the core checks the frame count again but not finiteness at the stem, so
-        non-finite frames are a crash here.
+        truncated. Non-finite engine output is a crash, never a successful raw-audio write.
         """
+        if data.dtype != np.float32:
+            return RenderFailure(RenderFailureStatus.CRASHED, "scsynth output is not float32")
+        if not np.isfinite(data).all():
+            return RenderFailure(RenderFailureStatus.CRASHED, "non-finite audio")
         if data.ndim != 2 or data.shape[1] != NUM_CHANNELS:
             return RenderFailure(
                 RenderFailureStatus.CRASHED, f"scsynth output has shape {data.shape}, not (n, 2)"

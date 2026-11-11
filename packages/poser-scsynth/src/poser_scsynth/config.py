@@ -72,6 +72,8 @@ def from_options(name: str, options: Mapping[str, JsonValue], base: Path) -> Scs
         raise ConfigError(f"{owner}: unknown option {unknown[0]!r}")
 
     path = _text(options.get("scsynth"))
+    if "scsynth" in options and path is None:
+        raise ConfigError(f"{owner}: scsynth must be non-empty text")
     scsynth = None if path is None else base / path
 
     raw_sources = options.get("sources", {})

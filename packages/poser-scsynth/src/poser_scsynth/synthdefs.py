@@ -8,11 +8,13 @@ byte string — the identity the adapter digests.
 
 The demo voice is a stereo additive bank: six sine partials at multiples of the note's
 frequency, fixed relative amplitudes, a per-note Linen envelope with a gate release, and both
-channels fed the same signal. No plugin makes this sound; that is the point of the adapter.
+channels fed the same signal. The sound is authored as an in-stack artifact, without a plugin.
 """
 
 import struct
 from dataclasses import dataclass
+
+from poser_scsynth.formats import synthdef_name
 
 AUDIO_RATE = 2
 CONTROL_RATE = 1
@@ -42,13 +44,25 @@ CONSTANT = -1
 
 @dataclass(frozen=True)
 class UGen:
-    """One unit generator: its class, rate, special index, inputs, and output rates."""
+    """One single-rate unit generator; output wires inherit its calculation rate.
+
+    The v1 emitter needs no multi-rate UGen. There is no independent output-rate field that
+    could contradict the calculation rate and make the engine read an uninitialized buffer.
+    """
 
     name: str
     rate: int
     inputs: tuple[Input, ...]
-    outputs: tuple[int, ...] = (AUDIO_RATE,)
+    channels: int = 1
     special: int = 0
+
+    def __post_init__(self) -> None:
+        if self.rate not in (SCALAR_RATE, CONTROL_RATE, AUDIO_RATE) or self.channels < 0:
+            raise ValueError("invalid UGen rate or output count")
+
+    @property
+    def outputs(self) -> tuple[int, ...]:
+        return (self.rate,) * self.channels
 
 
 @dataclass(frozen=True)
@@ -60,6 +74,11 @@ class SynthDef:
     params: tuple[float, ...]
     param_names: tuple[tuple[str, int], ...]
     ugens: tuple[UGen, ...]
+
+    def __post_init__(self) -> None:
+        # The emitter and imported artifacts share one structural contract. A definition with
+        # invalid topology, names or values cannot become a constructed SynthDef either.
+        synthdef_name(emit(self))
 
 
 class _Constants:
@@ -124,19 +143,21 @@ def additive_voice() -> SynthDef:
     release = constants.push(VOICE_RELEASE_S)
     done = constants.push(float(DONE_FREE_SELF))
 
-    ugens: list[UGen] = [
-        UGen("Control", CONTROL_RATE, (), (CONTROL_RATE, CONTROL_RATE, CONTROL_RATE))
-    ]
+    ugens: list[UGen] = [UGen("Control", CONTROL_RATE, (), channels=3)]
     scaled: list[int] = []  # The UGen holding each partial at its relative amplitude.
     for partial, amplitude in zip(VOICE_PARTIALS, VOICE_AMPLITUDES, strict=True):
         multiple = constants.push(float(partial))
         ratio = constants.push(amplitude)
         frequency = len(ugens)
-        # The partial's multiple of the note frequency is a control-rate product: control-rate
-        # inputs into an audio-rate operator read as zero, so the multiply must run at the
-        # control rate, exactly as the language's own compiler emits it.
+        # Frequency changes once per control block, so both the operator and its output wire
+        # have control rate. The oscillator consumes that control wire at audio rate.
         ugens.append(
-            UGen("BinaryOpUGen", CONTROL_RATE, (Input(0, 0), Input(CONSTANT, multiple)), special=2)
+            UGen(
+                "BinaryOpUGen",
+                CONTROL_RATE,
+                (Input(0, 0), Input(CONSTANT, multiple)),
+                special=2,
+            )
         )
         oscillator = len(ugens)
         ugens.append(UGen("SinOsc", AUDIO_RATE, (Input(frequency, 0), Input(CONSTANT, zero))))
@@ -157,9 +178,8 @@ def additive_voice() -> SynthDef:
         )
         total = addition
     envelope = len(ugens)
-    # The envelope runs at the control rate, as the language's own compiler emits it: scsynth's
-    # audio-rate Linen misreads its gate in non-realtime renders, while a control-rate Linen's
-    # output feeds the audio-rate multiply as an ordinary control wire.
+    # Linen supports control rate only (SCClassLibrary/Common/Audio/EnvGen.sc). Its output
+    # feeds the audio-rate multiply as an ordinary control wire.
     ugens.append(
         UGen(
             "Linen",
@@ -171,7 +191,6 @@ def additive_voice() -> SynthDef:
                 Input(CONSTANT, release),
                 Input(CONSTANT, done),
             ),
-            (CONTROL_RATE,),
         )
     )
     shaped = len(ugens)
@@ -184,7 +203,7 @@ def additive_voice() -> SynthDef:
             AUDIO_RATE,
             # One bus input, then each channel's signal: both channels carry the same signal.
             (Input(CONSTANT, zero), Input(final, 0), Input(final, 0)),
-            (),
+            channels=0,
         )
     )
     return SynthDef(

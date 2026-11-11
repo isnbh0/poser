@@ -37,7 +37,7 @@ from poser.core.statuses import RenderFailureStatus, SoundFailureStatus
 if TYPE_CHECKING:
     from poser.core.jsonvalue import JsonValue
 
-from poser_scsynth.scores import synthdef_name
+from poser_scsynth.formats import synthdef_name
 from poser_scsynth.synthdefs import VOICE_BYTES
 
 STUB_SOURCE = Path(__file__).parent / "scsynth_stub.py"
@@ -259,7 +259,7 @@ def test_score_records() -> None:
     assert len(news) == 2
     for position, args in enumerate(news):
         assert args[:4] == [SYNTH_NAME, 1000 + position, 0, 0]
-        name, freq, _, amp, _, gate = args[4:]
+        name, freq, _, amp, _, gate = args[4:10]
         assert (name, freq, amp, gate) == (
             "freq",
             pytest.approx(hz(60)),
@@ -267,13 +267,14 @@ def test_score_records() -> None:
             1.0,
         )
 
-    # The mapped CC at sample 10 reaches the one open node; the unmapped CC and the CC after
-    # both notes closed drop.
+    # Every mapped controller addresses the group, even between notes; only CC 7 drops.
     assert messages_of(score, "/n_set") == [
-        [1000, "brightness", pytest.approx(64 / 127)],
+        [0, "brightness", pytest.approx(64 / 127)],
         [1001, "gate", 0.0],
         [1000, "gate", 0.0],
+        [0, "brightness", pytest.approx(100 / 127)],
     ]
+    assert news[1][-2:] == ["brightness", pytest.approx(64 / 127)]
 
     # Timestamps hold the sample each event falls on. The timetag quantizes to 32.32 fixed
     # point, about a 90,000th of one sample at this rate, so the comparison allows that much.
@@ -285,6 +286,7 @@ def test_score_records() -> None:
             20 / SAMPLE_RATE,
             40 / SAMPLE_RATE,
             50 / SAMPLE_RATE,
+            60 / SAMPLE_RATE,
             performance.samples / SAMPLE_RATE + 1,
         ],
         abs=0.5 / SAMPLE_RATE,
@@ -321,9 +323,16 @@ def test_identity_repeats_and_tracks_bytes(tmp_path: Path) -> None:
     first = resolve(instrument).identity
     assert resolve(instrument).identity == first
 
-    (source / f"{SYNTH_NAME}.scsyndef").write_bytes(DEMO_SYNTHDEF + b"\0")
+    from dataclasses import replace
+
+    from poser_scsynth.synthdefs import additive_voice, emit
+
+    voice = additive_voice()
+    changed = emit(replace(voice, params=(440.0, 0.25, 1.0)))
+    (source / f"{SYNTH_NAME}.scsyndef").write_bytes(changed)
     assert resolve(instrument).identity != first
 
+    (source / f"{SYNTH_NAME}.scsyndef").write_bytes(DEMO_SYNTHDEF)
     (source / f"{SYNTH_NAME}.json").write_text('{"cc": {"2": "brightness"}}')
     assert resolve(instrument).identity != first
 
@@ -442,8 +451,8 @@ def _boundary_violations(paths: list[Path]) -> list[str]:
             top = module.split(".", 1)[0]
             if (
                 top in allowed_tops
-                or module == "poser"
-                or module.startswith(("poser.core.", "poser_scsynth"))
+                or module in {"poser.core", "poser_scsynth"}
+                or module.startswith(("poser.core.", "poser_scsynth."))
             ):
                 continue
             violations.append(f"{path.name}: {module}")
@@ -454,19 +463,63 @@ def test_package_boundary() -> None:
     assert _boundary_violations(_source_paths()) == []
 
 
+def test_boundary_catches_an_adapter_import(tmp_path: Path) -> None:
+    """The adapter depends on poser core only: an adapter-library or poser.adapters import is a
+    violation, whichever of the two it is."""
+    smuggled = tmp_path / "smuggled.py"
+    smuggled.write_text(
+        "import pedalboard\n"
+        "from poser.adapters import loading\n"
+        "from poser.core.audio import SAMPLE_RATE\n"
+    )
+    assert sorted(_boundary_violations([smuggled])) == [
+        f"{smuggled.name}: pedalboard",
+        f"{smuggled.name}: poser.adapters",
+        f"{smuggled.name}: poser.adapters.loading",
+    ]
+
+
 # The shipped voice's bytes are part of every identity it feeds, so they are pinned.
 
 
 def test_voice_bytes_are_golden() -> None:
     assert hashlib.sha256(VOICE_BYTES).hexdigest() == (
-        "59dc2ada4b9b81b2caf50833e30a8de43eeaaf3d769d3bf0682d6e9bfa011b26"
+        "80cb883ae429dd065630a70c9f6efa5725e818f259dc7ed5ceb4428614692263"
     )
     from poser_scsynth.synthdefs import additive_voice, emit
 
-    assert emit(additive_voice()) == VOICE_BYTES
+    voice = additive_voice()
+    assert emit(voice) == VOICE_BYTES
+    for ugen in voice.ugens:
+        assert all(rate == ugen.rate for rate in ugen.outputs), ugen
 
 
 def test_boundary_catches_a_pedalboard_import(tmp_path: Path) -> None:
     smuggled = tmp_path / "smuggled.py"
     smuggled.write_text("import pedalboard\nfrom poser.core.audio import SAMPLE_RATE\n")
     assert _boundary_violations([smuggled]) == [f"{smuggled.name}: pedalboard"]
+
+
+# The guide composes into a workspace without the plugins, as the build law demands.
+
+
+def test_guide_composes_into_a_scratch_workspace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from poser.cli.guide import GUIDE_NAME
+    from poser.cli.guide import main as guide_main
+    from poser.cli.init_workspace import main as init_main
+
+    monkeypatch.chdir(tmp_path)
+    assert init_main([]) == 0
+    config = tmp_path / "poser.toml"
+    config.write_text(
+        config.read_text(encoding="utf-8") + "\n[instruments.sc]\n"
+        'adapter = "poser_scsynth.instrument:create"\n'
+        'guide = """\nThe built-in sound is `sc:builtin/additive-voice`."""\n'
+    )
+    assert guide_main([]) == 0
+    guide = (tmp_path / GUIDE_NAME).read_text(encoding="utf-8")
+    assert "## scsynth instruments" in guide
+    assert "sc:builtin/additive-voice" in guide
+    assert "`sc` (poser_scsynth.instrument:create)" in guide
