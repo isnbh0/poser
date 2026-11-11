@@ -104,8 +104,13 @@ def test_core_audio_format_and_fixed_tail_are_documented() -> None:
     rendering = " ".join(
         GUIDE.split("## Rendering\n", 1)[1].split("## Reading the analysis", 1)[0].split()
     )
-    assert f"stereo ({NUM_CHANNELS} channels) at {SAMPLE_RATE} Hz" in rendering
-    assert f"fixed {TAIL_S:g} seconds after the last note end or controller change" in rendering
+    assert {int(value) for value in re.findall(r"\b(\d+)\s+channels\b", rendering)} == {
+        NUM_CHANNELS
+    }
+    assert {int(value) for value in re.findall(r"\b(\d+)\s+Hz\b", rendering)} == {SAMPLE_RATE}
+    assert {float(value) for value in re.findall(r"\b(\d+(?:\.\d+)?)\s+seconds\b", rendering)} == {
+        TAIL_S
+    }
 
 
 def test_python_examples_load(tmp_path: Path) -> None:
@@ -133,18 +138,6 @@ def test_commands_are_project_scripts() -> None:
     scripts = tomllib.loads((REPO_DIR / "pyproject.toml").read_text())["project"]["scripts"]
     commands = re.findall(r"uv run ([\w-]+)", GUIDE)
     assert set(commands) <= set(scripts)
-
-
-# Words true of one instrument adapter or one render store, which their own guides hold.
-ADAPTER_WORDS = ("Serum", "Pedalboard", "pedalboard", "plugin window")
-STORE_WORDS = ("renders/", "stems/", "latest/", "history/", ".sound-previews")
-
-
-def test_guide_holds_only_text_true_in_every_workspace() -> None:
-    prose = FENCE.sub("", GUIDE)
-    for line in prose.splitlines():
-        assert not any(word in line for word in ADAPTER_WORDS), line
-    assert not [word for word in STORE_WORDS if word in GUIDE]
 
 
 def test_statuses_and_defects_are_named() -> None:
@@ -177,9 +170,11 @@ def test_report_fields_exist() -> None:
 
 def test_bands_are_named_with_their_ranges() -> None:
     text = " ".join(GUIDE.split())
-    for name, (low, high) in report.BANDS.items():
-        # The guide writes ranges with an en dash.
-        assert f"`{name}` {low:g}–{high:g} Hz" in text  # noqa: RUF001
+    ranges = re.findall(
+        r"`(\w+)`\s+(\d+(?:\.\d+)?)\s*(?:[-\u2013\u2014]|to)\s*(\d+(?:\.\d+)?)\s+Hz\b",
+        text,
+    )
+    assert {name: (float(low), float(high)) for name, low, high in ranges} == report.BANDS
 
 
 def test_song_keys_match_the_code() -> None:

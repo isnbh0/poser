@@ -142,11 +142,10 @@ stores. Repeat `--include <source-relative-file>` for declared local source depe
 Export accepts `--config`, `--sounds-dir`, `--output-dir`, `--force`, and `--json`.
 Exit codes are 0 for publication, 1 for execution/analysis, changed inputs or I/O failure,
 2 for invalid arguments/configuration, and 3 for song contention.
-Hashes establish byte correspondence, not musical quality or complete Python reproducibility:
-external state, undeclared imports, and plugin nondeterminism remain outside that guarantee.
-The manifest records `listening: "not_auditioned"`; actual audition is separate evidence.
-Opaque report section payloads are preserved but their embedded paths are not verified portable.
-A historical report alone does not prove matching audio when its mix path is mutable.
+Export verifies correspondence, not musical quality or actual listening. The manifest records
+`listening: "not_auditioned"`; report any actual audition separately. See the
+[export contract](https://github.com/isnbh0/poser/blob/main/docs/setup.md#export-contract)
+for manifest details, portability, and reproducibility limits.
 
 ## Routing
 

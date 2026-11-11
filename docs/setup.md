@@ -92,14 +92,10 @@ For a poser-verified matching delivery, run:
 uv run export-song <song-path> --destination deliveries/first-song
 ```
 
-Use a new destination each time. Export loads the song once, renders and analyzes it under one
-song lock, and publishes only after success and input checks. It does not copy an old `latest`.
-Render/analyze remain useful for iteration; not every experiment or playback requires export.
-Add repeatable `--include <source-relative-file>` for declared local Python source dependencies.
-The bundle contains editable `source/`, `audio/`, `images/`, `report.json`, and `manifest.json`.
-Share that bundle, or accessible paths to it, with analysis interpretation and listening status.
-For Surge the mix is WAV; other adapters may use another format. Later renders do not replace
-this bundle. Failed export publishes no successful delivery; never substitute an earlier mix.
+Use a new destination each time. Add repeatable `--include <source-relative-file>` for declared
+local Python source dependencies. Share the successful bundle, or accessible paths to it, with
+analysis interpretation and listening status. For Surge the mix is WAV; other adapters may use
+another format. If export fails, resolve the diagnostic rather than substituting an earlier mix.
 
 See the [export contract](#export-contract) for exit codes, manifest fields, and portability limits.
 
@@ -141,8 +137,7 @@ Unsafe includes, source escapes, and overlap with inputs or store-mutated roots 
 Legacy stores without declared protected roots cannot perform verified export.
 
 Source/configuration/lockfile changes prevent publication. Export does not read or compose
-`POSER.md`. Manifest schema 2 omits schema 1's `guidance` field; guide-exposure records belong to
-separate composition experiments, not audio delivery.
+`POSER.md`.
 
 Schema-owned report/manifest artifact paths remain valid when the bundle moves. Section payloads
 are opaque JSON, preserved without copying or interpreting embedded paths; when present the

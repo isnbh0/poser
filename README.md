@@ -107,9 +107,8 @@ advice = false
 ```
 
 Then run `uv run update-guide` and `uv run update-guide --check`. Set `true` to restore advice.
-This persistent choice is independent of instrument configuration and never changes audio/cache
-keys or analysis thresholds. It controls generated context, not filesystem access or past model
-exposure. Owner instructions and custom instrument notes remain untouched.
+This choice changes generated advice, not rendering or analysis. Owner instructions and custom
+instrument notes remain untouched.
 
 ## Commands
 
@@ -143,15 +142,13 @@ take `--sounds-dir` or `--output-dir`, to work outside a workspace or on another
 ## Verified delivery
 
 Use `uv run export-song <song> --destination <new-directory>` for a matching delivery.
-Export renders and analyzes one loaded song under one lock, then publishes editable `source/`,
-`audio/`, `images/`, `report.json`, and a hash manifest only on success. Existing destinations
-are never replaced; later renders do not change the bundle. Declare local source dependencies
-with repeatable `--include <source-relative-file>`.
+Export publishes editable `source/`, `audio/`, `images/`, `report.json`, and a hash manifest
+only on success. Use a new destination each time and declare local source dependencies with
+repeatable `--include <source-relative-file>`.
 
-Render/analyze remain useful for iteration. Export verifies correspondence, not musical quality,
-a complete reproducible environment, or actual listening. Label unauditioned work honestly.
-See the [export contract](docs/setup.md#export-contract) for exit codes, path rules, manifest
-fields, and evidence boundaries.
+Render/analyze remain useful for iteration. Export verifies correspondence, not musical quality
+or actual listening. Label unauditioned work honestly. See the
+[export contract](docs/setup.md#export-contract) for guarantees, limitations, and path rules.
 
 ## Adapters of your own
 
@@ -177,9 +174,9 @@ Building an adapter loads no plugin, starts no process, writes no file, and read
 arguments and imported modules. Work with side effects waits for a method call, and a `guide`
 property reads only package data, so `update-guide` works on a machine without the plugins.
 `guide` is required operational reference; optional creative/workflow coaching belongs in a
-separate package-data-only `advice` property. Legacy `guide` content remains compatible but is not
-semantically sanitized: strict advice-isolation claims require auditing external adapter guides.
-Instrument `guide` notes are operational reference; inline instrument `advice` is rejected.
+separate package-data-only `advice` property. Instrument `guide` notes are operational reference;
+inline instrument `advice` is rejected. For controlled advice experiments, see
+[advice ablation](docs/ablation.md).
 
 The module must be importable in the workspace's environment, which poser's worker processes
 share. In a uv workspace, make the workspace a package (`[tool.uv] package = true` in its
