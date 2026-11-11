@@ -2,6 +2,7 @@
 
 import argparse
 import importlib
+import re
 import subprocess
 import sys
 import textwrap
@@ -11,7 +12,7 @@ from types import ModuleType
 from typing import TYPE_CHECKING, NoReturn
 
 import pytest
-from helpers import SCAFFOLD_DIR
+from helpers import SURGE_DIR
 
 from poser.adapters.filestore import FileRenderStore
 from poser.adapters.measuring import StandardMeasurer
@@ -21,7 +22,7 @@ from poser.adapters.song_formats import ScriptSongFormat, YamlSongFormat
 from poser.adapters.spectrogram import SpectrogramVisualizer
 from poser.adapters.wav import WavAudioFiles
 from poser.cli.common import load_composition
-from poser.compose import AdapterSpec, Composition, load, read_config
+from poser.compose import AdapterSpec, Composition, load, parse_config, read_config
 from poser.core.names import Identifier
 from poser.core.ports import AdapterContext, ConfigError
 
@@ -194,12 +195,42 @@ def files_under(root: Path) -> set[Path]:
 # Reading
 
 
-def test_the_scaffold_config_loads_one_pedalboard_instrument() -> None:
-    config = read_config(SCAFFOLD_DIR / "poser.toml")
+def test_the_reference_config_loads_one_pedalboard_instrument() -> None:
+    config = read_config(SURGE_DIR / "poser.toml")
 
     assert [(item.name, item.spec.use) for item in config.instruments] == [("surge", "pedalboard")]
     assert config.instruments[0].guide is not None
     assert "guide" not in config.instruments[0].spec.options
+
+
+def test_text_parser_matches_path_reader(tmp_path: Path) -> None:
+    path = tmp_path / "poser.toml"
+    path.write_text(SERUM)
+    assert parse_config(SERUM, path) == read_config(path)
+
+
+@pytest.mark.parametrize("text", ["[instruments]\n", "instruments = ["])
+def test_text_parser_matches_path_reader_errors(tmp_path: Path, text: str) -> None:
+    path = tmp_path / "poser.toml"
+    path.write_text(text)
+    with pytest.raises(ConfigError) as parse_error:
+        parse_config(text, path)
+    with pytest.raises(ConfigError) as read_error:
+        read_config(path)
+    assert str(read_error.value) == str(parse_error.value)
+
+
+def test_text_config_anchors_relative_paths_to_future_workspace(tmp_path: Path) -> None:
+    root = tmp_path / "future"
+    path = root / "poser.toml"
+    config = parse_config(SERUM, path)
+    context = AdapterContext(root, root / "sounds", root / "renders")
+    instrument = Composition(config, context).instruments()[Identifier("serum")]
+    assert isinstance(instrument, PedalboardInstrument)
+    assert instrument._config.path == root / "Missing.vst3"
+    with pytest.raises(ConfigError, match=re.escape(str(path))):
+        parse_config("[instruments]", path)
+    assert not root.exists()
 
 
 def test_a_config_without_adapters_builds_the_built_in_adapters(tmp_path: Path) -> None:

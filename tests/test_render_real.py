@@ -4,7 +4,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-from helpers import SCAFFOLD_DIR, band_spectrum_db, change_time_s, read_stem, real_render
+from helpers import SURGE_DIR, band_spectrum_db, change_time_s, read_stem, real_render
 from pedalboard.io import ReadableAudioFile
 
 from poser.adapters.song_formats import SONG_FORMATS
@@ -22,7 +22,7 @@ from poser.core.statuses import StemStatus
 
 @pytest.mark.real_plugins
 def test_demo_song_renders_aligned_audible_stems(tmp_path: Path) -> None:
-    song = load_song(SCAFFOLD_DIR / "demo.yaml", SONG_FORMATS)
+    song = load_song(SURGE_DIR / "demo.yaml", SONG_FORMATS)
     assert isinstance(song, Song)
     expected_samples = stem_samples(song)
 

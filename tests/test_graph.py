@@ -4,11 +4,11 @@ import math
 import re
 from collections.abc import Callable, Sequence
 from itertools import combinations, permutations
-from pathlib import Path
 from typing import cast
 
 import pytest
 import yaml
+from helpers import SURGE_DIR
 
 from poser.core.graph import (
     ACCEPTS_WIRES,
@@ -20,8 +20,6 @@ from poser.core.graph import (
     instantaneous_order,
 )
 from poser.core.song import ControlChange, Note, Song, Track, parse_song
-
-SCAFFOLD = Path(__file__).resolve().parents[1] / "src" / "poser" / "scaffold"
 
 
 def construct[T](cls: type[T], **values: object) -> T:
@@ -422,7 +420,7 @@ def test_graph_ending_at_the_song_limit_builds() -> None:
 
 def scaffold_demo() -> Song:
     """The demo song the scaffold ships, as a song value."""
-    data = yaml.safe_load((SCAFFOLD / "demo.yaml").read_text(encoding="utf-8"))
+    data = yaml.safe_load((SURGE_DIR / "demo.yaml").read_text(encoding="utf-8"))
     return parse_song(data)
 
 

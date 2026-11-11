@@ -9,7 +9,7 @@ import numpy as np
 import pytest
 import yaml
 from contracts import check_record_writer_contract, check_song_format_contract
-from helpers import SCAFFOLD_DIR
+from helpers import SURGE_DIR
 from test_song import cc_track_song, gain_song, helper_song, valid_song
 
 from poser.adapters import song_formats
@@ -44,7 +44,7 @@ def test_valid_song_loads_with_expected_values(tmp_path: Path) -> None:
 
 
 def test_demo_song_loads_with_two_bare_instrument_tracks_and_eight_notes() -> None:
-    song = loaded(SCAFFOLD_DIR / "demo.yaml")
+    song = loaded(SURGE_DIR / "demo.yaml")
 
     assert len(song.tracks) == 2
     assert all(track.sound == "surge" for track in song.tracks)

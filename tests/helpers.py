@@ -1,5 +1,6 @@
 """Helpers shared by several test files."""
 
+from importlib.resources import files
 from pathlib import Path
 
 import numpy as np
@@ -19,7 +20,8 @@ from poser.core.report import Report
 from poser.core.song import Song
 
 REPO_DIR = Path(__file__).resolve().parents[1]
-SCAFFOLD_DIR = REPO_DIR / "src" / "poser" / "scaffold"
+SCAFFOLD_DIR = Path(str(files("poser").joinpath("scaffold")))
+SURGE_DIR = Path(str(files("poser.reference_setups.surge")))
 REAL_CONFIG = REPO_DIR / "poser.toml"
 
 
@@ -28,7 +30,7 @@ def real_composition(tmp_path: Path) -> Composition:
     if not REAL_CONFIG.is_file():
         pytest.fail(
             "real-plugin tests read poser.toml at the repository root; "
-            "copy src/poser/scaffold/poser.toml there and edit its paths"
+            "copy src/poser/reference_setups/surge/poser.toml there and edit its paths"
         )
     return load(REAL_CONFIG, tmp_path / "sounds", tmp_path / "renders")
 

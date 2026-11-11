@@ -1,0 +1,10 @@
+# Surge XT reference instrument. Run `uv run update-guide` after editing this configuration.
+[instruments.surge]
+adapter = "pedalboard"
+path = "/Library/Audio/Plug-Ins/VST3/Surge XT.vst3"
+guide = """
+When a preset source is configured, Surge XT factory patches are available through presets/, \
+for example `surge:presets/Basses/Attacky`."""
+
+[instruments.surge.sources]
+presets = "/Library/Application Support/Surge XT/patches_factory"

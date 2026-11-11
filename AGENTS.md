@@ -16,8 +16,8 @@ of each adapter it uses.
   selects, by built-in name or import path.
 - `src/poser/cli/`: the commands, which load the composition and run a use case on it, and
   `cli/workspace.py`, which finds the workspace.
-- `src/poser/scaffold/`: package data that `uv run init-workspace` writes into a new workspace,
-  and the core guide.
+- `src/poser/scaffold/`: instrument-neutral workspace resources and the core guide.
+- `src/poser/reference_setups/surge/`: the Surge reference config, demo, and setup instructions.
 - `tests/`: the tests. Tests marked `real_plugins` load real plugins.
 
 ## Rules
@@ -41,7 +41,7 @@ of each adapter it uses.
 
 - `make check` runs format, lint, types, and the tests that need no plugins.
 - `make test-real` loads the instruments in a root `poser.toml`. To create one, copy
-  `src/poser/scaffold/poser.toml` and edit its paths.
+  `src/poser/reference_setups/surge/poser.toml` and edit its paths.
 - `make check-instruments` checks that each instrument in the root `poser.toml` loads and sounds.
-- To try the commands, run `uv --project <this repo> run init-workspace` in a scratch directory
+- To try the commands, run `uv --project <this repo> run init-workspace --setup surge` in a scratch directory
   outside the repo, then run the other commands there the same way.

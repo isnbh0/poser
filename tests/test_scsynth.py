@@ -511,7 +511,9 @@ def test_guide_composes_into_a_scratch_workspace(
     from poser.cli.init_workspace import main as init_main
 
     monkeypatch.chdir(tmp_path)
-    assert init_main([]) == 0
+    plugin = tmp_path / "Surge XT.vst3"
+    plugin.mkdir()
+    assert init_main(["--setup", "surge", "--plugin-path", str(plugin)]) == 0
     config = tmp_path / "poser.toml"
     config.write_text(
         config.read_text(encoding="utf-8") + "\n[instruments.sc]\n"

@@ -3,6 +3,7 @@
 import re
 import tomllib
 from importlib import metadata
+from importlib.resources import files
 
 from helpers import REPO_DIR
 
@@ -48,6 +49,17 @@ def test_makefile_checks_instruments() -> None:
 
     assert "check-instruments" in targets
     assert "check-plugins" not in targets
+
+
+def test_packaged_reference_and_neutral_resources() -> None:
+    surge = files("poser.reference_setups.surge")
+    for name in ("poser.toml", "demo.yaml", "README.md"):
+        assert surge.joinpath(name).is_file(), name
+    scaffold = files("poser").joinpath("scaffold")
+    for name in ("guide.md", "claude.md", "gitignore"):
+        assert scaffold.joinpath(name).is_file(), name
+    for name in ("poser.toml", "demo.yaml", "onboarding.txt"):
+        assert not scaffold.joinpath(name).is_file(), name
 
 
 def test_package_is_marked_typed() -> None:

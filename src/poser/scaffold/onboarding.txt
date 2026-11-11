@@ -1,6 +1,0 @@
-No synthesizer was detected on this machine. poser.toml names Surge XT, a capable free synth,
-whose guide text carries the next steps: install it from
-https://surge-synthesizer.github.io/downloads, run uv run check-instruments, then replace that
-guide text with a note about the instrument. The packaged installer puts the plugin and the
-factory patches at poser.toml's paths; a per-user install puts them under ~/Library, and you
-would set the paths to match.

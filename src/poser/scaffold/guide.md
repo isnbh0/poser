@@ -187,7 +187,7 @@ changed.
 - `uv run check-instruments`: whether each instrument loads, sounds, and repeats.
 - `uv run update-guide`: rewrite this guide after `poser.toml` changes.
 - `uv run save-sound`: for the owner, who shapes a sound by hand and saves it; not for agents.
-- `uv run init-workspace`: makes a new workspace; not needed here.
+- `uv run init-workspace --setup surge`: makes a new workspace; not needed here.
 
 ## Judging a revision
 

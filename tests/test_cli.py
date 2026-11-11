@@ -680,21 +680,13 @@ def test_preview_failure_after_saving(
 # update-guide
 
 
-def detect_surge(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Patch instrument detection to a machine whose Surge XT install is under tmp_path."""
-    surge = tmp_path / "surge.vst3"
-    patches = tmp_path / "patches"
-    surge.write_bytes(b"")
-    patches.mkdir()
-    monkeypatch.setattr(init_workspace, "SURGE_PLUGIN_PATHS", (surge,))
-    monkeypatch.setattr(init_workspace, "SURGE_PATCHES_PATHS", (patches,))
-    monkeypatch.setattr(init_workspace, "SERUM_PLUGIN_PATH", tmp_path / "absent.vst3")
-
-
 @pytest.fixture
 def initialized(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    detect_surge(tmp_path, monkeypatch)
-    assert init_workspace.main([str(tmp_path)]) == init_workspace.EXIT_OK
+    surge = tmp_path / "surge.vst3"
+    surge.mkdir()
+    assert (
+        init_workspace.main([str(tmp_path), "--setup", "surge", "--plugin-path", str(surge)]) == 0
+    )
     monkeypatch.chdir(tmp_path)
     return tmp_path
 
@@ -717,7 +709,7 @@ def test_update_guide_check_follows_poser_toml(
 
     assert guide.main([]) == EXIT_ALL_PASS
     assert out(capsys) == f"{guide_file}\n"
-    assert "Surge XT's patches are .fxp files" in guide_file.read_text()
+    assert "Surge XT patches are available" in guide_file.read_text()
     assert guide.main(["--check"]) == EXIT_ALL_PASS
     assert sorted(path.name for path in initialized.iterdir() if path.name.startswith(".")) == [
         ".gitignore"
@@ -742,13 +734,16 @@ def test_update_guide_without_a_workspace_or_with_a_bad_config_exits_2(
 def test_update_guide_config_writes_beside_that_config(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, inside: bool
 ) -> None:
+    plugin = tmp_path / "surge.vst3"
+    plugin.mkdir()
+    args = ["--setup", "surge", "--plugin-path", str(plugin)]
     other = tmp_path / "other"
-    init_workspace.main([str(other)])
+    assert init_workspace.main([str(other), *args]) == 0
     (other / "AGENTS.md").write_text(f"{GENERATED}\nold body\n")
     here = tmp_path / "here"
     here.mkdir()
     if inside:
-        init_workspace.main([str(here)])
+        assert init_workspace.main([str(here), *args]) == 0
     monkeypatch.chdir(here)
     mine = here / "AGENTS.md"
     before = mine.read_text() if inside else None

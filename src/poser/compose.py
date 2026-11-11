@@ -254,8 +254,17 @@ def read_config(path: Path) -> WorkspaceConfig:
     Raises ConfigError naming the file and the key for anything it cannot use.
     """
     try:
-        data = tomllib.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as error:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as error:
+        raise ConfigError(f"{path}: cannot read: {error}") from error
+    return parse_config(text, path)
+
+
+def parse_config(text: str, path: Path) -> WorkspaceConfig:
+    """Parse configuration text as if it were located at path, without filesystem access."""
+    try:
+        data = tomllib.loads(text)
+    except tomllib.TOMLDecodeError as error:
         raise ConfigError(f"{path}: cannot read: {error}") from error
     for key in data:
         if key not in TOP_LEVEL_KEYS:

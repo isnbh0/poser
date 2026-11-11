@@ -13,28 +13,20 @@ and writes a JSON report and spectrograms, so that an agent, or a person, can re
 - [uv](https://docs.astral.sh/uv/)
 - At least one VST3 or Audio Unit instrument
 
-The workspace that `init-workspace` creates describes the instruments it detects on this
-machine: with Surge XT installed you get a Surge XT workspace whose demo song is ready to
-render; with only Serum installed you get a Serum workspace; with neither you get the
-scaffold, which names Surge XT at its documented paths, and a note.
-
-No synthesizer installed? Surge XT (https://surge-synthesizer.github.io) is a capable, free
-one, and poser's default instrument. Its packaged installer installs for all users, putting
-the plugin at `/Library/Audio/Plug-Ins/VST3/Surge XT.vst3` and the factory patches at
-`/Library/Application Support/Surge XT/patches_factory`; a per-user install puts them under
-`~/Library` instead. Install it and run `uv run check-instruments`; if it lives elsewhere,
-set the paths in `poser.toml` to match and run `uv run update-guide` afterwards. For another
-instrument, name it in `poser.toml`, point `songs/demo.yaml`'s sound names at it, and run
-`uv run update-guide`.
+Initialization requires an explicit reference setup. The `surge` setup uses the free Surge XT
+VST3; see the [Surge setup guide](src/poser/reference_setups/surge/README.md) for installation
+and default locations. If the plugin is not found in the checked locations, initialization fails
+without creating a workspace or falling back to another instrument. Install Surge with appropriate
+permission, or retry with `--plugin-path PATH` for an existing installation. Use `--presets-path
+PATH` to select a custom factory-preset directory; presets are optional. After initialization,
+run `uv run check-instruments` to verify the instrument can render.
 
 ## Start a workspace
 
 ```bash
 uv init --bare --python 3.13 my-studio && cd my-studio
 uv add git+https://github.com/isnbh0/poser
-uv run init-workspace
-# the workspace's poser.toml and songs/demo.yaml then describe the instruments found on this
-# machine; edit them only when something lives in an unusual place, then:
+uv run init-workspace --setup surge
 uv run check-instruments
 uv run render-song songs/demo.yaml
 uv run analyze-song songs/demo.yaml
@@ -124,7 +116,7 @@ not write.
 
 ## Commands
 
-- `uv run init-workspace`: write the workspace scaffold and its guide into a directory.
+- `uv run init-workspace --setup surge`: write the selected reference setup and guide into a directory.
 - `uv run check-instruments`: check that each instrument loads, makes sound, and renders the same
   notes twice alike.
 - `uv run list-sounds`: list every sound a song can name, with a description.
@@ -173,7 +165,7 @@ share. In a uv workspace, make the workspace a package (`[tool.uv] package = tru
 
 `make check` runs format, lint, types, and the tests that need no plugins. `make test-real` loads
 real plugins; it reads a `poser.toml` at the repository root, so copy
-`src/poser/scaffold/poser.toml` there and edit its paths first. [AGENTS.md](AGENTS.md) describes
+`src/poser/reference_setups/surge/poser.toml` there and edit its paths first. [AGENTS.md](AGENTS.md) describes
 the layout and rules.
 
 ## License
