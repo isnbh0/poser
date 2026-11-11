@@ -31,7 +31,7 @@ FCNTL_USERS = {"poser/adapters/filestore.py", "poser/adapters/pedalboard/instrum
 LIBRARY_HOMES = {
     "pyloudnorm": {"poser/adapters/measuring.py"},
     "scipy": {"poser/adapters/measuring.py"},
-    "matplotlib": {"poser/adapters/spectrogram.py"},
+    "matplotlib": {"poser/adapters/spectrogram.py", "poser/adapters/piano_roll.py"},
 }
 
 
