@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import cast
 
 from poser.core.audio import sample_at, stem_samples
+from poser.core.graph import Graph
 from poser.core.jsonvalue import JsonValue, json_object
 from poser.core.rules import CONTROL_MAX, ControlChange, Timed, is_int
 from poser.core.song import Song
@@ -91,7 +92,7 @@ class Performance:
             previous = order
 
 
-def _ramp_events(song: Song, start: ControlChange, end: ControlChange) -> list[Control]:
+def _ramp_events(song: Song | Graph, start: ControlChange, end: ControlChange) -> list[Control]:
     """Return one event per value along a linear segment, at the beat where the line rounds to it.
 
     The segment's start value is the start entry's own event, so values run from one past it.
@@ -108,7 +109,7 @@ def _ramp_events(song: Song, start: ControlChange, end: ControlChange) -> list[C
     ]
 
 
-def _control_events(song: Song, timed: Timed) -> list[Control]:
+def _control_events(song: Song | Graph, timed: Timed) -> list[Control]:
     """Return a member's controller changes as events in time order.
 
     Each controller holds its first value from the start of the song, as automation does in a
@@ -145,8 +146,8 @@ def _control_events(song: Song, timed: Timed) -> list[Control]:
     return kept
 
 
-def perform(song: Song, timed: Timed) -> Performance:
-    """Return what the member's instrument plays, over the song's stem length.
+def perform(song: Song | Graph, timed: Timed) -> Performance:
+    """Return what the member's instrument plays, over the song's or graph's stem length.
 
     Times snap to whole samples, so float error, as in beats 0.1 + 0.2 against 0.3, cannot place
     a note-off just after the note-on it should precede. A note ends at least one sample after it

@@ -9,6 +9,7 @@ just loaded.
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Protocol, cast
 
 import mido
@@ -26,7 +27,7 @@ from poser.core.audio import (
 )
 from poser.core.jsonvalue import JsonValue
 from poser.core.performance import Control, NoteOff, NoteOn, Performance, performance_from_data
-from poser.core.rules import is_int
+from poser.core.rules import is_int, is_number
 
 if TYPE_CHECKING:
     from pedalboard import AudioUnitPlugin, VST3Plugin
@@ -39,7 +40,26 @@ SETTLE_S = 0.1
 
 RENDER_KEYS = {"path", "plugin_name", "state", "performance", "audio_path"}
 CAPTURE_KEYS = {"path", "plugin_name", "state", "performance", "preview_path"}
-EFFECT_KEYS = {"path", "builtin", "parameters", "frames", "audio_path", "output_path"}
+EFFECT_KEYS = {
+    "path",
+    "builtin",
+    "parameters",
+    "frames",
+    "audio_path",
+    "control_path",
+    "output_path",
+}
+
+# Poser's own effects, which need no plugin and hold no state: a bus's passthrough summer, and
+# the sidechain duck, the one effect that takes a control wire.
+SUM = "sum"
+DUCK = "duck"
+# The duck's ballistics, as declared in a recipe's `parameters`: the follower rises to a louder
+# control level over `attack_ms` and falls from a quieter one over `release_ms`, and at a
+# full-scale control level the gain falls by exactly `amount_db`, in proportion below it.
+DUCK_DEFAULTS: Mapping[str, float] = MappingProxyType(
+    {"attack_ms": 10.0, "release_ms": 150.0, "amount_db": 6.0}
+)
 
 
 def performance_messages(performance: Performance) -> list[mido.Message]:
@@ -120,6 +140,62 @@ class LoadedEffect(Protocol):
     def __call__(self, audio: np.ndarray, sample_rate: int, **kwargs: int) -> np.ndarray: ...
 
 
+def duck_parameters(parameters: Mapping[str, JsonValue]) -> dict[str, float]:
+    """Return the duck's ballistics, filling its declared defaults and refusing anything else."""
+    if unknown := sorted(set(parameters) - set(DUCK_DEFAULTS)):
+        raise ValueError(f"duck takes only the parameters {sorted(DUCK_DEFAULTS)}, got {unknown}")
+    values: dict[str, float] = {}
+    for name, default in DUCK_DEFAULTS.items():
+        value = parameters.get(name, default)
+        if not is_number(value):
+            raise ValueError(f"duck's {name} must be a number, got {value!r}")
+        number = float(value)
+        if number < 0 or (name != "amount_db" and number == 0):
+            kind = "non-negative decibels" if name == "amount_db" else "milliseconds above zero"
+            raise ValueError(f"duck's {name} must be {kind}, got {value!r}")
+        values[name] = number
+    return values
+
+
+def follower(level: np.ndarray, attack_samples: float, release_samples: float) -> np.ndarray:
+    """Follow `level` sample by sample: rising to a louder level over the attack, falling to a
+    quieter one over the release.
+
+    Each sample is the lower of two bounds on the past: an attack bound that rises linearly to
+    every level it has seen, and a release bound that decays exponentially from every level it
+    has seen. Both bounds are one running accumulate, so the follower is deterministic at any
+    length and identical for equal control signals.
+    """
+    index = np.arange(level.size, dtype=np.float64)
+    rise = 1.0 / attack_samples  # Linear rise: full scale in attack_samples samples.
+    attack = np.minimum.accumulate(level - index * rise) + index * rise
+    decay = 1.0 / release_samples  # Exponential fall, by one e-fold in release_samples samples.
+    logged = np.maximum.accumulate(np.log(np.maximum(level, 1e-12)) + index * decay)
+    return np.minimum(attack, np.exp(logged - index * decay))
+
+
+def render_duck(
+    audio: np.ndarray, control: np.ndarray | None, parameters: Mapping[str, float]
+) -> np.ndarray:
+    """Pull the audio down while the control signal is loud, by the declared ballistics.
+
+    The control's level, as the mean of its channels, is followed with the declared attack and
+    release; a full-scale control level pulls the gain down by exactly amount_db, in proportion
+    below it. With no control wire nothing steers the follower, and the output is the input.
+    """
+    if control is None:
+        return audio
+    level = np.abs(control.mean(axis=0, dtype=np.float64))
+    seconds = 1000.0 / SAMPLE_RATE
+    pulled = follower(
+        level,
+        parameters["attack_ms"] / seconds,
+        parameters["release_ms"] / seconds,
+    )
+    gain = 10.0 ** (-parameters["amount_db"] * np.clip(pulled, 0.0, 1.0) / 20.0)
+    return cast("np.ndarray", (audio * gain[np.newaxis, :]).astype(np.float32))
+
+
 def load_effect(
     path: str | None, builtin: str | None, parameters: Mapping[str, JsonValue]
 ) -> LoadedEffect:
@@ -142,17 +218,33 @@ def load_effect(
 
 
 def render_effect_fresh(
-    path: str | None, builtin: str | None, parameters: Mapping[str, JsonValue], audio: np.ndarray
+    path: str | None,
+    builtin: str | None,
+    parameters: Mapping[str, JsonValue],
+    audio: np.ndarray,
+    control: np.ndarray | None = None,
 ) -> np.ndarray | NotLoaded:
-    """Load the effect on a new instance and process `audio` through it.
+    """Load the effect on a new instance and process `audio` through it, with the control edge's
+    samples when the node was fed a control wire.
 
-    An exception raised while processing escapes; the frame-count law is asserted below.
+    Poser's own effects load nothing and consume the control edge here; every other recipe takes
+    no control edge, since only `duck` has a sidechain input poser can promise. An exception
+    raised while processing escapes; the frame-count law is asserted below.
     """
+    where = path if path is not None else cast("str", builtin)
+    if builtin == SUM:
+        return audio
+    if builtin == DUCK:
+        try:
+            return render_duck(audio, control, duck_parameters(parameters))
+        except Exception as error:  # noqa: BLE001
+            return NotLoaded(str(error))
+    if control is not None:
+        return NotLoaded(f"{where} takes no control wire: it has no sidechain input")
     try:
         plugin = load_effect(path, builtin, parameters)
     except Exception as error:  # noqa: BLE001
         return NotLoaded(str(error))
-    where = path if path is not None else cast("str", builtin)
     if plugin.is_instrument:
         return NotLoaded(f"{where} is not an effect")
     return plugin(audio, SAMPLE_RATE, buffer_size=BUFFER_SIZE)
@@ -161,12 +253,15 @@ def render_effect_fresh(
 def render_effect(job: JsonValue) -> JsonValue:
     """Render audio through an effect and write it to `output_path` with write_raw_audio.
 
-    The audio is written unchecked; the core checks it. The frame-count law is asserted here: an
-    effect returns exactly the frames it was given, and one that does not is a crashed worker.
+    The audio is written unchecked; the core checks it. The control edge's audio, when the job
+    carries one, must hold exactly `frames` frames, as the input must. The frame-count law is
+    asserted here: an effect returns exactly the frames it was given, and one that does not is a
+    crashed worker.
     """
     fields = job_fields(job, EFFECT_KEYS, "effect render job")
     path, builtin, parameters = fields["path"], fields["builtin"], fields["parameters"]
     frames, audio_path, output_path = fields["frames"], fields["audio_path"], fields["output_path"]
+    control_path = fields["control_path"]
     if not (
         optional_str(path)
         and optional_str(builtin)
@@ -176,14 +271,25 @@ def render_effect(job: JsonValue) -> JsonValue:
         and frames >= 1
         and isinstance(audio_path, str)
         and isinstance(output_path, str)
+        and optional_str(control_path)
     ):
         raise MalformedJobError("effect render job", job)
     problem = read_raw_audio(Path(audio_path), frames)
     if isinstance(problem, AudioProblem):
         # A wrong-type input crashes the worker, like every rule the input breaks.
         raise ValueError(f"the effect's input is unusable: {problem.message}")  # noqa: TRY004
+    control: np.ndarray | None = None
+    if control_path is not None:
+        read = read_raw_audio(Path(control_path), frames)
+        if isinstance(read, AudioProblem):
+            raise ValueError(f"the control wire's audio is unusable: {read.message}")
+        control = read.samples
     result = render_effect_fresh(
-        path, builtin, cast("Mapping[str, JsonValue]", parameters), problem.samples
+        path,
+        builtin,
+        cast("Mapping[str, JsonValue]", parameters),
+        problem.samples,
+        control,
     )
     if isinstance(result, NotLoaded):
         return {"status": "load_failed", "detail": result.detail}

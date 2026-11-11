@@ -12,19 +12,23 @@ from poser.core.rules import (
     CONTROL_MAX,  # noqa: F401
     MAX_SONG_S,  # noqa: F401
     ControlChange,
+    ControlData,
     Note,
-    Shape,
+    NoteData,
     SongError,
     _at,
     _cc_order_problems,
     _cc_problems,
     _control_change_problems,
+    _control_to_data,
     _duplicate_name_problems,
     _effects_problems,
     _last_beat,
     _length_problems,
     _note_problems,
+    _note_to_data,
     _notes_problems,
+    _plain,
     _song_field_problems,
     _track_field_problems,
     _track_problems,
@@ -151,9 +155,29 @@ class Song:
         return Graph(bpm=self.bpm, nodes=tuple(nodes), wires=tuple(wires))
 
 
-def song_last_beat(song: Song) -> float:
-    """Return the latest note end or controller change across tracks."""
-    return _last_beat(song.tracks)
+def song_last_beat(song: Song | Graph) -> float:
+    """Return the latest note end or controller change across a song's tracks or a graph's nodes."""
+    return _last_beat(song.tracks if isinstance(song, Song) else song.nodes)
+
+
+def song_graph(song: Song | Graph, effects: Sequence[str] = ()) -> Graph:
+    """Return the graph a song names: a Song compiles to its graph, and a Graph's effect
+    references resolve against the configured recipes, exactly as a compiled song's do.
+
+    A Song naming an unknown recipe is a problem naming it; a Graph's is the same problem at the
+    node, since a direct-frontend author names every node themselves.
+    """
+    if isinstance(song, Graph):
+        known = set(effects)
+        problems = [
+            f"nodes[{index}]: no effect recipe {node.effect!r} in poser.toml"
+            for index, node in enumerate(song.nodes)
+            if node.kind == "effect" and node.effect not in known
+        ]
+        if problems:
+            raise SongError(problems)
+        return song
+    return song.graph(effects)
 
 
 def _marks(recipes: Sequence[str]) -> Sequence[tuple[bool, str]]:
@@ -172,20 +196,6 @@ def _instance_name(base: str, ordinal: int, generated: set[str]) -> str:
         ordinal += 1
         name = f"{base}.{ordinal}"
     return name
-
-
-class NoteData(TypedDict):
-    beat: float
-    pitch: int
-    length: float
-    velocity: int
-
-
-class ControlData(TypedDict):
-    beat: float
-    control: int
-    value: int
-    shape: NotRequired[Shape]
 
 
 class TrackData(TypedDict):
@@ -370,34 +380,6 @@ def parse_song(value: object) -> Song:
     if problems := _length_problems(bpm, tracks, "song"):
         raise SongError(problems)
     return Song(bpm=bpm, tracks=tuple(tracks))
-
-
-def _plain(value: float) -> float:
-    """Return a number in one spelling, so equal songs write equal text: an integral number as an
-    int, any other as a float.
-    """
-    return int(value) if float(value).is_integer() else float(value)
-
-
-def _note_to_data(note: Note) -> NoteData:
-    return {
-        "beat": _plain(note.beat),
-        "pitch": note.pitch,
-        "length": _plain(note.length),
-        "velocity": note.velocity,
-    }
-
-
-def _control_to_data(change: ControlChange) -> ControlData:
-    data: ControlData = {
-        "beat": _plain(change.beat),
-        "control": change.control,
-        "value": change.value,
-        "shape": change.shape,
-    }
-    if change.shape == "step":
-        del data["shape"]
-    return data
 
 
 def _track_to_data(track: Track) -> TrackData:

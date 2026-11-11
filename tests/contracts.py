@@ -22,6 +22,7 @@ from poser.core.audio import (
     stem_samples,
 )
 from poser.core.cache import Stamp, StampProblem
+from poser.core.graph import Graph
 from poser.core.names import Identifier, NodeName, SongId, Suffix, TrackName
 from poser.core.performance import perform
 from poser.core.ports import (
@@ -260,8 +261,8 @@ def check_preset_format_contract(fmt: object, sample_path: Path, tmp_path: Path)
         raise AssertionError(f"read_state of {path.name} raised nothing")
 
 
-def check_record_writer_contract(writer: object, sample_song: Song) -> None:
-    """Check a RecordWriter: its suffix, and one non-empty text for equal songs."""
+def check_record_writer_contract(writer: object, sample_song: Song | Graph) -> None:
+    """Check a RecordWriter: its suffix, and one non-empty text for equal songs or graphs."""
     assert isinstance(writer, RecordWriter)
     assert isinstance(writer.suffix, Suffix)
     text = writer.dump(sample_song)

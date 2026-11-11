@@ -90,6 +90,20 @@ Music helpers, from `poser`; their docstrings give the parameters:
 - `swing` — notes with every off-beat moved later, for a swung feel.
 - `humanize` — notes with seeded, repeatable velocity and timing variation.
 
+## Routing
+
+Direct wiring is opt-in: a song script's `build()` may return a `Graph` of named `Node`s joined
+by `Wire`s, instead of a `Song`. An effect node names a recipe from `poser.toml` exactly like a
+track's `effects` list; a track node stays a source and takes no wires, and a node may feed any
+number of nodes. A wire carries audio, scaled by its `gain_db` for sends, or `control`, at most
+one per node and only into a recipe that documents a control input, such as a sidechain duck.
+
+The mix is the sum of the nodes nothing feeds from, each at its own `gain`. A bus is therefore an
+effect node fed by sends, each scaled by its wire's `gain_db`, fading its group at the bus's own
+`gain`. The leaf-only consequence: routing a track's output into an effect removes the track's
+dry sound from the mix unless a dry branch is authored — fan the track out to both the effect
+and the mix to keep it.
+
 ## Sounds
 
 A `sound` is `<instrument>` or `<instrument>:<name>`, exactly as `uv run list-sounds` prints

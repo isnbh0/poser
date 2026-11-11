@@ -6,6 +6,7 @@ from typing import cast
 
 import pytest
 
+from poser.core.graph import Graph, Node, Wire
 from poser.core.music import chord, notes, pitch, scale, swing
 from poser.core.names import Identifier, TrackName
 from poser.core.song import (
@@ -17,6 +18,7 @@ from poser.core.song import (
     SongError,
     Track,
     parse_song,
+    song_graph,
     song_to_data,
 )
 from poser.core.sounds import SoundRef
@@ -697,3 +699,27 @@ def test_two_tracks_chains_stay_distinct_and_the_compile_is_deterministic() -> N
 
     assert [node.name for node in graph.nodes] == ["a", "a.drive", "b", "b.drive"]
     assert graph == again
+
+
+def graph_song() -> Graph:
+    """A direct-frontend graph: a lead into one drive, as its author named every node."""
+    lead = Node("lead", "track", sound="serum", notes=(Note(0, 60, 1, 100),))
+    drive = Node("lead.drive", "effect", effect="drive")
+    return Graph(120, (lead, drive), (Wire("lead", "lead.drive", "audio"),))
+
+
+def test_song_graph_hands_a_graph_back_and_resolves_its_effect_references() -> None:
+    """C14: a Graph's recipes resolve against `effects` exactly as a compiled song's do."""
+    graph = graph_song()
+    assert song_graph(graph, ("drive",)) is graph
+
+    with pytest.raises(SongError) as raised:
+        song_graph(graph, ())
+
+    assert raised.value.problems == ["nodes[1]: no effect recipe 'drive' in poser.toml"]
+
+
+def test_song_graph_compiles_a_song_as_its_method_does() -> None:
+    song = chain_song("drive")
+
+    assert song_graph(song, ("drive",)) == song.graph(("drive",))

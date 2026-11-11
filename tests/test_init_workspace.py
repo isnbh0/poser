@@ -22,6 +22,7 @@ from poser.compose import load
 from poser.core.guide import GENERATED, compose_guide
 from poser.core.loading import load_song
 from poser.core.names import Identifier
+from poser.core.song import Song
 
 
 def resource(name: str) -> bytes:
@@ -184,7 +185,9 @@ def test_init_writes_detected_serum_when_surge_is_missing(
     assert serum["sources"]["presets"] == str(init_workspace.SERUM_PRESET_PATH)
     assert "surge" not in config["instruments"]
     assert "# [instruments.surge]" in text
-    for track in load_song(tmp_path / "songs" / "demo.yaml", SONG_FORMATS).tracks:
+    demo = load_song(tmp_path / "songs" / "demo.yaml", SONG_FORMATS)
+    assert isinstance(demo, Song)
+    for track in demo.tracks:
         assert str(track.sound) == "serum"
     out = capsys.readouterr().out
     assert "Wrote poser.toml from detected serum" in out
@@ -375,7 +378,9 @@ def test_initialized_directory_is_a_workspace_with_a_loadable_demo(tmp_path: Pat
     init_workspace.main([str(tmp_path)])
 
     assert find_workspace(tmp_path / "songs") == Workspace(tmp_path.resolve())
-    assert load_song(tmp_path / "songs" / "demo.yaml", SONG_FORMATS).tracks
+    demo = load_song(tmp_path / "songs" / "demo.yaml", SONG_FORMATS)
+    assert isinstance(demo, Song)
+    assert demo.tracks
 
 
 def test_a_file_where_the_workspace_goes_refuses(

@@ -34,6 +34,7 @@ from fakes import (
 from test_song import gain_song
 
 from poser.core.audio import Audio
+from poser.core.graph import Graph
 from poser.core.jsonvalue import Json
 from poser.core.names import Identifier, NodeName, SongId, Suffix
 from poser.core.ports import (
@@ -186,7 +187,7 @@ class CountingRecordWriter(FakeRecordWriter):
         self.calls = 0
 
     @override
-    def dump(self, song: Song) -> str:
+    def dump(self, song: Song | Graph) -> str:
         self.calls += 1
         return f"{super().dump(song)}\n# dump {self.calls}"
 

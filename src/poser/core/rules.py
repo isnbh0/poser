@@ -1,10 +1,11 @@
-"""The rules every song and graph is checked against, and the timed values they govern."""
+"""The rules every song and graph is checked against, the timed values they govern, and the
+plain-data form those timed values share, so song and graph records write them alike."""
 
 import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from itertools import pairwise
-from typing import Literal, Protocol, TypeGuard, cast
+from typing import Literal, NotRequired, Protocol, TypedDict, TypeGuard, cast
 
 from poser.core.names import Identifier, NodeName, TrackName
 from poser.core.sounds import parse_sound_ref
@@ -312,3 +313,53 @@ def _length_problems(bpm: float, values: Sequence[Timed], where: str) -> list[st
             f"{seconds:.0f} seconds"
         )
     ]
+
+
+# The plain-data form of the timed values, shared by the song and graph records so both write a
+# note in one shape and one spelling of its numbers.
+
+
+class NoteData(TypedDict):
+    """A note's plain-data form, the song format's own shape for it."""
+
+    beat: float
+    pitch: int
+    length: float
+    velocity: int
+
+
+class ControlData(TypedDict):
+    """A controller change's plain-data form; `shape` is present only when it is not `step`."""
+
+    beat: float
+    control: int
+    value: int
+    shape: NotRequired[Shape]
+
+
+def _plain(value: float) -> float:
+    """Return a number in one spelling, so equal values write equal text: an integral number as an
+    int, any other as a float.
+    """
+    return int(value) if float(value).is_integer() else float(value)
+
+
+def _note_to_data(note: Note) -> NoteData:
+    return {
+        "beat": _plain(note.beat),
+        "pitch": note.pitch,
+        "length": _plain(note.length),
+        "velocity": note.velocity,
+    }
+
+
+def _control_to_data(change: ControlChange) -> ControlData:
+    data: ControlData = {
+        "beat": _plain(change.beat),
+        "control": change.control,
+        "value": change.value,
+        "shape": change.shape,
+    }
+    if change.shape == "step":
+        del data["shape"]
+    return data

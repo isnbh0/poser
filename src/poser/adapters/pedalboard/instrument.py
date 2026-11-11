@@ -47,7 +47,7 @@ from poser.adapters.pedalboard.sources import (
     scan_saved,
 )
 from poser.adapters.pedalboard.state import decode_state, encode_state
-from poser.adapters.pedalboard.worker import capture_job, render_effect, render_job
+from poser.adapters.pedalboard.worker import DUCK, capture_job, render_effect, render_job
 from poser.core.audio import write_raw_audio
 from poser.core.jsonvalue import Json, JsonValue, digest, json_object
 from poser.core.names import Identifier, Suffix
@@ -370,12 +370,22 @@ class PedalboardEffect:
         fields = json_object(request.recipe.payload.value())
         if fields is None or set(fields) != {"path", "builtin", "parameters"}:
             raise ValueError(f"not a Pedalboard effect payload: {request.recipe.payload.text}")
+        if request.control is not None and fields["builtin"] != DUCK:
+            # Whether a recipe takes a control wire is a render-time fact: build time loads no
+            # plugin and promises no plugin surface, so poser promises a sidechain input only for
+            # its own duck, and every other recipe refuses the control edge here, naming itself.
+            return RenderFailure(
+                RenderFailureStatus.LOAD_FAILED,
+                f"effect {request.recipe.recipe!r} has no sidechain input, so it takes no "
+                "control wire",
+            )
         job: dict[str, JsonValue] = {
             "path": cast("JsonValue", fields["path"]),
             "builtin": cast("JsonValue", fields["builtin"]),
             "parameters": cast("JsonValue", fields["parameters"]),
             "frames": request.audio.frames,
             "audio_path": "",
+            "control_path": None,
             "output_path": str(request.audio_path),
         }
         try:
@@ -384,6 +394,10 @@ class PedalboardEffect:
                 input_path = Path(directory) / "input.npy"
                 write_raw_audio(input_path, request.audio.samples)
                 job["audio_path"] = str(input_path)
+                if request.control is not None:
+                    control_path = Path(directory) / "control.npy"
+                    write_raw_audio(control_path, request.control.samples)
+                    job["control_path"] = str(control_path)
                 result = run_isolated(render_effect, job, timeout_s)
         except WorkerTimedOutError as error:
             return RenderFailure(RenderFailureStatus.TIMED_OUT, str(error))

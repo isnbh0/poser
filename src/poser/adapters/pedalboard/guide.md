@@ -30,3 +30,19 @@ names. Two shapes are allowed:
 
 A recipe processes whatever its node is fed, so a chain node named `<track>.<effect>` hears its
 track. Changing `parameters` re-renders that node and everything downstream of it.
+
+Two builtins belong to poser, not to Pedalboard, and render headlessly with no vendor plugin:
+
+- `builtin = "sum"` is a passthrough summer: it changes nothing, so a node wired to it exists to
+  carry its feeds. Send tracks into it with wires at `gain_db: 0` and the bus fades the group at
+  the node's own `gain`.
+- `builtin = "duck"` is a sidechain duck: the node's output is pulled down while a `control`
+  wire's signal is loud, so a kick can steer a pad. Its `parameters` are `attack_ms`,
+  `release_ms`, and `amount_db` (defaults 10, 150, and 6): the follower rises to a louder control
+  level over `attack_ms`, falls from a quieter one over `release_ms`, and a full-scale control
+  level pulls the gain down by exactly `amount_db`. With no control wire it passes its audio
+  through unchanged.
+
+A control wire is accepted only by `duck`. Any other recipe refuses one at render time with
+`load_failed`, naming the effect and the missing sidechain input: whether a plugin exposes a
+sidechain is not poser's to promise without loading it, and build time loads no plugin.

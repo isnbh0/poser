@@ -3,16 +3,21 @@
 import heapq
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, NotRequired, TypedDict, cast
 
 from poser.core.rules import (
     GAIN_MAX_DB,
     GAIN_MIN_DB,
     NODE_NAME,
     ControlChange,
+    ControlData,
     Note,
+    NoteData,
+    _control_to_data,
     _duplicate_name_problems,
     _length_problems,
+    _note_to_data,
+    _plain,
     _song_field_problems,
     _track_problems,
     is_int,
@@ -29,12 +34,15 @@ WIRE_KINDS: tuple[WireKind, ...] = ("audio", "control")
 MODES: tuple[Mode, ...] = ("acyclic", "feedback")
 
 # Which incoming wires each kind of node accepts, per wire kind: the most wires of that kind the
-# node takes, or None for any number. An effect node takes any number of audio wires this phase,
-# including none at all (it then renders the silence it is fed); P4 to P5 widen this table further;
-# the acceptance rule never changes.
+# node takes, or None for any number. An effect node takes any number of audio wires, including
+# none at all (it then renders the silence it is fed), and at most one control wire, which it
+# takes only alongside an audio wire, since steering does nothing for a node that hears nothing;
+# whether its recipe can use the control edge is a render-time fact its adapter checks. A track
+# node takes no wires: sources are sources. P5 widens this table further; the acceptance rule
+# never changes.
 ACCEPTS_WIRES: dict[NodeKind, dict[WireKind, int | None]] = {
     "track": {"audio": 0, "control": 0},
-    "effect": {"audio": None, "control": 0},
+    "effect": {"audio": None, "control": 1},
     "delay": {"audio": 0, "control": 0},
 }
 
@@ -118,6 +126,29 @@ class Graph:
 
     def seconds(self, beat: float) -> float:
         return beat * 60 / self.bpm
+
+    def to_data(self) -> "GraphData":
+        """Return the graph as plain data: its tempo and mode, each node's kind payload, and every
+        wire whole.
+
+        This is the analysis record's song text for a graph song. Numbers are written in one
+        spelling and the field order is fixed, so structurally equal graphs give equal data and
+        two graphs that differ in any node, wire, gain, or mode give different data.
+        """
+        return {
+            "bpm": _plain(self.bpm),
+            "mode": self.mode,
+            "nodes": [_node_to_data(node) for node in self.nodes],
+            "wires": [
+                {
+                    "from_name": wire.from_name,
+                    "to_name": wire.to_name,
+                    "kind": wire.kind,
+                    "gain_db": _plain(wire.gain_db),
+                }
+                for wire in self.wires
+            ],
+        }
 
     def topological(self) -> tuple[Node, ...]:
         """Return the nodes so each follows the nodes its wires come from, ties broken by name.
@@ -238,27 +269,91 @@ def _endpoint_problems(wires: Sequence[Wire], nodes: Sequence[Node]) -> list[str
 
 
 def _acceptance_problems(nodes: Sequence[Node], wires: Sequence[Wire]) -> list[str]:
-    """Return one problem per wire whose target does not accept its kind of input."""
+    """Return one problem per wire whose target does not accept its kind of input.
+
+    A control wire is also rejected on its own: steering does nothing for a node that hears no
+    audio, so a control wire's target must receive at least one audio wire.
+    """
     kinds = {node.name: node.kind for node in nodes}
     problems: list[str] = []
     received: dict[tuple[str, str], int] = {}
+    audio: dict[str, int] = {}
     for index, wire in enumerate(wires):
         node_kind = kinds.get(wire.to_name)
         if node_kind is None:
             continue  # The endpoint problem already names the unknown node.
-        limit = ACCEPTS_WIRES[node_kind].get(wire.kind, 0)
         received[wire.to_name, wire.kind] = received.get((wire.to_name, wire.kind), 0) + 1
+        if wire.kind == "audio":
+            audio[wire.to_name] = audio.get(wire.to_name, 0) + 1
+        limit = ACCEPTS_WIRES[node_kind].get(wire.kind, 0)
         if limit == 0:
             problems.append(
                 f"Graph.wires[{index}]: node {wire.to_name!r} of kind {node_kind!r} accepts no "
                 f"{wire.kind} wires"
             )
         elif limit is not None and received[wire.to_name, wire.kind] > limit:
+            plural = "" if limit == 1 else "s"
             problems.append(
-                f"Graph.wires[{index}]: node {wire.to_name!r} already receives the "
-                f"{limit} {wire.kind} wires it accepts"
+                f"Graph.wires[{index}]: node {wire.to_name!r} of kind {node_kind!r} accepts at "
+                f"most {limit} {wire.kind} wire{plural}"
+            )
+    for index, wire in enumerate(wires):
+        node_kind = kinds.get(wire.to_name)
+        if node_kind is None or wire.kind != "control":
+            continue
+        limit = ACCEPTS_WIRES[node_kind].get("control", 0)
+        if limit is not None and limit > 0 and audio.get(wire.to_name, 0) == 0:
+            problems.append(
+                f"Graph.wires[{index}]: node {wire.to_name!r} of kind {node_kind!r} takes a "
+                "control wire only with an audio wire"
             )
     return problems
+
+
+def _node_to_data(node: Node) -> "NodeData":
+    """Return a node as plain data: its name, fader, and the payload its kind carries."""
+    data: NodeData = {"name": node.name, "kind": node.kind, "gain_db": _plain(node.gain_db)}
+    if node.kind == "track":
+        data["sound"] = cast("str", node.sound)
+        data["notes"] = [_note_to_data(note) for note in node.notes]
+        if node.cc:
+            data["cc"] = [_control_to_data(change) for change in node.cc]
+    elif node.kind == "effect":
+        data["effect"] = cast("str", node.effect)
+    else:
+        data["delay_samples"] = cast("int", node.delay_samples)
+    return data
+
+
+class NodeData(TypedDict):
+    """A node's plain-data form, its kind payload present only for its own kind."""
+
+    name: str
+    kind: str
+    gain_db: float
+    sound: NotRequired[str]
+    notes: NotRequired[list[NoteData]]
+    cc: NotRequired[list[ControlData]]
+    effect: NotRequired[str]
+    delay_samples: NotRequired[int]
+
+
+class WireData(TypedDict):
+    """A wire's plain-data form: its endpoints, its kind, and its send gain."""
+
+    from_name: str
+    to_name: str
+    kind: str
+    gain_db: float
+
+
+class GraphData(TypedDict):
+    """A graph's plain-data form, the analysis record's song text for a graph song."""
+
+    bpm: float
+    mode: str
+    nodes: list[NodeData]
+    wires: list[WireData]
 
 
 def _cycle_problems(nodes: Sequence[Node], wires: Sequence[Wire]) -> list[str]:

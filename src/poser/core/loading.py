@@ -3,6 +3,7 @@
 from collections.abc import Sequence
 from pathlib import Path
 
+from poser.core.graph import Graph
 from poser.core.ports import SongFormat
 from poser.core.song import Song, SongError
 
@@ -14,11 +15,12 @@ def _listed(suffixes: Sequence[str]) -> str:
     return f"{', '.join(suffixes[:-1])}, or {suffixes[-1]}"
 
 
-def load_song(path: Path, formats: Sequence[SongFormat]) -> Song:
+def load_song(path: Path, formats: Sequence[SongFormat]) -> Song | Graph:
     """Load the song at `path` with the format whose suffixes contain its suffix exactly.
 
-    Raises ValueError when two formats claim one suffix, and SongError when no format claims the
-    path's suffix or the format cannot read the song.
+    A script's `build()` may return a Graph, so a loaded song is either kind. Raises ValueError
+    when two formats claim one suffix, and SongError when no format claims the path's suffix or
+    the format cannot read the song.
     """
     claimed: dict[str, SongFormat] = {}
     for song_format in formats:

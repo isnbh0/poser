@@ -1513,6 +1513,7 @@ def effect_job(tmp_path: Path, **fields: JsonValue) -> dict[str, JsonValue]:
         "parameters": {"gain_db": -6},
         "frames": 480,
         "audio_path": str(write_effect_input(tmp_path)),
+        "control_path": None,
         "output_path": str(tmp_path / "out.npy"),
     }
     job.update(fields)
@@ -1527,6 +1528,123 @@ def test_render_effect_processes_audio_through_a_native_builtin(tmp_path: Path) 
     audio = read_raw_audio(output, 480)
     assert isinstance(audio, Audio)
     assert np.allclose(audio.samples, 0.5 * 10 ** (-6 / 20))
+
+
+def write_effect_control(tmp_path: Path, frames: int = 480, fill: float = 0.5) -> Path:
+    path = tmp_path / "control.npy"
+    write_raw_audio(path, np.full((2, frames), fill, np.float32))
+    return path
+
+
+def test_render_effect_sums_as_a_passthrough(tmp_path: Path) -> None:
+    output = tmp_path / "out.npy"
+
+    assert render_effect(effect_job(tmp_path, builtin="sum", parameters={}, control_path=None)) == {
+        "status": "ok"
+    }
+
+    audio = read_raw_audio(output, 480)
+    assert isinstance(audio, Audio)
+    assert np.allclose(audio.samples, 0.5)
+
+
+def test_render_effect_ducks_while_the_control_is_loud(tmp_path: Path) -> None:
+    """The duck's own law: a full-scale control pulls the gain down by exactly amount_db, in
+    proportion below it, so a control at half scale pulls a 0.5 signal down by 3 of 6 dB."""
+    output = tmp_path / "out.npy"
+
+    assert render_effect(
+        effect_job(
+            tmp_path,
+            builtin="duck",
+            parameters={"attack_ms": 1, "release_ms": 100, "amount_db": 6},
+            control_path=str(write_effect_control(tmp_path, fill=0.5)),
+        )
+    ) == {"status": "ok"}
+
+    audio = read_raw_audio(output, 480)
+    assert isinstance(audio, Audio)
+    assert np.allclose(audio.samples, 0.5 * 10 ** (-3 / 20))
+
+
+@pytest.mark.parametrize("control_fill", [0.0, None])
+def test_render_effect_duck_without_a_control_passes_its_audio_through(
+    tmp_path: Path, control_fill: float | None
+) -> None:
+    output = tmp_path / "out.npy"
+    job = effect_job(tmp_path, builtin="duck", parameters={})
+    job["control_path"] = (
+        None if control_fill is None else str(write_effect_control(tmp_path, fill=control_fill))
+    )
+
+    assert render_effect(job) == {"status": "ok"}
+
+    audio = read_raw_audio(output, 480)
+    assert isinstance(audio, Audio)
+    assert np.allclose(audio.samples, 0.5)
+
+
+def test_render_effect_duck_is_deterministic(tmp_path: Path) -> None:
+    control = str(write_effect_control(tmp_path))
+
+    def render(name: str) -> bytes:
+        output = tmp_path / name
+        assert render_effect(
+            effect_job(
+                tmp_path,
+                builtin="duck",
+                parameters={"attack_ms": 5, "release_ms": 200, "amount_db": 9},
+                control_path=control,
+                output_path=str(output),
+            )
+        ) == {"status": "ok"}
+        return output.read_bytes()
+
+    assert render("a.npy") == render("b.npy")
+
+
+@pytest.mark.parametrize(
+    ("parameters", "problem"),
+    [
+        ({"flange": 3}, "duck takes only the parameters"),
+        ({"attack_ms": "fast"}, "duck's attack_ms must be a number"),
+        ({"attack_ms": 0}, "duck's attack_ms must be milliseconds above zero"),
+        ({"release_ms": -1}, "duck's release_ms must be milliseconds above zero"),
+        ({"amount_db": -3}, "duck's amount_db must be non-negative decibels"),
+    ],
+    ids=["unknown", "not a number", "zero attack", "negative release", "negative amount"],
+)
+def test_render_effect_duck_refuses_parameters_it_cannot_use(
+    tmp_path: Path, parameters: dict[str, JsonValue], problem: str
+) -> None:
+    result = render_effect(
+        effect_job(
+            tmp_path,
+            builtin="duck",
+            parameters=parameters,
+            control_path=str(write_effect_control(tmp_path)),
+        )
+    )
+
+    assert isinstance(result, dict)
+    assert result.get("status") == "load_failed"
+    detail = result.get("detail")
+    assert isinstance(detail, str)
+    assert problem in detail
+
+
+def test_render_effect_refuses_a_control_wire_for_any_other_recipe(tmp_path: Path) -> None:
+    result = render_effect(effect_job(tmp_path, control_path=str(write_effect_control(tmp_path))))
+
+    assert result == {
+        "status": "load_failed",
+        "detail": "Gain takes no control wire: it has no sidechain input",
+    }
+
+
+def test_render_effect_reports_an_unusable_control_wire(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="the control wire's audio is unusable"):
+        render_effect(effect_job(tmp_path, control_path=str(tmp_path / "absent.npy")))
 
 
 def test_render_effect_refuses_a_job_that_is_not_exactly_its_keys(tmp_path: Path) -> None:
@@ -1630,6 +1748,47 @@ def test_the_effect_adapter_renders_headlessly_through_the_worker(tmp_path: Path
     again = tmp_path / "again.npy"
     assert effect.render(EffectRenderRequest(audio, resolved_recipe(effect), again), 60) is None
     assert out.read_bytes() == again.read_bytes()
+
+
+def test_the_duck_adapter_renders_a_control_wire_headlessly(tmp_path: Path) -> None:
+    """C13's shipped consumer, through the real worker: no plugin, and byte-identical repeats."""
+    effect = make_effect(tmp_path, {"builtin": "duck", "parameters": {"amount_db": 6}})
+    audio = Audio(np.full((2, 2400), 0.5, dtype=np.float32))
+    control = Audio(np.full((2, 2400), 0.5, dtype=np.float32))
+    out = tmp_path / "out.npy"
+    dry = tmp_path / "dry.npy"
+    resolved = resolved_recipe(effect)
+
+    assert effect.render(EffectRenderRequest(audio, resolved, out, control=control), 60) is None
+    assert effect.render(EffectRenderRequest(audio, resolved, dry), 60) is None
+
+    ducked = read_raw_audio(out, 2400)
+    passthrough = read_raw_audio(dry, 2400)
+    assert isinstance(ducked, Audio)
+    assert isinstance(passthrough, Audio)
+    assert np.allclose(ducked.samples, 0.5 * 10 ** (-3 / 20))
+    assert np.allclose(passthrough.samples, 0.5)
+    repeat = tmp_path / "repeat.npy"
+    assert effect.render(EffectRenderRequest(audio, resolved, repeat, control=control), 60) is None
+    assert out.read_bytes() == repeat.read_bytes()
+
+
+def test_the_effect_adapter_refuses_a_control_wire_for_anything_but_duck(
+    tmp_path: Path,
+) -> None:
+    """C13 at the adapter: the refusal names the recipe and the missing sidechain input."""
+    effect = make_effect(tmp_path)
+    request = EffectRenderRequest(
+        Audio(np.zeros((2, 2400), dtype=np.float32)),
+        resolved_recipe(effect),
+        tmp_path / "out.npy",
+        control=Audio(np.zeros((2, 2400), dtype=np.float32)),
+    )
+
+    assert effect.render(request, 60) == RenderFailure(
+        RenderFailureStatus.LOAD_FAILED,
+        "effect 'drive' has no sidechain input, so it takes no control wire",
+    )
 
 
 def test_the_effect_adapter_maps_worker_failures(

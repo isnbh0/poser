@@ -23,6 +23,7 @@ from poser.core.statuses import StemStatus
 @pytest.mark.real_plugins
 def test_demo_song_renders_aligned_audible_stems(tmp_path: Path) -> None:
     song = load_song(SCAFFOLD_DIR / "demo.yaml", SONG_FORMATS)
+    assert isinstance(song, Song)
     expected_samples = stem_samples(song)
 
     results = real_render(tmp_path, song, "songs/demo.yaml")

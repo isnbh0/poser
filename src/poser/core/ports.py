@@ -14,7 +14,7 @@ from typing import Protocol, cast, runtime_checkable
 
 from poser.core.audio import Audio
 from poser.core.cache import Stamp, StampProblem
-from poser.core.graph import Node
+from poser.core.graph import Graph, Node
 from poser.core.jsonvalue import Json
 from poser.core.names import Identifier, NodeName, SongId, Suffix
 from poser.core.performance import Performance
@@ -53,31 +53,31 @@ def _tuple_of[T](owner: str, field: str, value: object, kind: type[T]) -> tuple[
 
 @runtime_checkable
 class SongFormat(Protocol):
-    """Reads one kind of song file into a Song."""
+    """Reads one kind of song file into a Song or a Graph."""
 
     @property
     def suffixes(self) -> tuple[Suffix, ...]:
         """The file suffixes this format reads, such as `(".yaml", ".yml")`."""
         ...
 
-    def load(self, path: Path) -> Song:
+    def load(self, path: Path) -> Song | Graph:
         """Read the song at `path`, raising SongError for any failure."""
         ...
 
 
 @runtime_checkable
 class RecordWriter(Protocol):
-    """Writes a song as text for an analysis record."""
+    """Writes a song or a graph as text for an analysis record."""
 
     @property
     def suffix(self) -> Suffix:
         """The record's song file is `song<suffix>`."""
         ...
 
-    def dump(self, song: Song) -> str:
-        """Return the song as text, raising SongError if it cannot be written.
+    def dump(self, song: Song | Graph) -> str:
+        """Return the song or graph as text, raising SongError if it cannot be written.
 
-        Returns the same text on every call and for equal songs.
+        Returns the same text on every call and for equal songs or graphs.
         """
         ...
 
@@ -287,16 +287,25 @@ class ResolvedEffect:
 
 @dataclass(frozen=True)
 class EffectRenderRequest:
-    """One effect render: the summed upstream audio, the resolved recipe, and where to write."""
+    """One effect render: the summed upstream audio, the one control wire's stem when the node is
+    fed one, the resolved recipe, and where to write."""
 
     audio: Audio
     recipe: ResolvedEffect  # From this adapter's own `resolve`.
     audio_path: Path  # Where to write the result with write_raw_audio.
+    control: Audio | None = None  # The control wire's stem; frames match `audio` or it is None.
 
     def __post_init__(self) -> None:
         _require("EffectRenderRequest", "audio", self.audio, Audio)
         _require("EffectRenderRequest", "recipe", self.recipe, ResolvedEffect)
         _require("EffectRenderRequest", "audio_path", self.audio_path, Path)
+        if self.control is not None:
+            _require("EffectRenderRequest", "control", self.control, Audio)
+            if self.control.frames != self.audio.frames:
+                raise ValueError(
+                    f"EffectRenderRequest.control must hold the audio's {self.audio.frames} "
+                    f"frames, got {self.control.frames}"
+                )
 
 
 @runtime_checkable
@@ -309,6 +318,10 @@ class Effect(Protocol):
     - `resolve(recipe)` receives only the name this effect is configured under; the effect holds
       one recipe, so its identity is fixed at build time and `resolve` never fails for a
       configured one.
+    - `render` receives `request.control` only when the rendered node was fed a control wire. An
+      effect whose recipe cannot use a control edge returns a LOAD_FAILED failure whose detail
+      names the recipe and the missing control input; whether a recipe takes one is a render-time
+      fact, since build time loads no plugin and promises no plugin surface.
     - `identity` is a recipe identity: equal when the render inputs are equal, without promising
       identical samples. It covers every input the adapter controls and can read cheaply.
     - `adapter_version` rises whenever the adapter's own code renders one identity differently.
@@ -333,10 +346,11 @@ class Effect(Protocol):
 
         Writes exactly as many frames as `request.audio` carries, at `SAMPLE_RATE` and
         `NUM_CHANNELS`, to `request.audio_path` with `write_raw_audio` and returns None, or
-        returns a RenderFailure and may leave the file absent. Returns only after every writer of
-        `audio_path` has finished. Never raises for plugin failures; anything it raises is a poser
-        bug. LOAD_FAILED means a plugin or recipe that does not load, CRASHED a worker that died,
-        and TIMED_OUT one past `timeout_s`.
+        returns a RenderFailure and may leave the file absent. A control edge the recipe cannot
+        use is a LOAD_FAILED failure naming the recipe and the missing control input. Returns
+        only after every writer of `audio_path` has finished. Never raises for plugin failures;
+        anything it raises is a poser bug. LOAD_FAILED means a plugin or recipe that does not
+        load, CRASHED a worker that died, and TIMED_OUT one past `timeout_s`.
         """
         ...
 
@@ -474,13 +488,13 @@ class Visualizer(Protocol):
 class SectionInput:
     """What a report section sees for one node or the mix."""
 
-    song: Song
+    song: Song | Graph
     node: Node | None  # None for the mix.
     audio: Audio  # The node's stem before gain, or the mix.
     measurements: Measurements
 
     def __post_init__(self) -> None:
-        _require("SectionInput", "song", self.song, Song)
+        _require("SectionInput", "song", self.song, (Song, Graph))
         if self.node is not None:
             _require("SectionInput", "node", self.node, Node)
         _require("SectionInput", "audio", self.audio, Audio)

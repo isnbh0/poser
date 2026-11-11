@@ -16,6 +16,7 @@ import numpy as np
 
 from poser.core.audio import Audio, AudioProblem, read_raw_audio, write_raw_audio
 from poser.core.cache import Stamp, StampProblem
+from poser.core.graph import Graph
 from poser.core.jsonvalue import Json, JsonValue, json_object
 from poser.core.names import Identifier, NodeName, SongId, Suffix
 from poser.core.ports import (
@@ -27,6 +28,7 @@ from poser.core.ports import (
     MixInput,
     Record,
     RenderFailure,
+    RenderFailureStatus,
     RenderRequest,
     ResolvedEffect,
     ResolvedSound,
@@ -242,7 +244,10 @@ class PlainInstrument:
 
 class FakeEffect:
     """An effect that scales the audio by the amount its payload carries, recording every
-    request. Its failures are set by a test, like a FakeSound's are."""
+    request. Its failures are set by a test, like a FakeSound's are. A sidechain-capable one
+    ducks its output by the control wire's peak level; any other refuses the control edge, as
+    every recipe without a sidechain input must at render time (C13).
+    """
 
     def __init__(
         self,
@@ -251,12 +256,14 @@ class FakeEffect:
         amount: float = 2.0,
         render_failure: RenderFailure | None = None,
         bad_output: BadOutput | None = None,
+        sidechain: bool = False,
     ) -> None:
         self.name = Identifier(name)
         self._identity = identity
         self._amount = amount
         self._render_failure = render_failure
         self._bad_output = bad_output
+        self._sidechain = sidechain
         self.renders: list[EffectRenderRequest] = []
 
     @property
@@ -277,12 +284,21 @@ class FakeEffect:
     def render(self, request: EffectRenderRequest, timeout_s: float) -> RenderFailure | None:
         assert timeout_s > 0
         self.renders.append(request)
+        if request.control is not None and not self._sidechain:
+            return RenderFailure(
+                RenderFailureStatus.LOAD_FAILED,
+                f"effect {self.name!r} has no sidechain input, so it takes no control wire",
+            )
         if self._render_failure is not None:
             return self._render_failure
         payload = json_object(request.recipe.payload.value())
         assert payload is not None
         amount = float(payload["amount"])  # ty: ignore[invalid-argument-type]
         samples = np.array(request.audio.samples, dtype=np.float64) * amount
+        if request.control is not None:
+            # The fake's sidechain law: the control's peak pulls the output down in proportion.
+            peak = float(np.max(np.abs(request.control.samples)))
+            samples = samples * max(0.0, 1.0 - peak)
         frames = request.audio.frames
         if self._bad_output == "wrong_length":
             frames -= 1
@@ -569,14 +585,15 @@ class FakeSection:
 
 
 class FakeRecordWriter:
-    """Writes a song as sorted JSON."""
+    """Writes a song or graph as sorted JSON."""
 
     @property
     def suffix(self) -> Suffix:
         return Suffix(".json")
 
-    def dump(self, song: Song) -> str:
-        return json.dumps(song_to_data(song), sort_keys=True)
+    def dump(self, song: Song | Graph) -> str:
+        data = song_to_data(song) if isinstance(song, Song) else song.to_data()
+        return json.dumps(data, sort_keys=True)
 
 
 class FakeSongFormat(FakeRecordWriter):

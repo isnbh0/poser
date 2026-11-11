@@ -19,15 +19,23 @@ from poser.adapters.song_formats import (
     YamlSongFormat,
     write_yaml_song,
 )
+from poser.core.graph import Graph, Node, Wire
 from poser.core.loading import load_song
 from poser.core.song import Note, Song, SongError, Track
+
+
+def loaded(path: Path) -> Song:
+    """The song at `path`, which these fixtures always build as a Song, never a Graph."""
+    song = load_song(path, SONG_FORMATS)
+    assert isinstance(song, Song)
+    return song
 
 
 def test_valid_song_loads_with_expected_values(tmp_path: Path) -> None:
     path = tmp_path / "song.yaml"
     path.write_text(yaml.safe_dump(valid_song()))
 
-    song = load_song(path, SONG_FORMATS)
+    song = loaded(path)
 
     assert song.bpm == 120
     assert song.tracks == (
@@ -36,7 +44,7 @@ def test_valid_song_loads_with_expected_values(tmp_path: Path) -> None:
 
 
 def test_demo_song_loads_with_two_bare_instrument_tracks_and_eight_notes() -> None:
-    song = load_song(SCAFFOLD_DIR / "demo.yaml", SONG_FORMATS)
+    song = loaded(SCAFFOLD_DIR / "demo.yaml")
 
     assert len(song.tracks) == 2
     assert all(track.sound == "surge" for track in song.tracks)
@@ -61,8 +69,8 @@ def test_written_song_loads_back_equal(tmp_path: Path) -> None:
 
     write_yaml_song(song, path)
 
-    assert load_song(path, SONG_FORMATS) == song
-    assert any(note.beat == 2 / 3 for note in load_song(path, SONG_FORMATS).tracks[0].notes)
+    assert loaded(path) == song
+    assert any(note.beat == 2 / 3 for note in loaded(path).tracks[0].notes)
     assert [p.name for p in tmp_path.iterdir()] == ["song.yaml"]
 
 
@@ -162,7 +170,7 @@ def test_numpy_gain_writes_as_a_plain_float(tmp_path: Path) -> None:
 
     write_yaml_song(song, path)
 
-    assert load_song(path, SONG_FORMATS).tracks[0].gain == -6.0
+    assert loaded(path).tracks[0].gain == -6.0
 
 
 def test_numbers_write_in_one_spelling(tmp_path: Path) -> None:
@@ -241,14 +249,55 @@ def build():
     assert song == Song(120, (Track("lead", "serum", (Note(0, 60, 1, 100),), gain=-3.0),))
 
 
+def test_script_song_may_return_a_graph_the_author_wired(tmp_path: Path) -> None:
+    """C14: the direct frontend. The author names every node; a track node stays input-less."""
+    header = "from poser import Graph, Node, Note, Wire\n"
+    path = tmp_path / "tune.py"
+    path.write_text(
+        header + "def build():\n"
+        '    lead = Node("lead", "track", sound="serum", notes=(Note(0, 60, 1, 100),))\n'
+        '    drive = Node("lead.drive", "effect", effect="crush")\n'
+        '    return Graph(120, (lead, drive), (Wire("lead", "lead.drive", "audio"),))\n'
+    )
+
+    graph = load_song(path, SONG_FORMATS)
+
+    assert isinstance(graph, Graph)
+    assert graph.bpm == 120
+    assert [node.name for node in graph.nodes] == ["lead", "lead.drive"]
+    assert [(w.from_name, w.to_name, w.kind) for w in graph.wires] == [
+        ("lead", "lead.drive", "audio")
+    ]
+
+
+def test_a_misshapen_graph_from_a_script_reports_the_path(tmp_path: Path) -> None:
+    """The same constructor laws hold, with the script's path before each problem."""
+    header = "from poser import Graph, Node, Note, Wire\n"
+    path = tmp_path / "tune.py"
+    path.write_text(
+        header + "def build():\n"
+        '    lead = Node("lead", "track", sound="serum", notes=(Note(0, 60, 1, 100),))\n'
+        '    return Graph(120, (lead,), (Wire("lead", "ghost", "audio"),))\n'
+    )
+
+    with pytest.raises(SongError) as raised:
+        load_song(path, SONG_FORMATS)
+
+    assert raised.value.problems == [f"{path}: Graph.wires[0]: names unknown node 'ghost'"]
+
+
 @pytest.mark.parametrize(
     ("body", "message"),
     [
-        ("x = 1\n", "must define a function build() that returns a Song"),
-        ("build = 3\n", "must define a function build() that returns a Song"),
+        ("x = 1\n", "must define a function build() that returns a Song or a Graph"),
+        ("build = 3\n", "must define a function build() that returns a Song or a Graph"),
         ("raise ImportError('no module')\n", "cannot run"),
         ("def build():\n    raise ValueError('boom')\n", "build() raised ValueError: boom"),
-        ("def build():\n    return {'bpm': 120, 'tracks': []}\n", "must return a Song, got dict"),
+        (
+            "def build():\n    return {'bpm': 120, 'tracks': []}\n",
+            "must return a Song or a Graph, got dict",
+        ),
+        ("def build():\n    return 120\n", "must return a Song or a Graph, got int"),
     ],
 )
 def test_broken_script_song_is_one_song_error_naming_the_file(
@@ -365,6 +414,24 @@ def test_both_formats_meet_the_song_format_contract(tmp_path: Path) -> None:
 def test_yaml_format_meets_the_record_writer_contract() -> None:
     for song in (helper_song(), gain_song(), cc_track_song()):
         check_record_writer_contract(YamlSongFormat(), song)
+
+
+def test_the_yaml_record_writer_accepts_a_graph() -> None:
+    """C17: a graph song's record text is the graph's own data, wiring and mode included."""
+    fmt = YamlSongFormat()
+    lead = Node("lead", "track", sound="serum", notes=(Note(0, 60, 1, 100),))
+    drive = Node("lead.drive", "effect", effect="crush")
+    graph = Graph(120, (lead, drive), (Wire("lead", "lead.drive", "audio"),))
+
+    text = fmt.dump(graph)
+
+    assert text == fmt.dump(graph)
+    data = yaml.safe_load(text)
+    assert data["bpm"] == 120
+    assert data["mode"] == "acyclic"
+    assert data["wires"] == [
+        {"from_name": "lead", "to_name": "lead.drive", "kind": "audio", "gain_db": 0}
+    ]
 
 
 def test_format_suffixes() -> None:

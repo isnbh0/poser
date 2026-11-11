@@ -4,6 +4,7 @@ import dataclasses
 import re
 import tomllib
 from pathlib import Path
+from typing import cast
 
 import pytest
 import yaml
@@ -17,6 +18,7 @@ from poser.core.guide import FIRST_INSTRUMENT_PLACEHOLDER
 from poser.core.loading import load_song
 from poser.core.ports import ResolvedSound
 from poser.core.song import MAX_SONG_S, Song, SongError, parse_song
+from poser.core.song import Song as SongValue
 from poser.core.sounds import parse_sound_ref
 from poser.core.statuses import RENDER_STATUSES
 
@@ -29,10 +31,13 @@ INT_RANGE = re.compile(r"^(-?\d+) to (-?\d+)$")
 MUSIC_HELPERS = ("pitch", "scale", "degree", "chord", "swing", "humanize", "notes")
 COMPOSER_API = [
     "ControlChange",
+    "Graph",
+    "Node",
     "Note",
     "Song",
     "SongError",
     "Track",
+    "Wire",
     "chord",
     "degree",
     "humanize",
@@ -76,13 +81,16 @@ def first_column(heading: str) -> list[str]:
 
 
 def python_songs(tmp_path: Path) -> list[Song]:
+    """The guide's example scripts, which return Songs; direct wiring stays prose-only here."""
     songs = []
     first = read_config(SCAFFOLD_DIR / "poser.toml").instruments[0].name
     for index, body in enumerate(blocks("python")):
         path = tmp_path / f"example{index}" / "example.py"
         path.parent.mkdir()
         path.write_text(body.replace(FIRST_INSTRUMENT_PLACEHOLDER, f'"{first}"'))
-        songs.append(load_song(path, SONG_FORMATS))
+        song = load_song(path, SONG_FORMATS)
+        assert isinstance(song, Song)
+        songs.append(song)
     return songs
 
 
@@ -243,7 +251,7 @@ def test_sound_names_resolve(tmp_path: Path) -> None:
         span for text in texts for span in BACKTICKED.findall(text) if span.startswith(prefixes)
     }
     songs = python_songs(tmp_path) + [parse_song(yaml.safe_load(b)) for b in blocks("yaml")]
-    songs.append(load_song(SCAFFOLD_DIR / "demo.yaml", SONG_FORMATS))
+    songs.append(cast("SongValue", load_song(SCAFFOLD_DIR / "demo.yaml", SONG_FORMATS)))
     sounds = {track.sound for example in songs for track in example.tracks}
     assert spans
     assert sounds

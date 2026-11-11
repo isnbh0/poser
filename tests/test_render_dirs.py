@@ -11,6 +11,7 @@ from poser.adapters.song_formats import SONG_FORMATS
 from poser.cli import analyze, render
 from poser.cli.common import EXIT_ALL_PASS, EXIT_BAD_CONFIG
 from poser.core.loading import load_song
+from poser.core.song import Song
 
 
 @pytest.fixture
@@ -37,7 +38,11 @@ def test_script_and_yaml_with_one_stem_render_apart(workspace: CommandWorkspace)
     script = write_script_song(workspace.root / "songs" / "x.py", "synth")
     data = write_song(workspace.root / "songs" / "x.yaml", ("lead", "synth"))
 
-    assert load_song(script, SONG_FORMATS).tracks == load_song(data, SONG_FORMATS).tracks
+    script_song = load_song(script, SONG_FORMATS)
+    data_song = load_song(data, SONG_FORMATS)
+    assert isinstance(script_song, Song)
+    assert isinstance(data_song, Song)
+    assert script_song.tracks == data_song.tracks
     for song in (script, data):
         assert render.main([str(song)]) == EXIT_ALL_PASS
 

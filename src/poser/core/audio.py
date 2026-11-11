@@ -10,7 +10,7 @@ from numpy.lib.format import read_array_header_1_0, read_array_header_2_0, read_
 
 from poser.core.graph import Graph
 from poser.core.rules import _last_beat
-from poser.core.song import Song, song_last_beat
+from poser.core.song import Song
 
 SAMPLE_RATE = 48000
 NUM_CHANNELS = 2
@@ -29,16 +29,17 @@ def measure_peak_dbfs(samples: np.ndarray) -> float:
     return to_dbfs(float(np.abs(samples[np.isfinite(samples)]).max(initial=0.0)))
 
 
-def song_duration_s(song: Song) -> float:
+def song_duration_s(song: Song | Graph) -> float:
     """Return the length shared by every stem: the song's last beat plus the tail. Pedalboard
     ignores messages after the end, so changes must fall within.
     """
-    return song.seconds(song_last_beat(song)) + TAIL_S
+    members = song.tracks if isinstance(song, Song) else song.nodes
+    return song.seconds(_last_beat(members)) + TAIL_S
 
 
 def graph_duration_s(graph: Graph) -> float:
     """Return the length shared by every stem of a graph: its last beat plus the tail."""
-    return graph.seconds(_last_beat(graph.nodes)) + TAIL_S
+    return song_duration_s(graph)
 
 
 def expected_samples(duration_s: float) -> int:
@@ -46,12 +47,12 @@ def expected_samples(duration_s: float) -> int:
     return int(duration_s * SAMPLE_RATE)
 
 
-def stem_samples(song: Song) -> int:
+def stem_samples(song: Song | Graph) -> int:
     """Return the frame count of every stem of the song."""
     return expected_samples(song_duration_s(song))
 
 
-def sample_at(song: Song, beat: float) -> int:
+def sample_at(song: Song | Graph, beat: float) -> int:
     """Return the sample a beat falls on."""
     return round(song.seconds(beat) * SAMPLE_RATE)
 

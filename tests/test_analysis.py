@@ -4,13 +4,14 @@ import dataclasses
 import hashlib
 import json
 import os
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import cast, override
 
 import numpy as np
 import pytest
 from fakes import (
+    FakeEffect,
     FakeInstrument,
     FakeMeasurer,
     FakeMixer,
@@ -26,9 +27,11 @@ from fakes import (
 from poser.core.analysis import AnalysisTools, analyze_song, measure
 from poser.core.audio import Audio, measure_peak_dbfs, stem_samples, write_raw_audio
 from poser.core.cache import Stamp, node_key
+from poser.core.graph import Graph, Node, Wire
 from poser.core.jsonvalue import Json
 from poser.core.names import Identifier, SongId, TrackName
 from poser.core.ports import (
+    Effect,
     Instrument,
     Mixer,
     MixInput,
@@ -86,10 +89,12 @@ class Setup:
         sections: Sequence[ReportSection] = (),
         mixer: Mixer | None = None,
         visualizer: FakeVisualizer | None = None,
-        song: Song | None = None,
+        song: Song | Graph | None = None,
         instrument: FakeInstrument | None = None,
+        effects: Sequence[FakeEffect] = (),
     ) -> None:
         self.instrument = instrument or make_instrument()
+        self.effects: Mapping[Identifier, Effect] = {each.name: each for each in effects}
         self.renders = FakeRenderStore(tmp_path / "renders")
         self.store: FakeSongStore = self.renders.song(SONG_ID)
         self.audio_files = NpyAudioFiles()
@@ -103,6 +108,7 @@ class Setup:
             SONG_ID,
             self.instruments,
             self.audio_files,
+            effects=self.effects,
             timeout_s=10.0,
             force=False,
         )
@@ -112,7 +118,7 @@ class Setup:
     def instruments(self) -> dict[Identifier, Instrument]:
         return {self.instrument.name: self.instrument}
 
-    def analyze(self, song: Song | None = None) -> Report:
+    def analyze(self, song: Song | Graph | None = None) -> Report:
         return analyze_song(
             song or make_song(),
             "demo",
@@ -122,6 +128,7 @@ class Setup:
             self.audio_files,
             FakeRecordWriter(),
             self.tools,
+            effects=self.effects,
         )
 
     def record(self, run: int) -> Path:
@@ -643,3 +650,61 @@ def test_visualizer_error_propagates_and_leaves_the_record_unfinished(tmp_path: 
     assert tree(setup.record(1)) == ["song.json"]
     setup.visualizer.raises = None
     assert setup.analyze().run == 2
+
+
+# Graph songs (C17): the record holds the wiring and mode, and digests it as the song text.
+
+
+def graph_song(*, rewired: bool = False) -> Graph:
+    """A lead through one drive, wired by hand, and an untouched bass."""
+    lead = Node("lead", "track", sound="fake", notes=BAR)
+    drive = Node("lead.drive", "effect", effect="drive", gain_db=-6.0)
+    bass = Node("bass", "track", sound="fake:pad", notes=BAR)
+    send = Wire("lead", "lead.drive", "audio", gain_db=-12.0 if rewired else 0.0)
+    return Graph(120, (lead, drive, bass), (send,))
+
+
+def graph_setup(tmp_path: Path) -> Setup:
+    drive = FakeEffect("drive", identity="drive", amount=1.0)
+    return Setup(tmp_path, song=graph_song(), effects=(drive,))
+
+
+def test_a_graph_song_is_analyzed_and_its_record_holds_the_wiring(tmp_path: Path) -> None:
+    setup = graph_setup(tmp_path)
+
+    report = setup.analyze(graph_song())
+
+    assert report.mix is not None
+    assert [node.name for node in report.nodes] == ["lead", "lead.drive", "bass"]
+    driven = report.nodes[1]
+    assert driven.kind == "effect"
+    assert driven.upstream == ("lead",)
+    mix = setup.audio_files.read(setup.store.mix_path(), FRAMES)
+    # The mix sums the leaves: the driven lead and the dry bass, each at its own gain.
+    assert np.allclose(mix.samples, 0.5 * 10 ** (-6 / 20) + 0.2)
+
+    record = json.loads((setup.record(1) / "song.json").read_text())
+    assert record["mode"] == "acyclic"
+    assert record["wires"] == [
+        {"from_name": "lead", "to_name": "lead.drive", "kind": "audio", "gain_db": 0}
+    ]
+    assert (
+        report.song_sha256
+        == hashlib.sha256((setup.record(1) / "song.json").read_bytes()).hexdigest()
+    )
+
+
+def test_rewiring_changes_the_record_digest_and_reanalysis_keeps_it(tmp_path: Path) -> None:
+    setup = graph_setup(tmp_path)
+    first = setup.analyze(graph_song())
+
+    rewired = setup.analyze(graph_song(rewired=True))
+
+    assert rewired.song_sha256 != first.song_sha256
+    assert rewired.run == 2
+    assert json.loads((setup.record(2) / "song.json").read_text())["wires"][0]["gain_db"] == -12
+
+    again = setup.analyze(graph_song(rewired=True))
+
+    assert again.song_sha256 == rewired.song_sha256
+    assert again.run == 3

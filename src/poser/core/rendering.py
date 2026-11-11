@@ -43,7 +43,7 @@ from poser.core.ports import (
     SongStore,
     SoundFailure,
 )
-from poser.core.song import Song, is_number
+from poser.core.song import Song, is_number, song_graph
 from poser.core.sounds import parse_sound_ref
 from poser.core.statuses import RenderFailureStatus, RenderStatus, SoundFailureStatus, StemStatus
 
@@ -152,7 +152,7 @@ def require_stem_format(renders: RenderStore, audio_files: AudioFiles) -> None:
 
 
 def render_song(
-    song: Song,
+    song: Song | Graph,
     renders: RenderStore,
     song_id: SongId,
     instruments: Mapping[Identifier, Instrument],
@@ -164,14 +164,16 @@ def render_song(
 ) -> list[TrackResult]:
     """Render each node whose inputs changed since its stem was written, or every node if forced.
 
-    Nodes render in the graph's topological order, so a node reads stems its run just wrote or
-    found current. A node whose upstream did not produce a stem is not rendered. Raises SongError
-    for a track naming an unknown effect recipe, SongBusyError when another run holds the song's
-    lock, and ValueError when the store's stem suffix differs from the audio files'.
+    The song is a Song, which compiles to its graph, or a Graph, whose effect references resolve
+    against the configured recipes first. Nodes render in the graph's topological order, so a
+    node reads stems its run just wrote or found current. A node whose upstream did not produce a
+    stem is not rendered. Raises SongError for a node naming an unknown effect recipe,
+    SongBusyError when another run holds the song's lock, and ValueError when the store's stem
+    suffix differs from the audio files' or a node's inputs do not sum to finite audio.
     """
     require_stem_format(renders, audio_files)
     store = renders.song(song_id)
-    graph = song.graph([*effects])
+    graph = song_graph(song, [*effects])
     with store.lock():
         # Results from older stems must not survive a render.
         store.clear_latest()
@@ -196,7 +198,7 @@ def render_song(
 
 
 def _render_node(
-    song: Song,
+    song: Song | Graph,
     graph: Graph,
     node: Node,
     store: SongStore,
@@ -273,22 +275,44 @@ def _upstream_keys(
 def _upstream_audio(
     graph: Graph, node: Node, store: SongStore, audio_files: AudioFiles, frames: int
 ) -> Audio:
-    """Return the node's input: each upstream stem scaled by its wire's gain, summed.
+    """Return the node's audio input: each upstream audio stem scaled by its wire's gain, summed.
 
-    The sum accumulates in float64 and rounds to stem format once, as the mixer's does, so a sum
-    that overflows to a non-finite value raises ValueError instead of clipping.
+    The sum accumulates in float64 and rounds to stem format once, as the mixer's does, and a sum
+    that overflows to a non-finite value raises ValueError instead of clipping, as the mixer's
+    law has it. Control wires carry no audio and are read separately.
     """
     total = np.zeros((NUM_CHANNELS, frames), dtype=np.float64)
+    # A value beyond range becomes infinite, or not a number when infinities cancel, which numpy
+    # reports as warnings; the check below reports it instead.
+    with np.errstate(over="ignore", invalid="ignore"):
+        for wire in graph.wires:
+            if wire.to_name != node.name or wire.kind != "audio":
+                continue
+            stem = audio_files.read(store.stem_path(NodeName(wire.from_name)), frames)
+            total += stem.samples * 10 ** (wire.gain_db / 20)
+        summed = total.astype(np.float32)
+    if not np.isfinite(summed).all():
+        raise ValueError(
+            f"node {node.name!r}'s inputs are not finite as a sum: a sum exceeds the float32 range"
+        )
+    return Audio(summed)
+
+
+def _control_audio(
+    graph: Graph, node: Node, store: SongStore, audio_files: AudioFiles, frames: int
+) -> Audio | None:
+    """Return the one control wire's upstream stem, or None when no control wire feeds the node.
+
+    The graph's constructor keeps a node to at most one control wire.
+    """
     for wire in graph.wires:
-        if wire.to_name != node.name:
-            continue
-        stem = audio_files.read(store.stem_path(NodeName(wire.from_name)), frames)
-        total += stem.samples * 10 ** (wire.gain_db / 20)
-    return Audio(total.astype(np.float32))
+        if wire.to_name == node.name and wire.kind == "control":
+            return audio_files.read(store.stem_path(NodeName(wire.from_name)), frames)
+    return None
 
 
 def _render_track_node(
-    song: Song,
+    song: Song | Graph,
     node: Node,
     resolved: ResolvedNode,
     timeout_s: float,
@@ -315,7 +339,7 @@ def _render_track_node(
 
 
 def _render_effect_node(
-    song: Song,
+    song: Song | Graph,
     graph: Graph,
     node: Node,
     resolved: ResolvedNode,
@@ -323,7 +347,11 @@ def _render_effect_node(
     audio_files: AudioFiles,
     timeout_s: float,
 ) -> Audio | TrackResult:
-    """Render an effect node: the recipe processes the node's upstream stems into raw audio."""
+    """Render an effect node: the recipe processes the node's upstream stems into raw audio.
+
+    The audio inputs are summed and scaled by their wires' gains before the call, and a control
+    wire's stem travels with the job for the recipe to steer by, its frames matching the audio's.
+    """
     adapter, recipe = resolved.adapter, resolved.resolved
     if not isinstance(adapter, Effect) or not isinstance(recipe, ResolvedEffect):
         raise ValueError(f"an effect node resolved to a {type(adapter).__name__}, not an effect")
@@ -332,12 +360,13 @@ def _render_effect_node(
     frames = stem_samples(song)
     try:
         audio = _upstream_audio(graph, node, store, audio_files, frames)
+        control = _control_audio(graph, node, store, audio_files, frames)
     except AudioFileError as error:
         return TrackResult(
             name, RenderFailureStatus.CRASHED, detail=f"upstream wrote unusable audio: {error}"
         )
     with tempfile.TemporaryDirectory() as directory:
-        request = EffectRenderRequest(audio, recipe, Path(directory) / "audio.npy")
+        request = EffectRenderRequest(audio, recipe, Path(directory) / "audio.npy", control=control)
         failure = adapter.render(request, timeout_s)
         if isinstance(failure, RenderFailure):
             return TrackResult(name, failure.status, detail=failure.detail)

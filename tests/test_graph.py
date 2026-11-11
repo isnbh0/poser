@@ -195,16 +195,43 @@ def test_a_track_node_rejects_every_incoming_wire() -> None:
         ]
 
 
-def test_an_effect_node_accepts_any_number_of_audio_wires_and_no_control_wires() -> None:
-    nodes = (make_node(name="lead"), *effect_nodes("bus", "other"))
+def test_an_effect_node_accepts_many_audio_wires_and_one_control_wire() -> None:
+    """C11 and C13: a bus's many sends, and the one control wire a sidechain recipe steers by."""
+    nodes = (make_node(name="lead"), make_node(name="kick"), *effect_nodes("bus"))
     one = Graph(120, nodes, (Wire("lead", "bus", "audio"),))
     assert [wire.to_name for wire in one.wires] == ["bus"]
-    two = Graph(120, nodes, (Wire("lead", "bus", "audio"), Wire("other", "bus", "audio")))
+    two = Graph(120, nodes, (Wire("lead", "bus", "audio"), Wire("kick", "bus", "audio")))
     assert len(two.wires) == 2
+    ducked = Graph(120, nodes, (Wire("lead", "bus", "audio"), Wire("kick", "bus", "control")))
+    assert [wire.kind for wire in ducked.wires] == ["audio", "control"]
+
+
+def test_a_second_control_wire_is_one_problem_naming_the_limit() -> None:
+    nodes = (make_node(name="lead"), make_node(name="kick"), *effect_nodes("duck"))
+    wires = (
+        Wire("lead", "duck", "audio"),
+        Wire("kick", "duck", "audio"),
+        Wire("kick", "duck", "control"),
+        Wire("lead", "duck", "control"),
+    )
+
     with pytest.raises(GraphError) as raised:
-        Graph(120, nodes, (Wire("lead", "bus", "control"),))
+        Graph(120, nodes, wires)
+
     assert raised.value.problems == [
-        "Graph.wires[0]: node 'bus' of kind 'effect' accepts no control wires"
+        "Graph.wires[3]: node 'duck' of kind 'effect' accepts at most 1 control wire"
+    ]
+
+
+def test_a_control_wire_alone_on_an_effect_node_is_rejected() -> None:
+    """Steering does nothing for a node that hears no audio, so a control wire needs company."""
+    nodes = (make_node(name="kick"), *effect_nodes("duck"))
+
+    with pytest.raises(GraphError) as raised:
+        Graph(120, nodes, (Wire("kick", "duck", "control"),))
+
+    assert raised.value.problems == [
+        "Graph.wires[0]: node 'duck' of kind 'effect' takes a control wire only with an audio wire"
     ]
 
 
@@ -231,6 +258,53 @@ def test_control_wire_takes_no_gain() -> None:
         Wire("a", "b", "control", gain_db=-3)
     assert raised.value.problems == ["Wire.gain_db: a control wire takes no gain, got -3"]
     assert Wire("a", "b", "audio", gain_db=-3).gain_db == -3.0
+
+
+# The record (C17): to_data writes the graph as plain data, equal graphs alike.
+
+
+def test_to_data_writes_the_record_of_a_wired_graph() -> None:
+    wired = Graph(
+        120,
+        (make_node(name="lead", gain_db=-3), effect_nodes("drive")[0]),
+        (Wire("lead", "drive", "audio", gain_db=-6),),
+    )
+
+    assert wired.to_data() == {
+        "bpm": 120,
+        "mode": "acyclic",
+        "nodes": [
+            {
+                "name": "lead",
+                "kind": "track",
+                "gain_db": -3,
+                "sound": "serum",
+                "notes": [{"beat": 0, "pitch": 60, "length": 1, "velocity": 100}],
+            },
+            {"name": "drive", "kind": "effect", "gain_db": 0, "effect": "drive"},
+        ],
+        "wires": [{"from_name": "lead", "to_name": "drive", "kind": "audio", "gain_db": -6}],
+    }
+
+
+def test_to_data_separates_graphs_that_differ_and_joins_equal_ones() -> None:
+    wired = Graph(
+        120,
+        (make_node(name="lead"), effect_nodes("drive")[0]),
+        (Wire("lead", "drive", "audio"),),
+    )
+    record = wired.to_data()
+
+    # A changed send gain changes the record, as does a changed mode; equal graphs do not differ.
+    assert Graph(120, wired.nodes, (Wire("lead", "drive", "audio", gain_db=-12),)).to_data() != (
+        record
+    )
+    assert Graph(120, wired.nodes, wired.wires, "feedback").to_data() != record
+    assert Graph(120, wired.nodes, wired.wires).to_data() == record
+    assert (
+        Graph(120, wired.nodes, wired.wires).to_data()
+        == Graph(120, wired.nodes, wired.wires).to_data()
+    )
 
 
 @pytest.mark.parametrize(

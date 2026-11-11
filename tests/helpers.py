@@ -12,6 +12,7 @@ from poser.cli.common import RENDER_TIMEOUT_S
 from poser.compose import Composition, load
 from poser.core.analysis import analyze_song
 from poser.core.audio import SAMPLE_RATE
+from poser.core.graph import Graph
 from poser.core.names import SongId
 from poser.core.rendering import TrackResult, render_song
 from poser.core.report import Report
@@ -32,7 +33,7 @@ def real_composition(tmp_path: Path) -> Composition:
     return load(REAL_CONFIG, tmp_path / "sounds", tmp_path / "renders")
 
 
-def real_render(tmp_path: Path, song: Song, song_id: str) -> list[TrackResult]:
+def real_render(tmp_path: Path, song: Song | Graph, song_id: str) -> list[TrackResult]:
     """Render a song through the real composition, as `render-song` does."""
     composition = real_composition(tmp_path)
     return render_song(
@@ -47,7 +48,7 @@ def real_render(tmp_path: Path, song: Song, song_id: str) -> list[TrackResult]:
     )
 
 
-def real_analyze(tmp_path: Path, song: Song, song_id: str) -> Report:
+def real_analyze(tmp_path: Path, song: Song | Graph, song_id: str) -> Report:
     """Analyze a rendered song through the real composition, as `analyze-song` does."""
     composition = real_composition(tmp_path)
     return analyze_song(

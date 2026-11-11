@@ -152,3 +152,10 @@ def test_effect_types_refuse_what_their_rules_forbid() -> None:
         EffectRenderRequest(AUDIO, "drive", Path("out.npy"))  # ty: ignore[invalid-argument-type]
     with pytest.raises(ValueError, match="audio_path"):
         EffectRenderRequest(AUDIO, RECIPE, "out.npy")  # ty: ignore[invalid-argument-type]
+    with pytest.raises(ValueError, match="frames"):
+        EffectRenderRequest(
+            AUDIO, RECIPE, Path("out.npy"), control=Audio(np.zeros((2, 99), dtype=np.float32))
+        )
+    request = EffectRenderRequest(AUDIO, RECIPE, Path("out.npy"), control=AUDIO)
+    assert request.control is not None
+    assert request.control.frames == request.audio.frames

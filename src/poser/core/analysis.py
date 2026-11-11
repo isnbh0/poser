@@ -52,10 +52,10 @@ from poser.core.report import (
     report_to_data,
     silent_defects,
 )
-from poser.core.song import Song, song_last_beat
+from poser.core.song import Song, song_graph, song_last_beat
 
 
-def measure(audio: Audio, song: Song, measurer: Measurer) -> Measurements:
+def measure(audio: Audio, song: Song | Graph, measurer: Measurer) -> Measurements:
     """Measure audio: its peak, clipping, and bar levels here, and its loudness and bands through
     the measurer."""
     samples = audio.samples
@@ -135,7 +135,7 @@ def report_json(report: Report) -> str:
 
 
 def analyze_song(
-    song: Song,
+    song: Song | Graph,
     song_name: str,
     renders: RenderStore,
     song_id: SongId,
@@ -148,11 +148,12 @@ def analyze_song(
 ) -> Report:
     """Mix and measure a song's stems, and keep the analysis as the next record.
 
-    `song_name` is the song file's name without its suffix. Raises SongError for a track naming
-    an unknown effect recipe, SongBusyError when another run holds the song's lock, and
-    ValueError when the store's stem suffix differs from the audio files' or the mixer returns
-    the wrong length. An OSError from the store, the audio files, the mixer, or the visualizer
-    propagates after the lock is released.
+    The song is a Song, which compiles to its graph, or a Graph, whose effect references resolve
+    against the configured recipes first. `song_name` is the song file's name without its
+    suffix. Raises SongError for a node naming an unknown effect recipe, SongBusyError when
+    another run holds the song's lock, and ValueError when the store's stem suffix differs from
+    the audio files' or the mixer returns the wrong length. An OSError from the store, the audio
+    files, the mixer, or the visualizer propagates after the lock is released.
     """
     require_stem_format(renders, audio_files)
     store = renders.song(song_id)
@@ -163,7 +164,7 @@ def analyze_song(
 
 
 def _analyze(
-    song: Song,
+    song: Song | Graph,
     song_name: str,
     store: SongStore,
     instruments: Mapping[Identifier, Instrument],
@@ -172,7 +173,7 @@ def _analyze(
     record_writer: RecordWriter,
     tools: AnalysisTools,
 ) -> Report:
-    graph = song.graph([*effects])
+    graph = song_graph(song, [*effects])
     frames = stem_samples(song)
     keys: dict[NodeName, str] = {}
     sound_keys: dict[NodeName, str] = {}

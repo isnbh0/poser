@@ -10,6 +10,7 @@ from pathlib import Path
 import yaml
 
 from poser.adapters.loading import refuse_options
+from poser.core.graph import Graph, GraphError
 from poser.core.jsonvalue import JsonValue
 from poser.core.names import Suffix
 from poser.core.ports import AdapterContext, SongFormat
@@ -17,7 +18,7 @@ from poser.core.song import Song, SongError, parse_song, song_to_data
 
 
 class YamlSongFormat:
-    """Song data as YAML. It also writes the song into analysis records."""
+    """Song data as YAML. It also writes a song or graph into analysis records."""
 
     @property
     def suffixes(self) -> tuple[Suffix, ...]:
@@ -34,43 +35,48 @@ class YamlSongFormat:
             raise SongError([f"cannot read {path}: {error}"]) from error
         return parse_song(data)
 
-    def dump(self, song: Song) -> str:
+    def dump(self, song: Song | Graph) -> str:
         try:
-            return yaml.safe_dump(song_to_data(song), sort_keys=False)
+            data = song_to_data(song) if isinstance(song, Song) else song.to_data()
+            return yaml.safe_dump(data, sort_keys=False)
         except yaml.YAMLError as error:
             raise SongError([f"cannot write song: {error}"]) from error
 
 
 class ScriptSongFormat:
-    """A Python script whose `build()` returns a Song."""
+    """A Python script whose `build()` returns a Song, or a Graph the author wired themselves."""
 
     @property
     def suffixes(self) -> tuple[Suffix, ...]:
         return (Suffix(".py"),)
 
-    def load(self, path: Path) -> Song:
+    def load(self, path: Path) -> Song | Graph:
         # A song script is the owner's or agent's own code, run like any project script.
         try:
             build = runpy.run_path(str(path)).get("build")
-        except SongError as error:
+        except (SongError, GraphError) as error:
             raise _in_script(path, error) from error
         except (Exception, SystemExit) as error:
             raise SongError([f"cannot run {path}: {type(error).__name__}: {error}"]) from error
         if not callable(build):
-            raise SongError([f"{path}: must define a function build() that returns a Song"])
+            raise SongError(
+                [f"{path}: must define a function build() that returns a Song or a Graph"]
+            )
         try:
             song = build()
-        except SongError as error:
+        except (SongError, GraphError) as error:
             raise _in_script(path, error) from error
         except (Exception, SystemExit) as error:
             raise SongError([f"{path}: build() raised {type(error).__name__}: {error}"]) from error
-        if not isinstance(song, Song):
-            raise SongError([f"{path}: build() must return a Song, got {type(song).__name__}"])
+        if not isinstance(song, Song | Graph):
+            raise SongError(
+                [f"{path}: build() must return a Song or a Graph, got {type(song).__name__}"]
+            )
         return song
 
 
-def _in_script(path: Path, error: SongError) -> SongError:
-    """Return a script's song error with the script's path before each problem."""
+def _in_script(path: Path, error: SongError | GraphError) -> SongError:
+    """Return a script's song or graph error with the script's path before each problem."""
     return SongError([f"{path}: {problem}" for problem in error.problems])
 
 

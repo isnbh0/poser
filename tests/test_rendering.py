@@ -24,7 +24,7 @@ from fakes import (
 from poser.core import cache, rendering
 from poser.core.analysis import AnalysisTools, analyze_song
 from poser.core.cache import Stamp, StampProblem, node_key, sound_key
-from poser.core.graph import Node
+from poser.core.graph import Graph, Node, Wire
 from poser.core.names import Identifier, NodeName, SongId, TrackName
 from poser.core.performance import perform
 from poser.core.ports import Effect, Instrument, RenderFailure, SongBusyError, SoundFailure
@@ -83,7 +83,7 @@ class Setup:
             configured[self.effect.name] = self.effect
         return configured
 
-    def render(self, song: Song, *, force: bool = False) -> list[TrackResult]:
+    def render(self, song: Song | Graph, *, force: bool = False) -> list[TrackResult]:
         return render_song(
             song,
             self.renders,
@@ -95,7 +95,7 @@ class Setup:
             force=force,
         )
 
-    def analyze(self, song: Song) -> Report:
+    def analyze(self, song: Song | Graph) -> Report:
         tools = AnalysisTools(FakeMixer(), FakeMeasurer(), FakeVisualizer())
         return analyze_song(
             song,
@@ -720,3 +720,160 @@ def test_an_effect_refusing_an_instrument_reports_load_failed(tmp_path: Path) ->
     detail = results[DRIVE].detail
     assert detail is not None
     assert "is not an effect" in detail
+
+
+# Buses, sends, sidechain, and fan-out (RC2, RC3, RC4, C13): wired graphs with many inputs.
+
+FRAMES = lead_frames(make_song())
+
+
+def graph_of(nodes: tuple[Node, ...], wires: tuple[Wire, ...]) -> Graph:
+    """A direct-frontend graph at one tempo, as a script's `build()` returns one."""
+    return Graph(120, nodes, wires)
+
+
+def key_of(setup: Setup, name: str) -> str:
+    stamp = setup.store.read_stamp(NodeName(name))
+    assert isinstance(stamp, Stamp)
+    return stamp.track_key
+
+
+def test_a_bus_is_a_leaf_whose_sends_scale_and_sum_into_the_mix(tmp_path: Path) -> None:
+    """RC2: three drums into a sum bus; the bus is the only leaf, so the mix carries it alone."""
+    setup = Setup(tmp_path, effects=(FakeEffect("sum", identity="sum", amount=1.0),))
+    dry = 0.2  # The pad sound's amplitude.
+
+    def bus_graph(hat_send_db: float) -> Graph:
+        nodes = (
+            Node("kick", "track", sound="fake:pad", notes=NOTE),
+            Node("snare", "track", sound="fake:pad", notes=NOTE),
+            Node("hat", "track", sound="fake:pad", notes=NOTE),
+            Node("drums", "effect", effect="sum", gain_db=-6.0),
+        )
+        wires = (
+            Wire("kick", "drums", "audio"),
+            Wire("snare", "drums", "audio"),
+            Wire("hat", "drums", "audio", gain_db=hat_send_db),
+        )
+        return graph_of(nodes, wires)
+
+    loud = by_name(setup.render(bus_graph(0.0)))
+    report = setup.analyze(bus_graph(0.0))
+
+    assert same(statuses(list(loud.values())), [StemStatus.RENDERED] * 4)
+    bus_stem = setup.audio_files.read(setup.store.stem_path(NodeName("drums")), FRAMES)
+    # The bus stem is the three sends at their wire gains; no bus node renders its own sound.
+    assert np.allclose(bus_stem.samples, dry * (2 + 10 ** (0 / 20)))
+    assert by_node(report)[NodeName("drums")].upstream == ("kick", "snare", "hat")
+    assert report.mix is not None
+    mix = setup.audio_files.read(setup.store.mix_path(), FRAMES)
+    # The mix sums the bus, the only leaf, at the bus's gain_db, and nothing dry.
+    assert np.allclose(mix.samples, dry * 3 * 10 ** (-6 / 20))
+
+    # A send at -12 dB instead of 0 dB is in the downstream key: the bus re-renders, the rest not.
+    quiet = by_name(setup.render(bus_graph(-12.0)))
+    assert [quiet[NodeName(name)].cached for name in ("kick", "snare", "hat", "drums")] == [
+        True,
+        True,
+        True,
+        False,
+    ]
+    quiet_report = setup.analyze(bus_graph(-12.0))
+    assert quiet_report.mix is not None
+    quiet_mix = setup.audio_files.read(setup.store.mix_path(), FRAMES)
+    assert not np.allclose(quiet_mix.samples, mix.samples)
+    assert np.allclose(quiet_mix.samples, dry * (2 + 10 ** (-12 / 20)) * 10 ** (-6 / 20))
+
+
+def test_a_control_edge_keys_the_duck_on_both_sides(tmp_path: Path) -> None:
+    """RC3, corrected: the duck's key digests the kick's key through the control wire and the
+    pad's key through its audio wire; the kick's key digests only the kick."""
+    duck_effect = FakeEffect("duck", identity="duck", amount=1.0, sidechain=True)
+    setup = Setup(tmp_path, effect=duck_effect)
+
+    def sidechain_graph(kick_notes: tuple[Note, ...], pad_notes: tuple[Note, ...]) -> Graph:
+        nodes = (
+            Node("pad", "track", sound="fake", notes=pad_notes),
+            Node("kick", "track", sound="fake:pad", notes=kick_notes),
+            Node("duck", "effect", effect="duck"),
+        )
+        wires = (Wire("pad", "duck", "audio"), Wire("kick", "duck", "control"))
+        return graph_of(nodes, wires)
+
+    first = sidechain_graph(NOTE, NOTE)
+    results = by_name(setup.render(first))
+
+    assert same(statuses(list(results.values())), [StemStatus.RENDERED] * 3)
+    # The control edge crossed to the effect, and the ducked output is quieter than the pad's dry
+    # sound: the kick's 0.2 peak pulls the fake's output down to four fifths of it.
+    (request,) = duck_effect.renders
+    assert request.control is not None
+    assert float(np.max(np.abs(request.control.samples))) == pytest.approx(0.2)
+    stem = setup.audio_files.read(setup.store.stem_path(NodeName("duck")), FRAMES)
+    assert np.allclose(stem.samples, 0.5 * (1 - 0.2))
+    duck_key, pad_key, kick_key = (key_of(setup, name) for name in ("duck", "pad", "kick"))
+
+    # A changed kick note is inside the old horizon, so the song's length stays put.
+    setup.render(sidechain_graph((*NOTE, Note(0.5, 38, 0.5, 90)), NOTE))
+    assert key_of(setup, "duck") != duck_key
+    assert key_of(setup, "kick") != kick_key
+    assert key_of(setup, "pad") == pad_key
+
+    setup.render(sidechain_graph(NOTE, (*NOTE, Note(0.5, 64, 0.5, 90))))
+    assert key_of(setup, "duck") != duck_key
+    assert key_of(setup, "pad") != pad_key
+    assert key_of(setup, "kick") == kick_key
+
+
+def test_fan_out_splits_into_two_independently_cached_leaves(tmp_path: Path) -> None:
+    """RC4: one node feeds two effects; each branch caches by its own closure alone (C12)."""
+    left_effect = FakeEffect("left", identity="left", amount=2.0)
+    right_effect = FakeEffect("right", identity="right", amount=1.0)
+    setup = Setup(tmp_path, effects=(left_effect, right_effect))
+    nodes = (
+        Node("lead", "track", sound="fake", notes=NOTE),
+        Node("lead.left", "effect", effect="left"),
+        Node("lead.right", "effect", effect="right"),
+    )
+    wires = (Wire("lead", "lead.left", "audio"), Wire("lead", "lead.right", "audio"))
+
+    setup.render(graph_of(nodes, wires))
+    setup.analyze(graph_of(nodes, wires))
+    mix = setup.audio_files.read(setup.store.mix_path(), FRAMES)
+    # Both branches are leaves, so the mix sums them, each at its leaf's gain_db.
+    assert np.allclose(mix.samples, 0.5 * 2.0 + 0.5)
+
+    # Mutating one branch's parameters leaves the sibling cached.
+    setup.extra = (FakeEffect("left", identity="left, edited", amount=3.0), right_effect)
+    results = by_name(setup.render(graph_of(nodes, wires)))
+
+    assert [results[NodeName("lead")].cached, results[NodeName("lead.left")].cached] == [
+        True,
+        False,
+    ]
+    assert results[NodeName("lead.right")].cached
+    assert len(right_effect.renders) == 1  # The sibling never rendered again.
+    stem = setup.audio_files.read(setup.store.stem_path(NodeName("lead.left")), FRAMES)
+    assert np.allclose(stem.samples, 1.5)
+
+
+def test_an_effect_that_takes_no_control_wire_reports_load_failed(tmp_path: Path) -> None:
+    """C13's checked rule at the fake level: the refusal names the effect and the capability."""
+    setup = Setup(tmp_path, effect=FakeEffect("drive"))
+    nodes = (
+        Node("pad", "track", sound="fake", notes=NOTE),
+        Node("kick", "track", sound="fake:pad", notes=NOTE),
+        Node("wettened", "effect", effect="drive"),
+    )
+    wires = (Wire("pad", "wettened", "audio"), Wire("kick", "wettened", "control"))
+
+    results = by_name(setup.render(graph_of(nodes, wires)))
+
+    assert results[NodeName("pad")].status is StemStatus.RENDERED
+    assert results[NodeName("kick")].status is StemStatus.RENDERED
+    assert results[NodeName("wettened")].status is RenderFailureStatus.LOAD_FAILED
+    detail = results[NodeName("wettened")].detail
+    assert detail is not None
+    assert "'drive'" in detail
+    assert "sidechain" in detail
+    assert not setup.store.stem_path(NodeName("wettened")).exists()
