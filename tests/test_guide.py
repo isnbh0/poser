@@ -96,7 +96,7 @@ def python_songs(tmp_path: Path) -> list[Song]:
 
 
 def test_guide_is_short_and_claude_imports_studio_instructions() -> None:
-    assert len(LINES) < 200
+    assert len(LINES) < 230
     assert (SCAFFOLD_DIR / "claude.md").read_text() == "@AGENTS.md\n"
     assert "[POSER.md](POSER.md)" in (SCAFFOLD_DIR / "agents.md").read_text()
 
@@ -163,6 +163,27 @@ def test_commands_are_project_scripts() -> None:
     scripts = tomllib.loads((REPO_DIR / "pyproject.toml").read_text())["project"]["scripts"]
     commands = re.findall(r"uv run ([\w-]+)", GUIDE)
     assert set(commands) == set(scripts)
+
+
+def test_piano_roll_contract_is_documented() -> None:
+    section = " ".join(GUIDE.split("## Piano roll\n", 1)[1].split("## Commands", 1)[0].split())
+    for text in (
+        "--output",
+        "--replace",
+        "--config",
+        "MIDI pitch",
+        "authored",
+        "0.25 + 0.75 * velocity / 127",
+        "not rendered audio",
+        "trusted scripts",
+        "symlinks",
+        "Input aliases",
+        "atomically published",
+        "cleanup warning",
+        "security boundary",
+        "No authored notes",
+    ):
+        assert text in section
 
 
 # Words true of one instrument adapter or one render store, which their own guides hold.

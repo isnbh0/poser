@@ -178,9 +178,36 @@ fail the analysis.
 
 `run` and `song_sha256` tell versions apart; `node_key` and `sound_key` show which nodes changed.
 
+## Piano roll
+
+`uv run piano-roll <song> --output artifacts/piano-roll.png` writes a static PNG of authored
+notes, without plugins or an audio render. Each source track has a panel in source order, with
+beats horizontally and MIDI pitch vertically. Rectangle widths show authored durations; opacity
+is `0.25 + 0.75 * velocity / 127`. Tempo and track names are shown. This is not rendered audio:
+plugin response and sounding duration are not represented, and no chord, meter, or drum
+interpretation is inferred. Empty graphs show `No authored notes`.
+
+Configured song formats are supported, including direct graphs. Python songs execute their
+`build()` code: load only trusted scripts. Use `--config path/to/poser.toml` to select a workspace
+explicitly; the song itself may be outside it. No render-store artifacts or analysis are required.
+
+The required output is the exact directory entry relative to the current directory, with a
+case-insensitive `.png` suffix. Missing parents are created. Existing destinations are refused
+unless `--replace` is supplied; replacement preserves the old artifact until the complete new PNG
+is atomically published. Input aliases, symlinks (including dangling ones), and nonregular files
+are always refused. These are checked rules, not a security boundary against hostile filesystem
+mutation; parent-directory mutation and power-loss durability are outside the guarantee.
+Concurrent replacements use last-successful-publication-wins behavior.
+
+Success prints the destination and returns 0; configuration, song, drawing, and pre-publication
+I/O errors return 2. Temporary cleanup is best-effort: a cleanup warning after publication does
+not mean the image failed, and names the residual staging file. Created parents may remain after
+failure. The command never adds the image to a render cache.
+
 ## Commands
 
 - `uv run render-song` and `uv run analyze-song`: render and analyze a song, as above.
+- `uv run piano-roll`: create an authored-note PNG with required `--output`, as above.
 - `uv run list-sounds`: every sound a song can name, with a description.
 - `uv run check-instruments`: checks load and note output. Repeatability is informational:
   exact sample-value equality with no tolerance; `pass` with `no` succeeds. Clipping is also informational.
