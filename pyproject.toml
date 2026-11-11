@@ -80,11 +80,18 @@ ignore = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = ["-m", "not real_plugins", "--strict-markers", "--strict-config", "-ra"]
+addopts = [
+    "-m",
+    "not real_plugins and not real_scsynth",
+    "--strict-markers",
+    "--strict-config",
+    "-ra",
+]
 xfail_strict = true
 filterwarnings = ["error"]
 markers = [
     "real_plugins: loads the plugins installed on this machine",
+    "real_scsynth: renders through the scsynth installed on this machine",
 ]
 
 [tool.ty.terminal]

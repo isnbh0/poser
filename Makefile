@@ -7,7 +7,7 @@ check:
 	uv run pytest
 
 test-real:
-	uv run pytest -m real_plugins
+	uv run pytest -m "real_plugins or real_scsynth"
 
 check-instruments:
 	uv run check-instruments

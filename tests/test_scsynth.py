@@ -6,6 +6,7 @@ decoded here field by field, so the events a performance maps to are pinned exac
 """
 
 import ast
+import hashlib
 import shutil
 import struct
 import subprocess
@@ -36,34 +37,16 @@ from poser.core.statuses import RenderFailureStatus, SoundFailureStatus
 if TYPE_CHECKING:
     from poser.core.jsonvalue import JsonValue
 
-STUB_SOURCE = Path(__file__).parent / "scsynth_stub.py"
-SYNTH_NAME = "voice"
+from poser_scsynth.scores import synthdef_name
+from poser_scsynth.synthdefs import VOICE_BYTES
 
-# A minimal but valid SCgf v2 synthdef, shaped like the stub suite's demo voice: a sine with
-# freq, amp, and gate parameters. The stub reads none of it; resolve digests it.
-DEMO_SYNTHDEF = (
-    b"SCgf"
-    + struct.pack(">ihh", 2, 1, 1)
-    + b"\x05voice"
-    + struct.pack(">iih", 1, 3, 3)
-    + struct.pack(">fff", 440.0, 0.5, 1.0)
-    + b"\x04freq"
-    + struct.pack(">i", 0)
-    + b"\x03amp"
-    + struct.pack(">i", 1)
-    + b"\x04gate"
-    + struct.pack(">i", 2)
-    + struct.pack(">ihhh", 1, 1, 0, 0)
-    + b"\x07Control"
-    + b"\x01"
-    + struct.pack(">i", -1)
-    + struct.pack(">i", 0)
-    + struct.pack(">i", -1)
-    + struct.pack(">i", 1)
-    + struct.pack(">i", -1)
-    + struct.pack(">i", 2)
-    + b"\x01\x01\x01"
-)
+STUB_SOURCE = Path(__file__).parent / "scsynth_stub.py"
+SYNTH_NAME = "additive-voice"
+
+# The stub never parses the synthdef bytes, but the score builder reads their declared name, so
+# the fixture is the real emitted demo voice: the same builder the real engine accepts.
+DEMO_SYNTHDEF = VOICE_BYTES
+assert synthdef_name(DEMO_SYNTHDEF) == SYNTH_NAME
 
 
 def make_source(directory: Path) -> Path:
@@ -139,13 +122,18 @@ def test_instrument_contract(instrument: ScsynthInstrument, tmp_path: Path) -> N
     )
 
 
-def test_default_sound_is_unknown_until_phase_2(instrument: ScsynthInstrument) -> None:
-    failure = instrument.resolve(SoundRef(Identifier("sc"), None))
-    assert isinstance(failure, SoundFailure)
-    assert failure.status is SoundFailureStatus.UNKNOWN_SOUND
+def test_default_sound_is_the_builtin_voice(instrument: ScsynthInstrument) -> None:
+    first = instrument.resolve(SoundRef(Identifier("sc"), None))
+    assert isinstance(first, ResolvedSound)
+    again = instrument.resolve(SoundRef(Identifier("sc"), None))
+    assert isinstance(again, ResolvedSound)
+    assert first.identity == again.identity
+    named = instrument.resolve(SoundRef(Identifier("sc"), "builtin/additive-voice"))
+    assert isinstance(named, ResolvedSound)
+    assert named.identity == first.identity
 
 
-def test_sounds_list_sources_and_saved(tmp_path: Path) -> None:
+def test_sounds_list_default_builtin_sources_and_saved(tmp_path: Path) -> None:
     source = make_source(tmp_path)
     saved = tmp_path / "sounds" / "sc"
     saved.mkdir(parents=True)
@@ -154,6 +142,8 @@ def test_sounds_list_sources_and_saved(tmp_path: Path) -> None:
     instrument = make_instrument(tmp_path, make_stub(tmp_path), {"demo": source})
     listing = instrument.sounds()
     assert [entry.ref.name for entry in listing.entries] == [
+        None,
+        "builtin/additive-voice",
         f"demo/{SYNTH_NAME}",
         "saved/kept",
     ]
@@ -268,7 +258,7 @@ def test_score_records() -> None:
     news = messages_of(score, "/s_new")
     assert len(news) == 2
     for position, args in enumerate(news):
-        assert args[:4] == ["poser", 1000 + position, 0, 0]
+        assert args[:4] == [SYNTH_NAME, 1000 + position, 0, 0]
         name, freq, _, amp, _, gate = args[4:]
         assert (name, freq, amp, gate) == (
             "freq",
@@ -462,6 +452,18 @@ def _boundary_violations(paths: list[Path]) -> list[str]:
 
 def test_package_boundary() -> None:
     assert _boundary_violations(_source_paths()) == []
+
+
+# The shipped voice's bytes are part of every identity it feeds, so they are pinned.
+
+
+def test_voice_bytes_are_golden() -> None:
+    assert hashlib.sha256(VOICE_BYTES).hexdigest() == (
+        "59dc2ada4b9b81b2caf50833e30a8de43eeaaf3d769d3bf0682d6e9bfa011b26"
+    )
+    from poser_scsynth.synthdefs import additive_voice, emit
+
+    assert emit(additive_voice()) == VOICE_BYTES
 
 
 def test_boundary_catches_a_pedalboard_import(tmp_path: Path) -> None:

@@ -109,17 +109,36 @@ def hz(pitch: int) -> float:
     return 440.0 * 2.0 ** ((pitch - 69) / 12.0)
 
 
+def synthdef_name(synthdef: bytes) -> str:
+    """Return the name the SCgf bytes declare: the file header names the definition /s_new plays.
+
+    Raises ValueError unless the bytes hold a well-formed SCgf v2 header with one definition.
+    """
+    if len(synthdef) < 11 or synthdef[:4] != b"SCgf":
+        raise ValueError("not an SCgf synthdef")
+    version, definitions = struct.unpack(">ih", synthdef[4:10])
+    if version < 1 or definitions != 1:
+        raise ValueError(f"unsupported SCgf version or count: {version}, {definitions}")
+    length = synthdef[10]
+    name = synthdef[11 : 11 + length]
+    if len(name) != length:
+        raise ValueError("truncated synthdef name")
+    return name.decode()
+
+
 def build_score(
     synthdef: bytes, meta: dict[str, object], performance: Performance, sample_rate: int
 ) -> bytes:
     """Return the NRT command file that plays `performance` on the synthdef.
 
-    The synthdef is received at time 0 under the name `poser`. Every `NoteOn` opens a node whose
-    id counts from 1000 in event order; a `NoteOff` closes the most recent still-open node of its
-    pitch, and one with no open node drops. A mapped controller goes to the most recent
-    still-open node and drops when none is open; an unmapped controller drops. A trailing empty
-    bundle past the last frame keeps the engine running past the song's end.
+    The synthdef is received at time 0 under the name the bytes declare, the name every `s_new`
+    below plays. Every `NoteOn` opens a node whose id counts from 1000 in event order; a
+    `NoteOff` closes the most recent still-open node of its pitch, and one with no open node
+    drops. A mapped controller goes to the most recent still-open node and drops when none is
+    open; an unmapped controller drops. A trailing empty bundle past the last frame keeps the
+    engine running past the song's end.
     """
+    name = synthdef_name(synthdef)
     mapping = meta.get("cc")
     controls = mapping if isinstance(mapping, dict) else {}
     bundles: list[tuple[float, bytes]] = [(0.0, osc_bundle(0.0, [_recv_synthdef(synthdef)]))]
@@ -132,17 +151,17 @@ def build_score(
                 node_id = next_id
                 next_id += 1
                 opened.setdefault(event.pitch, []).append(node_id)
-                note = _new_node("poser", node_id, hz(event.pitch), event.velocity / 127)
+                note = _new_node(name, node_id, hz(event.pitch), event.velocity / 127)
                 bundles.append((seconds, osc_bundle(seconds, [note])))
             case NoteOff():
                 if stack := opened.get(event.pitch):
                     release = _set_node(stack.pop(), [("gate", 0.0)])
                     bundles.append((seconds, osc_bundle(seconds, [release])))
             case Control():
-                name = controls.get(str(event.control))
+                param = controls.get(str(event.control))
                 live = [node for stack in opened.values() for node in stack]
-                if isinstance(name, str) and name and live:
-                    change = _set_node(max(live), [(name, event.value / 127)])
+                if isinstance(param, str) and param and live:
+                    change = _set_node(max(live), [(param, event.value / 127)])
                     bundles.append((seconds, osc_bundle(seconds, [change])))
     end = performance.samples / sample_rate + 1
     bundles.append((end, osc_bundle(end, [])))

@@ -40,12 +40,15 @@ from poser.core.ports import (
 )
 from poser.core.sounds import SoundEntry, SoundRef
 from poser.core.statuses import RenderFailureStatus, SoundFailureStatus
-from poser_scsynth.config import SAVED_SOURCE, ScsynthConfig, from_options
-from poser_scsynth.scores import build_score
+from poser_scsynth.config import BUILTIN_SOURCE, SAVED_SOURCE, ScsynthConfig, from_options
+from poser_scsynth.scores import build_score, synthdef_name
+from poser_scsynth.synthdefs import VOICE_BYTES, VOICE_META, VOICE_NAME
 
 ADAPTER_VERSION = "1"
 SYNTHDEF_SUFFIX = ".scsyndef"
 META_SUFFIX = ".json"
+BUILTIN_SOUND = f"{BUILTIN_SOURCE}/{VOICE_NAME}"
+DEFAULT_DESCRIPTION = "built-in sound"
 SOUND_DESCRIPTION = "synth definition"
 STDERR_TAIL = 500
 
@@ -221,14 +224,16 @@ class ScsynthInstrument:
 
     def sounds(self) -> SoundListing:
         scan = self._scan_sources()
-        entries = [SoundEntry(self._ref(name), SOUND_DESCRIPTION) for name in sorted(scan.sounds)]
+        entries = [
+            SoundEntry(self._ref(None), DEFAULT_DESCRIPTION),
+            SoundEntry(self._ref(BUILTIN_SOUND), DEFAULT_DESCRIPTION),
+        ]
+        entries += [SoundEntry(self._ref(name), SOUND_DESCRIPTION) for name in sorted(scan.sounds)]
         return SoundListing(tuple(entries), scan.problems, scan.notes)
 
     def resolve(self, ref: SoundRef) -> ResolvedSound | SoundFailure:
-        if ref.name is None:
-            return SoundFailure(
-                SoundFailureStatus.UNKNOWN_SOUND, f"{self._ref(None)} has no default sound"
-            )
+        if ref.name is None or ref.name == BUILTIN_SOUND:
+            return self._resolved(ref, VOICE_BYTES, VOICE_META)
         scan = self._scan_sources()
         source = ref.name.split("/", 1)[0]
         if source in scan.unavailable:
@@ -242,7 +247,8 @@ class ScsynthInstrument:
             return SoundFailure(SoundFailureStatus.UNKNOWN_SOUND, detail)
         try:
             synthdef = path.read_bytes()
-        except OSError as error:
+            synthdef_name(synthdef)
+        except (OSError, ValueError) as error:
             return SoundFailure(SoundFailureStatus.LOAD_FAILED, f"sound {ref}: {error}")
         try:
             meta = json.loads(path.with_suffix(META_SUFFIX).read_text(encoding="utf-8"))
