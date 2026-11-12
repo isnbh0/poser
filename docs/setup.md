@@ -50,9 +50,9 @@ check whether the guide is current.
 two renders were sample-identical. A `pass` with `REPEATABLE no` (JSON `repeatable: false`) is
 still a pass and needs no repair. Clipping is reported but does not fail the check.
 
-The demo mix is `renders/songs/demo.yaml/latest/mix.wav`; its report and spectrograms are in
-the same `latest/` directory. Analysis finds technical defects; listen to the mix to judge how it
-sounds.
+The demo mix is `renders/songs/demo.yaml/latest/mix.wav`; its `report.json` is beside it, and
+its spectrograms are in `latest/images/`. Analysis finds technical defects; listen to the mix to
+judge how it sounds.
 
 ## Composition advice
 
