@@ -4,8 +4,8 @@ A studio is your own project for songs, configuration, sounds, and renders. A re
 is a curated starting configuration and demo copied into that project; an adapter connects poser
 to a backend that plays instruments. This guide uses the free Surge XT reference setup on macOS.
 
-To have an agent help, copy the [bootstrap prompt](bootstrap.md), or follow the same procedure
-below yourself.
+To have an agent help, give it the [bootstrap prompt](bootstrap.md), whose whole contents are
+the prompt, or follow the same procedure below yourself.
 
 ## Prerequisites
 
