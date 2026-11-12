@@ -725,7 +725,7 @@ class EffectPlugin:
 def patch_plugin_loading(monkeypatch: pytest.MonkeyPatch, fake: object) -> None:
     """Replace every way the worker loads a plugin, by format or by trying each, with `fake`."""
     for name in ("load_plugin", "VST3Plugin", "AudioUnitPlugin"):
-        monkeypatch.setattr(f"pedalboard.{name}", fake)
+        monkeypatch.setattr(f"pedalboard.{name}", fake, raising=False)
 
 
 @pytest.mark.parametrize(
@@ -745,6 +745,7 @@ def test_load_external_loads_with_the_class_the_suffix_names(
         monkeypatch.setattr(
             f"pedalboard.{each}",
             lambda *args, each=each, **kwargs: calls.append(each) or FakePlugin(),
+            raising=False,
         )
 
     load_external(f"/{name}", None)

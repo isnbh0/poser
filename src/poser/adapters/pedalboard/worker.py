@@ -114,18 +114,23 @@ def load_external(path: str, plugin_name: str | None) -> "VST3Plugin | AudioUnit
     """Load the plugin at `path` with the class its suffix names, so a failure reports only that
     format's error. A path with another suffix tries every format. Raises whatever the plugin
     code raises."""
-    # Imported here so the parent never loads plugin code.
-    from pedalboard import AudioUnitPlugin, VST3Plugin, load_plugin
-
+    # Imported here so the parent never loads plugin code, and per branch because pedalboard
+    # defines `AudioUnitPlugin` only on macOS.
     suffix = Path(path).suffix.lower()
     if suffix == ".vst3":
+        from pedalboard import VST3Plugin
+
         return VST3Plugin(
             path, plugin_name=plugin_name, initialization_timeout=INITIALIZATION_TIMEOUT_S
         )
     if suffix == ".component":
+        from pedalboard import AudioUnitPlugin
+
         return AudioUnitPlugin(
             path, plugin_name=plugin_name, initialization_timeout=INITIALIZATION_TIMEOUT_S
         )
+    from pedalboard import load_plugin
+
     # `load_plugin` is annotated as returning `ExternalPlugin`, which lacks `raw_state`, but it
     # returns one of these two classes.
     return cast(
