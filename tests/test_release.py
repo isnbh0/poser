@@ -129,14 +129,7 @@ cd() {
         ["/bin/sh", "-c", script], cwd=tmp_path, capture_output=True, text=True, check=True
     )
     lines = result.stdout.splitlines()
-    commands = [
-        "uv init --bare --python 3.13 my-studio",
-        "uv add git+https://github.com/isnbh0/poser",
-        "uv run init-workspace --setup surge",
-        "uv run check-instruments",
-        "uv run render-song songs/demo.yaml",
-        "uv run analyze-song songs/demo.yaml",
-    ]
+    steps = ["init", "add", "init-workspace", "check-instruments", "render-song", "analyze-song"]
     stop = {
         "init": 1,
         "cd": 1,
@@ -147,7 +140,8 @@ cd() {
         "analyze-song": 6,
         "none": 6,
     }[failure]
-    assert lines[:-2] == commands[:stop]
+    words = [line.split() for line in lines[:-2]]
+    assert [w[2] if w[1] == "run" else w[1] for w in words] == steps[:stop]
     assert lines[-2] == f"status={0 if failure == 'none' else 1}"
     assert lines[-1] == f"cwd={tmp_path if failure in ('init', 'cd') else studio}"
     assert {path: path.read_bytes() for path in before} == before

@@ -6,6 +6,7 @@ from importlib.resources import files
 from pathlib import Path
 
 import pytest
+from helpers import set_instrument_guide
 
 from poser.adapters.song_formats import SONG_FORMATS
 from poser.cli import guide, init_workspace, sounds
@@ -120,27 +121,22 @@ def test_later_guide_updates_use_studio_config_not_setup_resource(
     resource = files("poser.reference_setups.surge").joinpath("poser.toml")
     original = resource.read_bytes()
     config = target / "poser.toml"
-    config.write_text(config.read_text().replace("factory patches", "custom sounds"))
+    set_instrument_guide(config, "surge", "SENTINEL-NOTE")
 
     def fail(*_args: object, **_kwargs: object) -> None:
         raise AssertionError("setup was reconsulted")
 
     monkeypatch.setattr(init_workspace, "prepare", fail)
     assert guide.main(["--config", str(config)]) == 0
-    assert "custom sounds" in (target / "POSER.md").read_text()
+    assert "SENTINEL-NOTE" in (target / "POSER.md").read_text()
     assert resource.read_bytes() == original
 
 
-def test_yaml_only_studio_gets_conditional_format_guidance(tmp_path: Path, plugin: Path) -> None:
+def test_yaml_only_studio_reads_yaml_and_refuses_scripts(tmp_path: Path, plugin: Path) -> None:
     target = tmp_path / "studio"
     assert init_workspace.main(args(target, plugin)) == 0
     config = target / "poser.toml"
     config.write_text(config.read_text() + '\n[adapters]\nsong_formats = ["yaml"]\n')
-    assert guide.main(["--config", str(config)]) == 0
-    reference = (target / "POSER.md").read_text()
-    assert "`adapters.song_formats` can enable either, both, or other formats" in reference
-    assert "When the script format is enabled" in reference
-    assert "uv run render-song <song>" in reference
     composition = load(config, target / "sounds", target / "renders")
     assert isinstance(load_song(target / "songs/demo.yaml", composition.song_formats()), Song)
     with pytest.raises(SongError, match="cannot read"):

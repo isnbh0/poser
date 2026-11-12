@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 from fakes import FakeInstrument, FakeSound
-from helpers import fxp_bytes
+from helpers import fxp_bytes, set_instrument_guide
 from workspaces import CommandWorkspace, make_workspace, write_script_song, write_song
 
 from poser.adapters.wav import WavAudioFiles
@@ -762,7 +762,7 @@ def test_update_guide_check_follows_poser_toml(
     guide_file = initialized / "POSER.md"
     assert guide.main(["--check"]) == EXIT_ALL_PASS
     config = initialized / "poser.toml"
-    config.write_text(config.read_text().replace("factory patches", "patches"))
+    set_instrument_guide(config, "surge", "SENTINEL-NOTE")
     before = guide_file.read_text()
     capsys.readouterr()
 
@@ -774,7 +774,7 @@ def test_update_guide_check_follows_poser_toml(
 
     assert guide.main([]) == EXIT_ALL_PASS
     assert out(capsys) == f"{guide_file}\n"
-    assert "Surge XT patches are available" in guide_file.read_text()
+    assert "SENTINEL-NOTE" in guide_file.read_text()
     assert guide.main(["--check"]) == EXIT_ALL_PASS
     assert sorted(path.name for path in initialized.iterdir() if path.name.startswith(".")) == [
         ".gitignore",
@@ -791,7 +791,7 @@ def test_update_guide_preserves_personal_files_and_handles_missing_reference(
     agents.write_bytes(b"My composing preferences\n")
     claude.write_bytes(b"@AGENTS.md\nPersonal note\n")
     config = initialized / "poser.toml"
-    config.write_text(config.read_text().replace("factory patches", "personal patches"))
+    set_instrument_guide(config, "surge", "personal patches")
     before = {p: p.read_bytes() for p in (agents, claude, reference, config)}
     assert guide.main(["--check"]) == EXIT_SOME_FAILED
     assert "POSER.md" in capsys.readouterr().err

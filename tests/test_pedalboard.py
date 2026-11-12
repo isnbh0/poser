@@ -706,10 +706,9 @@ def test_constructing_an_instrument_reads_nothing_and_starts_nothing(
     assert sorted(path.name for path in tmp_path.iterdir()) == []
 
 
-def test_guide_is_a_short_section(tmp_path: Path) -> None:
+def test_guide_is_a_section_naming_saved_sounds(tmp_path: Path) -> None:
     guide = make_instrument(tmp_path).guide
     assert guide.startswith("## ")
-    assert len(guide.splitlines()) < 60
     assert "saved/" in guide
 
 

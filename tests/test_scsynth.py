@@ -529,13 +529,15 @@ def test_guide_composes_into_a_scratch_workspace(
     import subprocess
 
     import pedalboard
+    import poser_scsynth
 
+    package_guide = Path(poser_scsynth.__file__).with_name("guide.md").read_text(encoding="utf-8")
     monkeypatch.setattr(subprocess, "Popen", fail)
     monkeypatch.setattr(socket, "create_connection", fail)
     monkeypatch.setattr(pedalboard, "load_plugin", fail)
     assert guide_main([]) == 0
     guide = (tmp_path / GUIDE_NAME).read_text(encoding="utf-8")
-    assert "## scsynth instruments" in guide
+    assert package_guide.strip() in guide
     assert "sc:builtin/additive-voice" in guide
     assert "`sc` (poser_scsynth.instrument:create)" in guide
     assert 'sound="sc"' in guide

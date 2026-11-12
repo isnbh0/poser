@@ -1,5 +1,8 @@
 """Helpers shared by several test files."""
 
+import json
+import re
+import tomllib
 from importlib.resources import files
 from pathlib import Path
 
@@ -23,6 +26,20 @@ REPO_DIR = Path(__file__).resolve().parents[1]
 SCAFFOLD_DIR = Path(str(files("poser").joinpath("scaffold")))
 SURGE_DIR = Path(str(files("poser.reference_setups.surge")))
 REAL_CONFIG = REPO_DIR / "poser.toml"
+
+
+def set_instrument_guide(config: Path, instrument: str, note: str) -> None:
+    """Replace the one-line `guide` of `[instruments.<instrument>]` in `config` with `note`."""
+    text = config.read_text()
+    header = f"[instruments.{instrument}]\n"
+    start = text.index(header) + len(header)
+    end = text.find("\n[", start)
+    end = len(text) if end == -1 else end
+    line = f"guide = {json.dumps(note)}"
+    table, count = re.subn(r"^guide = .*$", lambda _: line, text[start:end], flags=re.MULTILINE)
+    assert count == 1, f"no single-line guide in [instruments.{instrument}]"
+    config.write_text(text[:start] + table + text[end:])
+    assert tomllib.loads(config.read_text())["instruments"][instrument]["guide"] == note
 
 
 def real_composition(tmp_path: Path) -> Composition:

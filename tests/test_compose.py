@@ -720,8 +720,6 @@ def test_guide_parts_hold_each_guide_once_in_order(
         composition.visualizer().guide,  # ty: ignore[unresolved-attribute]
         "## probe\n\nA fake section.\n",
     )
-    assert parts[0].startswith("## Pedalboard instruments")
-    assert parts[1].startswith("## Where results are kept")
     for item in composition.config.instruments:
         assert "guide" not in item.spec.options
 

@@ -1,5 +1,6 @@
 """Reference setup preparation does not require a real plugin."""
 
+import tomllib
 from importlib.resources import files
 from pathlib import Path
 
@@ -21,7 +22,10 @@ def test_explicit_paths_and_optional_presets(
     config = parse_config(setup.config, tmp_path / "future" / "poser.toml")
     assert config.instruments[0].spec.options["path"] == str(plugin)
     assert "sources" not in config.instruments[0].spec.options
-    assert "When a preset source is configured" in str(config.instruments[0].guide)
+    template = tomllib.loads(
+        files("poser.reference_setups.surge").joinpath("poser.toml").read_text()
+    )
+    assert config.instruments[0].guide == template["instruments"]["surge"]["guide"]
     presets = tmp_path / "factory patches"
     presets.mkdir()
     setup = surge.prepare(plugin, presets)

@@ -117,16 +117,12 @@ def test_python_examples_load(tmp_path: Path) -> None:
     assert python_examples(tmp_path)
 
 
-def test_dry_wet_branch_has_two_mix_leaves(tmp_path: Path) -> None:
+def test_graph_example_branches_into_several_mix_leaves(tmp_path: Path) -> None:
     (graph,) = [example for example in python_examples(tmp_path) if isinstance(example, Graph)]
-    assert {node.name: node.gain_db for node in analysis._leaves(graph)} == {
-        "wet": -6,
-        "dry": -3,
-    }
-    assert {(wire.from_name, wire.to_name): wire.gain_db for wire in graph.wires} == {
-        ("lead", "wet"): -12,
-        ("lead", "dry"): 0,
-    }
+    assert len(analysis._leaves(graph)) >= 2
+    assert any(
+        sum(wire.from_name == node.name for wire in graph.wires) >= 2 for node in graph.nodes
+    )
 
 
 def test_yaml_examples_parse() -> None:

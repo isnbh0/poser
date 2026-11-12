@@ -232,6 +232,8 @@ def test_reserved_source_names_are_rejected(tmp_path: Path, source: str) -> None
 def test_build_and_guide_need_no_engine_or_workspace_files(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    assert instrument_module.__file__ is not None
+    expected = Path(instrument_module.__file__).with_name("guide.md").read_text(encoding="utf-8")
     root = tmp_path / "missing-workspace"
     context = AdapterContext(root, root / "missing-sounds", root / "missing-renders")
     options: dict[str, JsonValue] = {
@@ -262,6 +264,6 @@ def test_build_and_guide_need_no_engine_or_workspace_files(
         return read_text(path, encoding=encoding, errors=errors)
 
     monkeypatch.setattr(Path, "read_text", read_package_guide)
-    assert "## scsynth instruments" in instrument.guide
+    assert instrument.guide == expected
     assert reads == [package_guide]
     assert not root.exists()
