@@ -10,10 +10,15 @@ Backends include VST3 and Audio Unit instruments through
 ## Create your studio
 
 A studio is your own project for songs, instruments, and renders. Follow the
-[setup guide](docs/setup.md) to create and verify one yourself, or give a coding agent the
-[bootstrap prompt](docs/bootstrap.md) to have it help; the whole file is the prompt. Both use the
-free Surge XT reference setup on macOS and can continue to your first song. An agent asked to set
-up poser takes the bootstrap prompt as its instructions.
+[setup guide](docs/setup.md) to create and verify one yourself, or paste this into a coding agent
+to have it help:
+
+```text
+Set up poser for me by following https://raw.githubusercontent.com/isnbh0/poser/main/docs/bootstrap.md
+```
+
+Both use the free Surge XT reference setup on macOS and can continue to your first song. An agent
+asked to set up poser takes the [bootstrap prompt](docs/bootstrap.md) as its instructions.
 
 Hear an example and get its source in the [optional showcase](docs/showcase.md).
 
