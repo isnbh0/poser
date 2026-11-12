@@ -110,8 +110,8 @@ replace one it did not generate. `CLAUDE.md` points to `AGENTS.md`.
   two renders are sample-identical.
 - `uv run list-sounds`: list every sound a song can name, with a description; filter with
   `--instrument` and `--match`, and add `--json` for JSON.
-- `uv run piano-roll <song> --output <path.png>`: draw authored notes without plugins or audio;
-  `--replace` replaces an existing PNG. Load only trusted Python songs.
+- `uv run piano-roll <song> --output <path.png>`: draw authored notes without loading plugins or
+  rendering audio; `--replace` replaces an existing PNG. Load only trusted Python songs.
 - `uv run render-song <song>`: render one aligned stem per track, rendering again only tracks
   whose inputs changed.
 - `uv run analyze-song <song>`: mix the stems and write the report, spectrograms, and a numbered

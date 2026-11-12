@@ -197,8 +197,8 @@ Rendering uses previous-block feedback; timing is the declared delay, without la
 ## Piano roll
 
 `uv run piano-roll <song> --output artifacts/piano-roll.png` writes a static PNG of authored
-notes, without plugins or an audio render. Each source track has a panel in source order, with
-beats horizontally and MIDI pitch vertically. Rectangle widths show authored durations; opacity
+notes, without loading plugins or rendering audio. Each source track has a panel in source order,
+with beats horizontally and MIDI pitch vertically. Rectangle widths show authored durations; opacity
 is `0.25 + 0.75 * velocity / 127`. Tempo and track names are shown, and empty graphs show
 `No authored notes`. Any configured song format works, including direct graphs.
 `--config path/to/poser.toml` selects a workspace explicitly; the song may be outside it.
