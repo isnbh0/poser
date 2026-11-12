@@ -110,17 +110,33 @@ def _parse(
     return fields, plugin_name, raw_state, performance, Path(target)
 
 
-def load(path: str, plugin_name: str | None, state: bytes | None) -> "VST3Plugin | AudioUnitPlugin":
-    """Load a plugin and restore a state into it. Raises whatever the plugin code raises."""
+def load_external(path: str, plugin_name: str | None) -> "VST3Plugin | AudioUnitPlugin":
+    """Load the plugin at `path` with the class its suffix names, so a failure reports only that
+    format's error. A path with another suffix tries every format. Raises whatever the plugin
+    code raises."""
     # Imported here so the parent never loads plugin code.
-    from pedalboard import load_plugin
+    from pedalboard import AudioUnitPlugin, VST3Plugin, load_plugin
 
+    suffix = Path(path).suffix.lower()
+    if suffix == ".vst3":
+        return VST3Plugin(
+            path, plugin_name=plugin_name, initialization_timeout=INITIALIZATION_TIMEOUT_S
+        )
+    if suffix == ".component":
+        return AudioUnitPlugin(
+            path, plugin_name=plugin_name, initialization_timeout=INITIALIZATION_TIMEOUT_S
+        )
     # `load_plugin` is annotated as returning `ExternalPlugin`, which lacks `raw_state`, but it
     # returns one of these two classes.
-    plugin = cast(
+    return cast(
         "VST3Plugin | AudioUnitPlugin",
         load_plugin(path, plugin_name=plugin_name, initialization_timeout=INITIALIZATION_TIMEOUT_S),
     )
+
+
+def load(path: str, plugin_name: str | None, state: bytes | None) -> "VST3Plugin | AudioUnitPlugin":
+    """Load a plugin and restore a state into it. Raises whatever the plugin code raises."""
+    plugin = load_external(path, plugin_name)
     if state is not None:
         plugin.raw_state = state
     return plugin
@@ -206,12 +222,7 @@ def load_effect(
     Raises whatever the plugin code raises, including AttributeError for an unknown class name.
     """
     if path is not None:
-        # Imported here so the parent never loads plugin code.
-        from pedalboard import load_plugin
-
-        return cast(
-            "LoadedEffect", load_plugin(path, initialization_timeout=INITIALIZATION_TIMEOUT_S)
-        )
+        return cast("LoadedEffect", load_external(path, None))
     # The builtin's name was checked at build time, but the class exists only where the native
     # library does, so an unknown name is reported here, as a crashed worker.
     import pedalboard_native

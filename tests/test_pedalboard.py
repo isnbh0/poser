@@ -46,6 +46,7 @@ from poser.adapters.pedalboard.worker import (
     MalformedJobError,
     NotLoaded,
     capture_job,
+    load_external,
     performance_messages,
     render_duration_s,
     render_effect,
@@ -721,10 +722,51 @@ class EffectPlugin:
         raise AssertionError("an effect's window opened")
 
 
+def patch_plugin_loading(monkeypatch: pytest.MonkeyPatch, fake: object) -> None:
+    """Replace every way the worker loads a plugin, by format or by trying each, with `fake`."""
+    for name in ("load_plugin", "VST3Plugin", "AudioUnitPlugin"):
+        monkeypatch.setattr(f"pedalboard.{name}", fake)
+
+
+@pytest.mark.parametrize(
+    ("name", "loader"),
+    [
+        ("Synth.vst3", "VST3Plugin"),
+        ("Synth.VST3", "VST3Plugin"),
+        ("Synth.component", "AudioUnitPlugin"),
+        ("Synth.dll", "load_plugin"),
+    ],
+)
+def test_load_external_loads_with_the_class_the_suffix_names(
+    monkeypatch: pytest.MonkeyPatch, name: str, loader: str
+) -> None:
+    calls: list[str] = []
+    for each in ("load_plugin", "VST3Plugin", "AudioUnitPlugin"):
+        monkeypatch.setattr(
+            f"pedalboard.{each}",
+            lambda *args, each=each, **kwargs: calls.append(each) or FakePlugin(),
+        )
+
+    load_external(f"/{name}", None)
+
+    assert calls == [loader]
+
+
+def test_a_vst3_that_fails_to_scan_reports_only_the_vst3_error(tmp_path: Path) -> None:
+    bundle = tmp_path / "Broken.vst3"
+    bundle.mkdir()
+
+    with pytest.raises(ImportError) as raised:
+        load_external(str(bundle), None)
+
+    assert "AudioUnit" not in str(raised.value)
+    assert "Components" not in str(raised.value)
+
+
 def test_the_jobs_refuse_a_plugin_that_is_not_an_instrument(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr("pedalboard.load_plugin", lambda *args, **kwargs: EffectPlugin())
+    patch_plugin_loading(monkeypatch, lambda *args, **kwargs: EffectPlugin())
     job: dict[str, JsonValue] = {
         "path": "/Effect.vst3",
         "plugin_name": None,
@@ -1213,7 +1255,7 @@ class FakePlugin:
 
 
 class FakeLoader:
-    """Stands in for `pedalboard.load_plugin`, handing out preset or new plugins."""
+    """Stands in for pedalboard's plugin loading, handing out preset or new plugins."""
 
     def __init__(self) -> None:
         self.loads: list[tuple[str, str | None, float]] = []
@@ -1237,7 +1279,7 @@ class FakeLoader:
 @pytest.fixture
 def loader(monkeypatch: pytest.MonkeyPatch) -> FakeLoader:
     fake = FakeLoader()
-    monkeypatch.setattr("pedalboard.load_plugin", fake)
+    patch_plugin_loading(monkeypatch, fake)
     return fake
 
 
@@ -1395,13 +1437,13 @@ def test_capture_job_reports_a_failed_restore(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     def load_once(*args: object, **kwargs: object) -> FakePlugin:
-        monkeypatch.setattr("pedalboard.load_plugin", failing)
+        patch_plugin_loading(monkeypatch, failing)
         return FakePlugin()
 
     def failing(*args: object, **kwargs: object) -> NoReturn:
         raise RuntimeError("gone")
 
-    monkeypatch.setattr("pedalboard.load_plugin", load_once)
+    patch_plugin_loading(monkeypatch, load_once)
     preview_path = tmp_path / "p.npy"
 
     assert capture_job(fake_job("preview_path", preview_path)) == {
@@ -1925,7 +1967,7 @@ def test_render_group_visits_exactly_the_blocks_of_the_horizon(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     plugin = FakeEffectPlugin(1.0)
-    monkeypatch.setattr("pedalboard.load_plugin", lambda *args, **kwargs: plugin)
+    patch_plugin_loading(monkeypatch, lambda *args, **kwargs: plugin)
     job = group_job(tmp_path)
     members = cast("list[dict[str, JsonValue]]", job["members"])
     job["members"] = [

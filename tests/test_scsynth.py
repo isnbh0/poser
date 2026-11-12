@@ -534,7 +534,8 @@ def test_guide_composes_into_a_scratch_workspace(
     package_guide = Path(poser_scsynth.__file__).with_name("guide.md").read_text(encoding="utf-8")
     monkeypatch.setattr(subprocess, "Popen", fail)
     monkeypatch.setattr(socket, "create_connection", fail)
-    monkeypatch.setattr(pedalboard, "load_plugin", fail)
+    for name in ("load_plugin", "VST3Plugin", "AudioUnitPlugin"):
+        monkeypatch.setattr(pedalboard, name, fail)
     assert guide_main([]) == 0
     guide = (tmp_path / GUIDE_NAME).read_text(encoding="utf-8")
     assert package_guide.strip() in guide
