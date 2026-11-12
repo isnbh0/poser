@@ -4,13 +4,11 @@
 [Editable song source](../src/poser/reference_setups/surge/showcase.py)
 
 This 16-bar miniature has a sparse bass opening, flute entry, layered middle, and closing return.
-The preview is **not auditioned**. The packaged eight-beat `demo.yaml` is a separate,
-default-patch smoke test.
+No one has listened to the preview.
 
 ## Instrument and reproduction
 
-The preview uses an existing Surge XT **1.3.4** macOS VST3 installation and these discovered
-factory IDs:
+The preview was rendered with Surge XT 1.3.4 (macOS VST3) using these factory patches:
 
 - `surge:presets/Basses/Digibass`
 - `surge:presets/Polysynths/Past Tense`
@@ -24,5 +22,5 @@ uv run export-song songs/showcase.py --destination deliveries/showcase
 ```
 
 The destination must be new. The export contains the matching source, WAV, report, images, and
-manifest. Plugin and preset binaries are not distributed, and different instrument versions or
-renders need not produce identical audio.
+manifest. Plugin and preset binaries are not distributed. Other Surge versions, and repeated
+renders, may sound slightly different from the preview.

@@ -4,31 +4,28 @@
 
 Write a song as code in Python or YAML. poser renders its tracks through instrument backends,
 mixes the stems, and produces reports and spectrograms for a person or agent to use in revisions.
-Backends include VST3 and Audio Unit instruments through [pedalboard](https://github.com/spotify/pedalboard)
-and [scsynth](packages/poser-scsynth/README.md).
+Backends include VST3 and Audio Unit instruments through
+[pedalboard](https://github.com/spotify/pedalboard) and [scsynth](packages/poser-scsynth/README.md).
 
 ## Create your studio
 
-A studio is your own project for songs, instruments, and renders. Follow the [setup guide](docs/setup.md)
-to create and verify one yourself, or copy the [agent bootstrap prompt](docs/bootstrap.md) to have
-an agent help. Both routes use the same procedure: the free Surge XT reference setup on macOS,
-with optional continuation to your first song. This platform scope describes the reference setup,
-not every poser backend.
+A studio is your own project for songs, instruments, and renders. Follow the
+[setup guide](docs/setup.md) to create and verify one yourself, or copy the
+[agent bootstrap prompt](docs/bootstrap.md) to have an agent help. Both use the free Surge XT
+reference setup on macOS and can continue to your first song.
 
 Hear an example and get its source in the [optional showcase](docs/showcase.md).
 
 ## Surge demo
 
-The eight-beat default-patch demo is a smoke test, not a finished-song showcase.
-The demo is two Surge XT tracks; its mix and a spectrogram per track land under
-`renders/songs/demo.yaml/latest/`. Play `mix.wav` to hear the song, and see its shape at a
-glance:
+The eight-beat demo plays Surge XT's default patch on two tracks as a smoke test. Its mix and a
+spectrogram per track land under `renders/songs/demo.yaml/latest/`. Play `mix.wav` to hear the
+song, and see its shape at a glance:
 
 ![the demo mix's spectrogram](docs/demo-spectrogram.png)
 
-The report that drives the next revision (here abridged). Song tracks appear as analysis `nodes`,
-alongside any effect nodes; the song authoring key remains `tracks`. Metric values below are
-illustrative, not a reproducible audio fingerprint:
+The report that drives the next revision, abridged, with illustrative metric values. Songs author
+`tracks`; the report lists each track and each effect under `nodes`:
 
 ```json
 {
@@ -73,9 +70,8 @@ A song names `surge` for the default patch, `surge:presets/<path without suffix>
 in a source, and `surge:saved/<name>` for a sound saved with `save-sound`. The `pedalboard`
 adapter takes `path`, `plugin_name` for a bundle holding several plugins, `sources`, and
 `formats`, the preset formats it reads (`fxp`, and `saved` for saved sounds, by default).
-Relative paths resolve against the directory holding `poser.toml`. By default a source's presets
-are `.fxp` files; an instrument's `formats` option names the preset formats it reads, and
-`list-sounds` notes the files in a source it cannot use.
+Relative paths resolve against the directory holding `poser.toml`, and `list-sounds` notes the
+files in a source it cannot use.
 
 An optional `[adapters]` table chooses the adapter for every other part of poser. Each key takes
 a built-in name, an import path, or a table with `use` and options:
@@ -93,37 +89,23 @@ a built-in name, an import path, or a table with `use` and options:
 
 Edit `AGENTS.md` for studio preferences and each instrument's `guide` in `poser.toml` for
 instrument notes. `POSER.md` is generated from poser's core guide, instrument notes, and adapter
-guides; adapter maintainers supply the backend-specific guidance. Run `uv run update-guide` after changing
-`poser.toml`, and `uv run update-guide --check` to see whether the reference is current. The command
-writes only `POSER.md`, and refuses to replace one it did not generate. `CLAUDE.md` points to
-`AGENTS.md`.
+guides. Run `uv run update-guide` after changing `poser.toml`, and `uv run update-guide --check`
+to see whether the reference is current. The command writes only `POSER.md`, and refuses to
+replace one it did not generate. `CLAUDE.md` points to `AGENTS.md`.
 
-Optional composition advice defaults to on. Initialize without it using
-`uv run init-workspace --setup surge --advice off`. For an existing studio, add:
-
-```toml
-[guidance]
-advice = false
-```
-
-Then run `uv run update-guide` and `uv run update-guide --check`. Set `true` to restore advice.
-This choice changes generated advice, not rendering or analysis. Owner instructions and custom
-instrument notes remain untouched.
+`POSER.md` includes composition advice by default; to turn it off, see
+[composition advice](docs/setup.md#composition-advice).
 
 ## Commands
 
+- `uv run init-workspace --setup surge`: write the selected reference setup and guide into a
+  directory.
+- `uv run check-instruments`: check that each instrument loads and plays notes, and report whether
+  two renders are sample-identical.
+- `uv run list-sounds`: list every sound a song can name, with a description; filter with
+  `--instrument` and `--match`, and add `--json` for JSON.
 - `uv run piano-roll <song> --output <path.png>`: draw authored notes without plugins or audio;
-  use `--replace` to atomically replace an existing PNG. Load only trusted Python songs.
-
-- `uv run init-workspace --setup surge`: write the selected reference setup and guide into a directory.
-- `uv run check-instruments`: check instrument loading and note output; report exact sample-value
-  equality with no tolerance separately as informational repeatability. `REPEATABLE no` alone
-  is not failure.
-- `uv run list-sounds`: list every sound a song can name, with a description. `--json` retains
-  the same entries as JSON. Repeat `--instrument <exact-name>` to select instruments without
-  scanning others; `--match <substring>` matches IDs/descriptions case-insensitively, preserving
-  listing order. Unknown instruments exit 2; valid empty matches exit 0. Selected-source problems
-  still exit 1 even if no entries match. Listing is not auditioning.
+  `--replace` replaces an existing PNG. Load only trusted Python songs.
 - `uv run render-song <song>`: render one aligned stem per track, rendering again only tracks
   whose inputs changed.
 - `uv run analyze-song <song>`: mix the stems and write the report, spectrograms, and a numbered
@@ -131,13 +113,13 @@ instrument notes remain untouched.
 - `uv run export-song <song> --destination <new-directory>`: render, analyze, and publish a
   verified matching delivery; repeat `--include <source-relative-file>` for local dependencies.
 - `uv run save-sound <instrument> <name> --description <text>`: open an instrument's window and
-  save its state as a sound when the window closes. It is for a person at the screen, not an
-  agent.
+  save its state as a sound when the window closes. It waits for a person to close the window,
+  so agents can't use it.
 - `uv run update-guide`: write `POSER.md` from poser and `poser.toml`; `--check` only compares.
 
 Every command but `init-workspace` takes `--config`, and those that use saved sounds or results
 take `--sounds-dir` or `--output-dir`, to work outside a workspace or on another one. With
-`--config`, the workspace is the directory holding that file, and no search runs.
+`--config`, the workspace is the directory holding that file.
 
 ## Verified delivery
 
@@ -146,8 +128,8 @@ Export publishes editable `source/`, `audio/`, `images/`, `report.json`, and a h
 only on success. Use a new destination each time and declare local source dependencies with
 repeatable `--include <source-relative-file>`.
 
-Render/analyze remain useful for iteration. Export verifies correspondence, not musical quality
-or actual listening. Label unauditioned work honestly. See the
+Use render and analyze while iterating. Export verifies that the delivered files match one render
+and analysis, and records the bundle as not auditioned. See the
 [export contract](docs/setup.md#export-contract) for guarantees, limitations, and path rules.
 
 ## Adapters of your own
@@ -172,11 +154,9 @@ command uses. Each factory returns an object meeting its port in `poser.core.por
 
 Building an adapter loads no plugin, starts no process, writes no file, and reads nothing but its
 arguments and imported modules. Work with side effects waits for a method call, and a `guide`
-property reads only package data, so `update-guide` works on a machine without the plugins.
-`guide` is required operational reference; optional creative/workflow coaching belongs in a
-separate package-data-only `advice` property. Instrument `guide` notes are operational reference;
-inline instrument `advice` is rejected. For controlled advice experiments, see
-[advice ablation](docs/ablation.md).
+property reads only package data. An adapter's `guide` holds required operational reference;
+optional composition coaching goes in a separate `advice` property, also read from package data.
+Instruments in `poser.toml` take only `guide`; an inline `advice` is a configuration error.
 
 The module must be importable in the workspace's environment, which poser's worker processes
 share. In a uv workspace, make the workspace a package (`[tool.uv] package = true` in its
@@ -186,9 +166,9 @@ share. In a uv workspace, make the workspace a package (`[tool.uv] package = tru
 
 `make check` runs format, lint, types, and the tests that need no plugins. `make test-real` loads
 real plugins; it reads a `poser.toml` at the repository root, so copy
-`src/poser/reference_setups/surge/poser.toml` there and edit its paths first. [AGENTS.md](AGENTS.md) describes
-the layout and rules.
-For controlled composition experiments, see [advice ablation](docs/ablation.md).
+`src/poser/reference_setups/surge/poser.toml` there and edit its paths first.
+[AGENTS.md](AGENTS.md) describes the layout and rules. For controlled composition experiments, see
+[advice ablation](docs/ablation.md).
 
 ## License
 

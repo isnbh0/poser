@@ -138,7 +138,7 @@ def test_yaml_only_studio_gets_conditional_format_guidance(tmp_path: Path, plugi
     config.write_text(config.read_text() + '\n[adapters]\nsong_formats = ["yaml"]\n')
     assert guide.main(["--config", str(config)]) == 0
     reference = (target / "POSER.md").read_text()
-    assert "`adapters.song_formats` can select either or other formats" in reference
+    assert "`adapters.song_formats` can enable either, both, or other formats" in reference
     assert "When the script format is enabled" in reference
     assert "uv run render-song <song>" in reference
     composition = load(config, target / "sounds", target / "renders")
