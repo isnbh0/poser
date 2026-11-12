@@ -24,11 +24,11 @@ from fakes import (
 
 from poser.core import cache, rendering
 from poser.core.analysis import AnalysisTools, analyze_song
-from poser.core.audio import Audio
+from poser.core.audio import NUM_CHANNELS, SAMPLE_RATE, Audio
 from poser.core.cache import Stamp, StampProblem, node_key, sound_key
 from poser.core.graph import BUFFER_SIZE, Graph, Node, Wire
 from poser.core.names import Identifier, NodeName, SongId, TrackName
-from poser.core.performance import perform
+from poser.core.performance import Control, NoteOff, NoteOn, Performance, perform
 from poser.core.ports import (
     Effect,
     EffectRenderRequest,
@@ -41,7 +41,12 @@ from poser.core.ports import (
 from poser.core.rendering import ResolvedNode, TrackResult, render_song, resolve_node
 from poser.core.report import AnalysisStatus, NodeReport, Report
 from poser.core.song import Note, Song, Track
-from poser.core.statuses import RenderFailureStatus, SoundFailureStatus, StemStatus
+from poser.core.statuses import (
+    CORE_RENDER_FAILURES,
+    RenderFailureStatus,
+    SoundFailureStatus,
+    StemStatus,
+)
 
 SONG_ID = SongId("songs/demo.yaml")
 
@@ -89,6 +94,7 @@ class Setup:
         self.renders = FakeRenderStore(tmp_path / "renders")
         self.store: FakeSongStore = self.renders.song(SONG_ID)
         self.audio_files = NpyAudioFiles()
+        self.progress: list[str] = []
 
     @property
     def instruments(self) -> Mapping[Identifier, Instrument]:
@@ -112,6 +118,7 @@ class Setup:
             effects=self.effects,
             timeout_s=10.0,
             force=force,
+            notify=self.progress.append,
         )
 
     def analyze(self, song: Song | Graph) -> Report:
@@ -332,7 +339,7 @@ def test_changed_stem_or_spoiled_stamp_renders_again(tmp_path: Path) -> None:
     assert isinstance(setup.store.read_stamp(BASS), Stamp)
 
 
-@pytest.mark.parametrize("status", list(RenderFailureStatus))
+@pytest.mark.parametrize("status", sorted(set(RenderFailureStatus) - CORE_RENDER_FAILURES))
 def test_render_failure_passes_through_and_leaves_no_stem(
     tmp_path: Path, status: RenderFailureStatus
 ) -> None:
@@ -393,6 +400,170 @@ def test_silent_render_writes_the_stem_and_reports_silent(tmp_path: Path) -> Non
     stamp = setup.store.read_stamp(LEAD)
     assert isinstance(stamp, Stamp)
     assert stamp.status is StemStatus.SILENT
+
+
+def late_song() -> Song:
+    return Song(bpm=120, tracks=(Track("lead", "fake:late", NOTE),))
+
+
+def attempts(setup: Setup) -> list[int]:
+    return [request.attempt for request in setup.instrument.renders]
+
+
+def test_a_late_start_renders_again_and_keeps_the_first_on_time_attempt(tmp_path: Path) -> None:
+    setup = Setup(tmp_path, make_instrument(late=FakeSound(identity="late", late_attempts=2)))
+
+    (lead,) = setup.render(late_song())
+
+    assert lead.status is StemStatus.RENDERED
+    assert attempts(setup) == [1, 2, 3]
+    assert setup.progress == [
+        "lead: sound began 0.50 s after its first note; rendering again (attempt 2 of 3)",
+        "lead: sound began 0.25 s after its first note; rendering again (attempt 3 of 3)",
+    ]
+    assert isinstance(setup.store.read_stamp(LEAD), Stamp)
+    song = late_song()
+    stem = setup.audio_files.read(setup.store.stem_path(LEAD), lead_frames(song))
+    assert np.all(stem.samples == np.float32(0.5))
+
+
+def test_every_attempt_starting_late_is_late_start_and_leaves_no_stem(tmp_path: Path) -> None:
+    setup = Setup(tmp_path, make_instrument(late=FakeSound(identity="late", late_attempts=3)))
+
+    (lead,) = setup.render(late_song())
+
+    assert lead.status is RenderFailureStatus.LATE_START
+    assert lead.detail == (
+        "sound began late after its first note in all 3 renders, not all by the same amount; in "
+        "the last, 0.17 s after it"
+    )
+    assert attempts(setup) == [1, 2, 3]
+    assert len(setup.progress) == 2
+    assert not setup.store.stem_path(LEAD).exists()
+    assert setup.store.read_stamp(LEAD) is StampProblem.MISSING
+
+
+def test_a_start_late_by_the_same_amount_every_time_is_the_sounds_own(tmp_path: Path) -> None:
+    setup = Setup(
+        tmp_path, make_instrument(late=FakeSound(identity="late", quiet_frames=SAMPLE_RATE // 4))
+    )
+
+    (lead,) = setup.render(late_song())
+
+    assert lead.status is StemStatus.RENDERED
+    assert attempts(setup) == [1, 2, 3]
+    assert setup.progress == [
+        "lead: sound began 0.25 s after its first note; rendering again (attempt 2 of 3)",
+        "lead: sound began 0.25 s after its first note; rendering again (attempt 3 of 3)",
+        (
+            "lead: sound began 0.25 s after its first note in all 3 renders; keeping it as the "
+            "sound's own start"
+        ),
+    ]
+    assert isinstance(setup.store.read_stamp(LEAD), Stamp)
+
+
+def test_a_late_start_leaves_its_chain_upstream_failed(tmp_path: Path) -> None:
+    setup = Setup(
+        tmp_path,
+        make_instrument(late=FakeSound(identity="late", late_attempts=3)),
+        FakeEffect("drive"),
+    )
+    song = Song(120, (Track("lead", "fake:late", NOTE, effects=("drive",)),))
+
+    results = by_name(setup.render(song))
+
+    assert results[LEAD].status is RenderFailureStatus.LATE_START
+    assert results[DRIVE].status is RenderFailureStatus.UPSTREAM_FAILED
+    assert setup.store.read_stamp(DRIVE) is StampProblem.MISSING
+
+
+def test_a_late_start_tries_again_on_the_next_render(tmp_path: Path) -> None:
+    setup = Setup(tmp_path, make_instrument(late=FakeSound(identity="late", late_attempts=3)))
+    setup.render(late_song())
+    setup.instrument = make_instrument(late=FakeSound(identity="late"))
+
+    (lead,) = setup.render(late_song())
+
+    assert lead.status is StemStatus.RENDERED
+    assert not lead.cached
+
+
+def test_a_silent_render_and_a_failed_render_are_not_retried(tmp_path: Path) -> None:
+    failure = RenderFailure(RenderFailureStatus.CRASHED, "the worker died")
+    setup = Setup(
+        tmp_path,
+        make_instrument(
+            quiet=FakeSound(identity="quiet", amplitude=0.0),
+            broken=FakeSound(identity="broken", render_failure=failure),
+        ),
+    )
+
+    results = by_name(
+        setup.render(
+            Song(bpm=120, tracks=(Track("q", "fake:quiet", NOTE), Track("b", "fake:broken", NOTE)))
+        )
+    )
+
+    assert results[NodeName("q")].status is StemStatus.SILENT
+    assert results[NodeName("b")].status is RenderFailureStatus.CRASHED
+    assert attempts(setup) == [1, 1]
+    assert setup.progress == []
+
+
+TOLERANCE = rendering.LATE_START_TOLERANCE_SAMPLES
+
+
+def audio_loud(frames: int, *spans: tuple[int, int]) -> np.ndarray:
+    """Audio of `frames` frames, silent except over each `(start, end)` span."""
+    samples = np.zeros((NUM_CHANNELS, frames), dtype=np.float32)
+    for start, end in spans:
+        samples[:, start:end] = 0.5
+    return samples
+
+
+def one_note(start: int, length: int, frames: int = 48000) -> Performance:
+    return Performance(frames, (NoteOn(start, 60, 90), NoteOff(start + length, 60)))
+
+
+def test_late_start_measures_the_first_sound_from_the_first_note() -> None:
+    performance = one_note(1000, 4800)
+
+    assert rendering.late_start_s(audio_loud(48000, (1000, 48000)), performance) is None
+    # Within the tolerance, sound is on time, as for output latency or a soft attack.
+    on_time = audio_loud(48000, (1000 + TOLERANCE, 48000))
+    assert rendering.late_start_s(on_time, performance) is None
+    late = audio_loud(48000, (1000 + TOLERANCE + 1, 48000))
+    assert rendering.late_start_s(late, performance) == (TOLERANCE + 1) / SAMPLE_RATE
+
+
+def test_late_start_sees_a_lost_first_note_under_later_notes() -> None:
+    # The first note holds a second; the second note starts inside it and is the first heard.
+    performance = Performance(
+        96000,
+        (NoteOn(0, 48, 90), NoteOn(24000, 60, 90), NoteOff(36000, 60), NoteOff(48000, 48)),
+    )
+
+    late = rendering.late_start_s(audio_loud(96000, (24000, 36000)), performance)
+
+    assert late == 0.5
+
+
+def test_late_start_measures_from_the_note_not_from_earlier_sound() -> None:
+    # Sound before the first note, then silence past it, is late by the time after the note.
+    performance = one_note(24000, 4800)
+
+    late = rendering.late_start_s(audio_loud(48000, (0, 12000), (36000, 48000)), performance)
+
+    assert late == 0.25
+
+
+def test_late_start_leaves_silence_and_noteless_performances_to_the_sound() -> None:
+    assert rendering.late_start_s(audio_loud(48000), one_note(0, 4800)) is None
+    # Sound only before the first note is silence from it on.
+    assert rendering.late_start_s(audio_loud(48000, (0, 100)), one_note(1000, 4800)) is None
+    noteless = Performance(48000, (Control(0, 1, 64),))
+    assert rendering.late_start_s(audio_loud(48000, (TOLERANCE * 2, 48000)), noteless) is None
 
 
 def test_requests_carry_the_performance_to_a_path_that_is_gone_afterwards(tmp_path: Path) -> None:

@@ -14,7 +14,7 @@ import weakref
 from collections.abc import Callable, Iterator
 from importlib import metadata
 from pathlib import Path
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
 from typing import NoReturn, cast
 
 import numpy as np
@@ -25,8 +25,10 @@ from test_performance import cc_track, performed
 
 from poser.adapters.isolation import WorkerCrashedError, WorkerTimedOutError
 from poser.adapters.pedalboard import instrument as instrument_module
+from poser.adapters.pedalboard import worker as worker_module
 from poser.adapters.pedalboard.config import (
     INITIALIZATION_TIMEOUT_S,
+    LOAD_SETTLE_S,
     EffectConfig,
     PedalboardConfig,
     effect_from_options,
@@ -74,6 +76,7 @@ from poser.core.ports import (
     ResolvedSound,
     SoundFailure,
 )
+from poser.core.rendering import RENDER_ATTEMPTS
 from poser.core.song import ControlChange, Note
 from poser.core.sounds import SoundRef
 from poser.core.statuses import RenderFailureStatus, SoundFailureStatus
@@ -774,7 +777,7 @@ def test_the_jobs_refuse_a_plugin_that_is_not_an_instrument(
         "state": None,
         "performance": performance_to_data(PERFORMANCE),
     }
-    assert render_job(job | {"audio_path": str(tmp_path / "a.npy")}) == {
+    assert render_job(job | {"audio_path": str(tmp_path / "a.npy"), "settle_s": 0.0}) == {
         "status": "load_failed",
         "detail": "/Effect.vst3 is not an instrument",
     }
@@ -806,6 +809,28 @@ def test_render_runs_the_worker_on_the_sound(
     assert job["state"] == encode_state(build_state(b"chunk"))
     assert (job["path"], job["plugin_name"]) == (str(tmp_path / "Serum.vst3"), None)
     assert job["performance"]["samples"] == PERFORMANCE.samples
+    assert job["settle_s"] == LOAD_SETTLE_S[0]
+
+
+def test_there_is_a_wait_for_each_attempt_the_core_makes_and_the_first_has_none() -> None:
+    assert len(LOAD_SETTLE_S) == RENDER_ATTEMPTS
+    assert LOAD_SETTLE_S[0] == 0.0
+
+
+@pytest.mark.parametrize(("attempt", "settle_s"), [(1, 0.0), (2, 1.0), (3, 4.0), (4, 4.0)])
+def test_render_waits_longer_on_each_attempt(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    workers: ModuleType,
+    attempt: int,
+    settle_s: float,
+) -> None:
+    use_workers(monkeypatch, workers)
+    instrument = make_instrument(tmp_path)
+    path = tmp_path / "out.npy"
+    request = RenderRequest(resolved(instrument, None), PERFORMANCE, path, attempt=attempt)
+    assert instrument.render(request, 30) is None
+    assert json.loads((tmp_path / "out.npy.job.json").read_text())["settle_s"] == settle_s
 
 
 @pytest.mark.parametrize(
@@ -1310,6 +1335,41 @@ def test_render_fresh_renders_the_new_instance_without_a_reset(
     assert audio is plugin.rendered[0]
 
 
+def test_render_fresh_waits_after_restoring_the_state(
+    loader: FakeLoader, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    plugin = FakePlugin()
+    loader.queue.append(plugin)
+    events: list[str] = []
+    plugin.on_call = lambda: events.append("render")
+    clock = SimpleNamespace(sleep=lambda seconds: events.append(f"sleep {seconds}"))
+    monkeypatch.setattr(worker_module, "time", clock)
+
+    render_fresh("/S.vst3", None, b"state", PERFORMANCE, 1.0)
+
+    assert events == ["sleep 1.0", "render"]
+
+
+def test_render_fresh_with_no_wait_does_not_sleep(
+    loader: FakeLoader, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    loader.queue.append(FakePlugin())
+    clock = SimpleNamespace(sleep=lambda seconds: pytest.fail(f"slept {seconds}"))
+    monkeypatch.setattr(worker_module, "time", clock)
+
+    render_fresh("/S.vst3", None, b"state", PERFORMANCE)
+
+
+@pytest.mark.parametrize("settle_s", [-1.0, "1", None, True])
+def test_render_job_refuses_a_bad_wait(
+    loader: FakeLoader, tmp_path: Path, settle_s: JsonValue
+) -> None:
+    loader.queue.append(FakePlugin())
+    job = fake_job("audio_path", tmp_path / "a.npy") | {"settle_s": settle_s}
+    with pytest.raises(MalformedJobError):
+        render_job(job)
+
+
 def test_render_fresh_with_no_state_leaves_raw_state_unset(loader: FakeLoader) -> None:
     plugin = FakePlugin()
     plugin.state_error = AssertionError("raw_state was set")
@@ -1373,13 +1433,16 @@ def test_render_fresh_lets_a_processing_exception_escape(loader: FakeLoader) -> 
 
 
 def fake_job(output: str, path: Path, state: bytes | None = None) -> dict[str, JsonValue]:
-    return {
+    job: dict[str, JsonValue] = {
         "path": "/S.vst3",
         "plugin_name": None,
         "state": None if state is None else encode_state(state),
         "performance": performance_to_data(PERFORMANCE),
         output: str(path),
     }
+    if output == "audio_path":
+        job["settle_s"] = 0.0
+    return job
 
 
 def test_render_job_writes_what_the_plugin_rendered(loader: FakeLoader, tmp_path: Path) -> None:

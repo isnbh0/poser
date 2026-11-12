@@ -42,9 +42,12 @@ def instrument(name, options, context):
     fail = options.pop("fail", None)
     failure = None if fail is None else RenderFailure(RenderFailureStatus(fail), f"it {fail}")
     amplitude = options.pop("amplitude", 0.5)
+    late = options.pop("late_attempts", 0)
     sounds = {}
     if options.pop("default", True):
-        sounds[None] = FakeSound("default sound", "default", amplitude, render_failure=failure)
+        sounds[None] = FakeSound(
+            "default sound", "default", amplitude, render_failure=failure, late_attempts=late
+        )
     for preset in options.pop("presets", []):
         sounds[preset] = FakeSound(f"{preset} preset", preset, amplitude, render_failure=failure)
     problems = options.pop("problems", [])

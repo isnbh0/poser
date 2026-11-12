@@ -28,7 +28,12 @@ from poser.core.ports import (
 )
 from poser.core.rendering import TrackResult
 from poser.core.sounds import SoundEntry, SoundRef
-from poser.core.statuses import RenderFailureStatus, SoundFailureStatus, StemStatus
+from poser.core.statuses import (
+    CORE_RENDER_FAILURES,
+    RenderFailureStatus,
+    SoundFailureStatus,
+    StemStatus,
+)
 
 FAKE = Identifier("fake")
 REF = SoundRef(FAKE)
@@ -82,6 +87,14 @@ def test_failure_types_take_only_their_own_status_family() -> None:
         SoundFailure("load_failed", "no")  # ty: ignore[invalid-argument-type]
     with pytest.raises(ValueError, match="status"):
         RenderFailure("crashed", "no")  # ty: ignore[invalid-argument-type]
+
+
+@pytest.mark.parametrize("status", sorted(CORE_RENDER_FAILURES))
+def test_an_adapter_failure_cannot_carry_a_status_the_core_decides(
+    status: RenderFailureStatus,
+) -> None:
+    with pytest.raises(ValueError, match="decided by the core"):
+        RenderFailure(status, "no")
 
 
 def test_collection_fields_are_tuples_that_later_changes_cannot_reach() -> None:

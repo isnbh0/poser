@@ -5,7 +5,7 @@ import json
 from importlib.metadata import version
 from pathlib import Path
 
-from poser.cli.common import RENDER_TIMEOUT_S, fail
+from poser.cli.common import RENDER_TIMEOUT_S, fail, progress
 from poser.cli.workspace import WorkspaceError, fill_path_options, song_id
 from poser.compose import Composition, delivery_writer, parse_config
 from poser.core.delivery import (
@@ -73,6 +73,7 @@ def _run(args: argparse.Namespace) -> DeliveryResult:
         poser_version=version("poser"),
         timeout_s=RENDER_TIMEOUT_S,
         force=args.force,
+        notify=progress(PROG),
     )
 
 

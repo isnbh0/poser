@@ -6,6 +6,7 @@ target loads no plugin code. Every performance renders through `render_fresh`, o
 just loaded.
 """
 
+import time
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -40,7 +41,7 @@ if TYPE_CHECKING:
 # where the feedback regime's one-block bound on in-cycle delays is enforced next to it.
 SETTLE_S = 0.1
 
-RENDER_KEYS = {"path", "plugin_name", "state", "performance", "audio_path"}
+RENDER_KEYS = {"path", "plugin_name", "state", "performance", "audio_path", "settle_s"}
 CAPTURE_KEYS = {"path", "plugin_name", "state", "performance", "preview_path"}
 EFFECT_KEYS = {
     "path",
@@ -556,9 +557,14 @@ def render_group_job(job: JsonValue) -> JsonValue:
 
 
 def render_fresh(
-    path: str, plugin_name: str | None, state: bytes | None, performance: Performance
+    path: str,
+    plugin_name: str | None,
+    state: bytes | None,
+    performance: Performance,
+    settle_s: float = 0.0,
 ) -> np.ndarray | NotLoaded:
-    """Load a plugin, restore a state into it, and render a performance on that new instance.
+    """Load a plugin, restore a state into it, wait `settle_s` seconds for it to finish loading in
+    the background, and render a performance on that new instance.
 
     Returns what Pedalboard returns, unchecked. An exception raised while processing escapes.
     """
@@ -570,6 +576,8 @@ def render_fresh(
         return NotLoaded(str(error))
     if not plugin.is_instrument:
         return NotLoaded(f"{path} is not an instrument")
+    if settle_s > 0:
+        time.sleep(settle_s)
     # The plugin was loaded for this render and has processed nothing, so Pedalboard's reset (save
     # the state, recreate the plugin, restore the state) has nothing to clear. Its rebuild also
     # plays a note no event asked for, which a long amp release or an effect tail carries into the
@@ -595,7 +603,10 @@ def render_job(job: JsonValue) -> JsonValue:
         job, RENDER_KEYS, "audio_path", "render job"
     )
     path = cast("str", fields["path"])  # `_parse` checked it.
-    result = render_fresh(path, plugin_name, state, performance)
+    settle_s = fields["settle_s"]
+    if not is_number(settle_s) or settle_s < 0:
+        raise MalformedJobError("render job", job)
+    result = render_fresh(path, plugin_name, state, performance, float(settle_s))
     if isinstance(result, NotLoaded):
         return {"status": "load_failed", "detail": result.detail}
     write_raw_audio(audio_path, result)

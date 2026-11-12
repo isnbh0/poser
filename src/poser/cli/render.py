@@ -16,6 +16,7 @@ from poser.cli.common import (
     align_rows,
     fail,
     load_composition,
+    progress,
 )
 from poser.cli.workspace import WorkspaceError, fill_path_options, song_id
 from poser.core.jsonvalue import JsonValue
@@ -99,6 +100,7 @@ def main(argv: list[str] | None = None) -> int:
             effects=effects,
             timeout_s=RENDER_TIMEOUT_S,
             force=args.force,
+            notify=progress(PROG),
         )
     except SongError as error:
         fail(PROG, error)

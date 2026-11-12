@@ -151,6 +151,21 @@ def test_render_failure_exits_one_with_its_detail(
     assert lines[2] == "lead: it crashed"
 
 
+def test_render_prints_a_line_for_each_retry_of_a_late_start(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    instruments = '[instruments.synth]\nadapter = "{module}:instrument"\nlate_attempts = 1\n'
+    make_workspace(tmp_path, monkeypatch, instruments)
+    write_song(tmp_path / SONG, ("lead", "synth"))
+
+    assert render.main([SONG]) == EXIT_ALL_PASS
+
+    assert capsys.readouterr().err == (
+        "render-song: lead: sound began 0.50 s after its first note; rendering again "
+        "(attempt 2 of 3)\n"
+    )
+
+
 def test_song_outside_the_workspace_exits_2_before_its_script_runs(
     workspace: CommandWorkspace, tmp_path_factory: pytest.TempPathFactory
 ) -> None:

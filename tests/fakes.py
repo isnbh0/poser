@@ -19,6 +19,7 @@ from poser.core.cache import Stamp, StampProblem
 from poser.core.graph import BUFFER_SIZE, Graph, instantaneous_order
 from poser.core.jsonvalue import Json, JsonValue, json_object
 from poser.core.names import Identifier, NodeName, SongId, Suffix
+from poser.core.performance import NoteOff
 from poser.core.ports import (
     AudioFileError,
     Captured,
@@ -81,6 +82,11 @@ class FakeSound:
     sound_failure: SoundFailure | None = None
     render_failure: RenderFailure | None = None
     bad_output: BadOutput | None = None
+    # Attempts up to this one start silent, for less of the first note on each later attempt, as
+    # a plugin still loading: until the first note-off divided by the attempt number.
+    late_attempts: int = 0
+    # Every render is silent for this many frames from the start, as a sound that starts quietly.
+    quiet_frames: int = 0
 
 
 class SavedSounds:
@@ -175,6 +181,14 @@ class FakeInstrument:
         self._render_counts[name] = count + 1
         amplitude = sound.amplitude + count * sound.drift
         write_constant(request.audio_path, request.performance.samples, amplitude, sound.bad_output)
+        silent = sound.quiet_frames
+        if request.attempt <= sound.late_attempts:
+            first_off = next(e.sample for e in request.performance.events if isinstance(e, NoteOff))
+            silent = max(silent, first_off // request.attempt)
+        if silent:
+            samples = np.load(request.audio_path)
+            samples[:, :silent] = 0.0
+            write_raw_audio(request.audio_path, samples)
         return None
 
     def _name_problem(self, name: Identifier, *, replace: bool) -> str | None:

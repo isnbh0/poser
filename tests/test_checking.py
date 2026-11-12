@@ -7,7 +7,7 @@ from poser.core.checking import CheckResult, check_instrument
 from poser.core.checks import CHECK_NOTES, CheckStatus, check_pattern, check_status
 from poser.core.names import Identifier
 from poser.core.ports import RenderFailure, SoundFailure
-from poser.core.statuses import RenderFailureStatus, SoundFailureStatus
+from poser.core.statuses import CORE_RENDER_FAILURES, RenderFailureStatus, SoundFailureStatus
 
 NAME = Identifier("synth")
 
@@ -53,7 +53,7 @@ def test_nan_output_is_non_finite() -> None:
     assert result.detail == "audio contains NaN or infinity"
 
 
-@pytest.mark.parametrize("status", list(RenderFailureStatus))
+@pytest.mark.parametrize("status", sorted(set(RenderFailureStatus) - CORE_RENDER_FAILURES))
 def test_render_failure_gives_its_check_status(status: RenderFailureStatus) -> None:
     _, result = check(FakeSound(render_failure=RenderFailure(status, "the worker failed")))
 

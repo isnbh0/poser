@@ -11,6 +11,12 @@ A Pedalboard instrument plays a VST3 or Audio Unit plugin. A track names one of 
   `list-sounds` notes them.
 - Saved sounds are under `saved/`, such as `synth:saved/warm-pad`.
 
+Some presets load their samples in the background, and notes played before the samples arrive stay
+silent. When a track's sound begins late after its first note, poser renders it again, and this
+adapter waits 1 s, then 4 s, after restoring the sound before it plays. A `save-sound` preview
+renders once with no wait, so a preview of such a sound can start late while the saved sound is
+whole.
+
 Song BPM schedules authored notes and controllers only; plugins get no host tempo or transport,
 so a preset's tempo-synced LFOs, sequences, or delays may not follow it.
 

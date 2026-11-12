@@ -3,14 +3,19 @@ unchanged.
 
 The instrument or effect adapter writes raw audio to a temporary file the core owns. The core
 alone makes it `Audio`, decides whether it is `rendered` or `silent`, writes the stem, and stamps
-it, so no adapter can get a bad stem stamped. Nodes render in the graph's cycle-group order, its
-topological order while no group holds a cycle, so every upstream stem a node reads was written or
-found current in the same run. A feedback graph's cycle groups render one job per group, stepped
-through fixed blocks with previous-block feedback buffers that live in the job.
+it, so no adapter can get a bad stem stamped. A track whose sound begins late after its first note
+is rendered again, up to `RENDER_ATTEMPTS` times, because a plugin that loads its
+samples in the background can miss notes played before they arrive. If every attempt starts late
+by the same amount, the start is the sound's own and the track renders; if by different amounts,
+the track fails as `late_start`, leaving no stem or stamp. Nodes render in the graph's
+cycle-group order, its topological order while no group holds a cycle, so every upstream stem a
+node reads was written or found current in the same run. A feedback graph's cycle groups render
+one job per group, stepped through fixed blocks with previous-block feedback buffers that live in
+the job.
 """
 
 import tempfile
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
@@ -20,6 +25,7 @@ import numpy as np
 
 from poser.core.audio import (
     NUM_CHANNELS,
+    SAMPLE_RATE,
     SILENCE_DBFS,
     Audio,
     AudioProblem,
@@ -30,7 +36,7 @@ from poser.core.audio import (
 from poser.core.cache import Stamp, cycle_key, delay_identity, node_key, sound_key
 from poser.core.graph import Graph, Node, Wire
 from poser.core.names import Identifier, NodeName, SongId
-from poser.core.performance import perform
+from poser.core.performance import NoteOn, Performance, perform
 from poser.core.ports import (
     AudioFileError,
     AudioFiles,
@@ -56,6 +62,36 @@ from poser.core.statuses import RenderFailureStatus, RenderStatus, SoundFailureS
 EMPTY_EFFECTS: Mapping[Identifier, Effect] = cast(
     "Mapping[Identifier, Effect]", MappingProxyType({})
 )
+
+# How many times a track is rendered when its first note comes out silent.
+RENDER_ATTEMPTS = 3
+# How long after the first note-on sound may begin before the render counts as starting late, so
+# a plugin's output latency or a soft attack is not mistaken for a missed note.
+LATE_START_TOLERANCE_SAMPLES = SAMPLE_RATE // 10
+
+type Notify = Callable[[str], None]
+
+
+def ignore_progress(_: str) -> None:
+    """Drop a progress line."""
+
+
+def late_start_s(samples: np.ndarray, performance: Performance) -> float | None:
+    """Return how long after the first note-on the audio first rises above silence, in seconds,
+    when that is longer than LATE_START_TOLERANCE_SAMPLES; otherwise None.
+
+    None also covers a performance without notes and audio silent from the first note-on to the
+    end, which is the sound's own result. Audio already sounding at the first note-on counts as
+    on time, so a sound that never falls silent cannot be judged.
+    """
+    onset = next((e.sample for e in performance.events if isinstance(e, NoteOn)), None)
+    if onset is None:
+        return None
+    loud = np.abs(samples[:, onset:]).max(axis=0) > 10 ** (SILENCE_DBFS / 20)
+    if not loud.any():
+        return None
+    delay = int(np.argmax(loud))
+    return delay / SAMPLE_RATE if delay > LATE_START_TOLERANCE_SAMPLES else None
 
 
 @dataclass(frozen=True)
@@ -265,6 +301,7 @@ def render_song(
     effects: Mapping[Identifier, Effect] = EMPTY_EFFECTS,
     timeout_s: float,
     force: bool,
+    notify: Notify = ignore_progress,
 ) -> list[TrackResult]:
     """Render each node whose inputs changed since its stem was written, or every node if forced.
 
@@ -273,14 +310,17 @@ def render_song(
     topological order while no group holds a cycle, so a node reads stems its run just wrote or
     found current. A feedback graph's cycle group renders as one job, stepped through fixed
     blocks, with the whole job under the one timeout. A node whose upstream did not produce a
-    stem is not rendered, and a group none of whose external inputs are met fails whole. Raises
+    stem is not rendered, and a group none of whose external inputs are met fails whole. Each
+    rendering of a track again after a late start is reported to `notify` as one line. Raises
     SongError for a node naming an unknown effect recipe, SongBusyError when another run holds
     the song's lock, and ValueError when the store's stem suffix differs from the audio files' or
     a node's inputs do not sum to finite audio.
     """
     require_stem_format(renders, audio_files)
     with song_session(renders, song_id) as store:
-        return _render(song, store, instruments, audio_files, effects, timeout_s, force=force)
+        return _render(
+            song, store, instruments, audio_files, effects, timeout_s, force=force, notify=notify
+        )
 
 
 def _render(
@@ -292,6 +332,7 @@ def _render(
     timeout_s: float,
     *,
     force: bool,
+    notify: Notify,
 ) -> list[TrackResult]:
     """Render inside a caller-owned song session; never acquire a second lock."""
     graph = song_graph(song, [*effects])
@@ -316,6 +357,7 @@ def _render(
                 groups,
                 timeout_s=timeout_s,
                 force=force,
+                notify=notify,
             )
         else:
             results.update(
@@ -350,6 +392,7 @@ def _render_node(
     timeout_s: float,
     *,
     force: bool,
+    notify: Notify,
 ) -> TrackResult:
     name = NodeName(node.name)
     if (failed := _failed_upstream(graph, node, results)) is not None:
@@ -384,7 +427,7 @@ def _render_node(
     elif node.kind == "delay":
         rendered = _render_delay_node(song, graph, node, store, audio_files)
     else:
-        rendered = _render_track_node(song, node, cast("ResolvedNode", resolved), timeout_s)
+        rendered = _render_track_node(song, node, cast("ResolvedNode", resolved), timeout_s, notify)
     if isinstance(rendered, TrackResult):
         return rendered
     return _write_stem(name, key, identity, store, audio_files, rendered)
@@ -779,26 +822,62 @@ def _render_track_node(
     node: Node,
     resolved: ResolvedNode,
     timeout_s: float,
+    notify: Notify,
 ) -> Audio | TrackResult:
-    """Render a track node: the instrument plays the node's performance into raw audio."""
+    """Render a track node: the instrument plays the node's performance into raw audio.
+
+    A render whose sound begins late after its first note (`late_start_s`) is tried again, up to
+    RENDER_ATTEMPTS times, each attempt under its own timeout. A failed attempt is not retried. When
+    every attempt starts late by the same amount, the late start is the sound's own and the last
+    render is kept; otherwise the track fails as `late_start`.
+    """
     adapter, sound = resolved.adapter, resolved.resolved
     if not isinstance(adapter, Instrument) or not isinstance(sound, ResolvedSound):
         raise ValueError(f"a track node resolved to a {type(adapter).__name__}, not an instrument")
+    name = NodeName(node.name)
+    performance = perform(song, node)
     # Only a stem written in this run can be stamped.
     with tempfile.TemporaryDirectory() as directory:
-        performance = perform(song, node)
-        request = RenderRequest(sound, performance, Path(directory) / "audio.npy")
-        failure = adapter.render(request, timeout_s)
-        if isinstance(failure, RenderFailure):
-            return TrackResult(NodeName(node.name), failure.status, detail=failure.detail)
-        audio = read_raw_audio(request.audio_path, performance.samples)
-    if isinstance(audio, AudioProblem):
-        return TrackResult(
-            NodeName(node.name),
-            RenderFailureStatus.CRASHED,
-            detail=f"instrument wrote unusable audio: {audio.message}",
-        )
-    return audio
+        attempt = 1
+        lateness: list[float] = []
+        while True:
+            path = Path(directory) / f"audio-{attempt}.npy"
+            request = RenderRequest(sound, performance, path, attempt=attempt)
+            failure = adapter.render(request, timeout_s)
+            if isinstance(failure, RenderFailure):
+                return TrackResult(name, failure.status, detail=failure.detail)
+            audio = read_raw_audio(path, performance.samples)
+            if isinstance(audio, AudioProblem):
+                return TrackResult(
+                    name,
+                    RenderFailureStatus.CRASHED,
+                    detail=f"instrument wrote unusable audio: {audio.message}",
+                )
+            late_s = late_start_s(audio.samples, performance)
+            if late_s is None:
+                return audio
+            lateness.append(late_s)
+            if attempt == RENDER_ATTEMPTS:
+                # A loading race varies between renders; a start that never moves is the sound's.
+                if len(set(lateness)) == 1:
+                    notify(
+                        f"{name}: sound began {late_s:.2f} s after its first note in all "
+                        f"{RENDER_ATTEMPTS} renders; keeping it as the sound's own start"
+                    )
+                    return audio
+                return TrackResult(
+                    name,
+                    RenderFailureStatus.LATE_START,
+                    detail=(
+                        f"sound began late after its first note in all {RENDER_ATTEMPTS} renders, "
+                        f"not all by the same amount; in the last, {late_s:.2f} s after it"
+                    ),
+                )
+            attempt += 1
+            notify(
+                f"{name}: sound began {late_s:.2f} s after its first note; rendering again "
+                f"(attempt {attempt} of {RENDER_ATTEMPTS})"
+            )
 
 
 def _render_effect_node(

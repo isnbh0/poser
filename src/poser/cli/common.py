@@ -2,7 +2,7 @@
 
 import argparse
 import sys
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
 from poser.cli.workspace import Workspace
@@ -29,6 +29,15 @@ def align_rows(rows: Sequence[Sequence[str]]) -> list[str]:
 def fail(prog: str, error: object) -> None:
     """Print an error the way every command does: `{prog}: {error}` on stderr."""
     print(f"{prog}: {error}", file=sys.stderr)
+
+
+def progress(prog: str) -> Callable[[str], None]:
+    """Return a printer of progress lines, `{prog}: {line}` on stderr, flushed as they come."""
+
+    def emit(line: str) -> None:
+        print(f"{prog}: {line}", file=sys.stderr, flush=True)
+
+    return emit
 
 
 def load_composition(args: argparse.Namespace) -> Composition:

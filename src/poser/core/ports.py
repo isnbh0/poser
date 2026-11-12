@@ -22,7 +22,7 @@ from poser.core.piano_roll import PianoRoll
 from poser.core.report import Levels, Measurements
 from poser.core.song import Song, is_int, is_number
 from poser.core.sounds import SoundEntry, SoundRef
-from poser.core.statuses import RenderFailureStatus, SoundFailureStatus
+from poser.core.statuses import CORE_RENDER_FAILURES, RenderFailureStatus, SoundFailureStatus
 
 
 def _require(
@@ -230,22 +230,27 @@ class RenderRequest:
     sound: ResolvedSound  # From this instrument's own `resolve`.
     performance: Performance
     audio_path: Path  # Where to write the result with write_raw_audio.
+    attempt: int = 1  # Which render of this performance in one run, counting from 1.
 
     def __post_init__(self) -> None:
         _require("RenderRequest", "sound", self.sound, ResolvedSound)
         _require("RenderRequest", "performance", self.performance, Performance)
         _require("RenderRequest", "audio_path", self.audio_path, Path)
+        if isinstance(self.attempt, bool) or not isinstance(self.attempt, int) or self.attempt < 1:
+            raise ValueError(f"RenderRequest.attempt must be a positive int, got {self.attempt!r}")
 
 
 @dataclass(frozen=True)
 class RenderFailure:
-    """Why an instrument or an effect could not render."""
+    """Why an instrument or an effect could not render, in a status an adapter may report."""
 
     status: RenderFailureStatus
     detail: str
 
     def __post_init__(self) -> None:
         _require("RenderFailure", "status", self.status, RenderFailureStatus)
+        if self.status in CORE_RENDER_FAILURES:
+            raise ValueError(f"RenderFailure.status {self.status} is decided by the core alone")
         _text("RenderFailure", "detail", self.detail)
 
 
@@ -294,6 +299,10 @@ class Instrument(Protocol):
         finished. Never raises for plugin failures; anything it raises is a poser bug.
         LOAD_FAILED means a plugin or state that does not load, CRASHED a worker that died, and
         TIMED_OUT one past `timeout_s`.
+
+        The core renders a performance again when its first note comes out silent, with a higher
+        `request.attempt`. An instrument may take more care on a later attempt, such as waiting
+        longer for a plugin to finish loading before it plays.
         """
         ...
 

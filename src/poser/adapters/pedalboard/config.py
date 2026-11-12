@@ -11,6 +11,12 @@ from poser.core.names import Identifier
 from poser.core.ports import ConfigError
 
 INITIALIZATION_TIMEOUT_S = 30.0
+# How long a render waits, after restoring a sound and before playing, on each attempt the core
+# makes. A plugin can load a sound's samples in the background after its state is restored, and
+# notes played before they arrive stay silent. Pedalboard's own warm-up runs only when the plugin
+# loads, before the state, and the plugin offers no signal that loading finished. Serum 2's
+# `PN - Piano Upright` started late on most renders with no wait and on none after 0.5 s or more.
+LOAD_SETTLE_S = (0.0, 1.0, 4.0)
 # The source of the sounds `save-sound` keeps, in `<sounds dir>/<instrument>/`.
 SAVED_SOURCE = "saved"
 DEFAULT_FORMATS = ("fxp", "saved")

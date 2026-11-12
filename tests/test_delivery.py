@@ -410,6 +410,24 @@ def cli_workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> CommandWor
     return workspace
 
 
+def test_cli_prints_a_line_for_each_retry_of_a_late_start(
+    cli_workspace: CommandWorkspace, capsys: pytest.CaptureFixture[str]
+) -> None:
+    cli_workspace.write_config(
+        '[instruments.synth]\nadapter = "{module}:instrument"\nlate_attempts = 1\n'
+    )
+    song = write_song(cli_workspace.root / "song.yaml", ("lead", "synth"))
+
+    assert export.main([str(song), "--destination", "bundle", "--json"]) == 0
+
+    captured = capsys.readouterr()
+    assert json.loads(captured.out)["outcome"] == "published"
+    assert captured.err == (
+        "export-song: lead: sound began 0.50 s after its first note; rendering again "
+        "(attempt 2 of 3)\n"
+    )
+
+
 def test_cli_snapshot_configuration_not_a_later_read(
     cli_workspace: CommandWorkspace,
     monkeypatch: pytest.MonkeyPatch,

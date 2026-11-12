@@ -26,7 +26,7 @@ from poser.core.ports import (
     SongBusyError,
     SongFormat,
 )
-from poser.core.rendering import _render, require_stem_format
+from poser.core.rendering import Notify, _render, ignore_progress, require_stem_format
 from poser.core.report import Report, report_failed, report_to_data
 from poser.core.session import song_session
 from poser.core.song import SongError
@@ -437,8 +437,11 @@ def export_song(
     poser_version: str,
     timeout_s: float,
     force: bool,
+    notify: Notify = ignore_progress,
 ) -> DeliveryResult:
-    """Load once inside one session, render/analyze it, then stage and publish its evidence."""
+    """Load once inside one session, render/analyze it, then stage and publish its evidence.
+
+    Each rendering of a track again after a late start is reported to `notify` as one line."""
     try:
         if not any(inputs.song.path.suffix in fmt.suffixes for fmt in formats):
             return InvalidInput(f"unsupported song suffix: {inputs.song.path.suffix}")
@@ -448,7 +451,14 @@ def export_song(
                 return InputsChanged(f"inputs changed: {', '.join(map(str, changed))}")
             loaded = load_song(inputs.song.path, formats)
             results = _render(
-                loaded, store, instruments, audio_files, effects, timeout_s, force=force
+                loaded,
+                store,
+                instruments,
+                audio_files,
+                effects,
+                timeout_s,
+                force=force,
+                notify=notify,
             )
             if any(result.status is not StemStatus.RENDERED for result in results):
                 return RenderFailed(

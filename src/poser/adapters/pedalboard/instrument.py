@@ -21,6 +21,7 @@ from typing import cast
 from poser.adapters.isolation import WorkerCrashedError, WorkerTimedOutError, run_isolated
 from poser.adapters.loading import load_object
 from poser.adapters.pedalboard.config import (
+    LOAD_SETTLE_S,
     SAVED_SOURCE,
     EffectConfig,
     PedalboardConfig,
@@ -155,7 +156,8 @@ class PedalboardInstrument:
 
     @property
     def adapter_version(self) -> str:
-        return "2"
+        # 3: a late start is rendered again after a wait, so stems from 2 may hold missed notes.
+        return "3"
 
     @property
     def guide(self) -> str:
@@ -241,6 +243,7 @@ class PedalboardInstrument:
         job = self._job(payload_state(request.sound.payload))
         job["performance"] = performance_to_data(request.performance)
         job["audio_path"] = str(request.audio_path)
+        job["settle_s"] = LOAD_SETTLE_S[min(request.attempt, len(LOAD_SETTLE_S)) - 1]
         try:
             result = run_isolated(render_job, job, timeout_s)
         except WorkerTimedOutError as error:
