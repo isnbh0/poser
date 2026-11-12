@@ -10,17 +10,19 @@ To have an agent help, paste the one-line prompt from the
 
 ## Prerequisites
 
-You need macOS, [uv](https://docs.astral.sh/uv/), and Python 3.13 or later available to uv.
+You need macOS, Git, [uv](https://docs.astral.sh/uv/), and Python 3.13 or later available to uv.
 Install or locate Surge XT before initializing; the
 [Surge guide](../src/poser/reference_setups/surge/README.md) covers installation, searched
 locations, and custom paths.
 
 ## Create and verify
 
-Choose a parent directory for a new studio. From that directory, run:
+Choose a parent directory outside any existing project, because the studio is a project of its
+own; `--no-workspace` keeps `uv init` from registering it in an enclosing uv workspace. From that
+directory, run:
 
 ```bash
-uv init --bare --python 3.13 my-studio &&
+uv init --bare --no-workspace --python 3.13 my-studio &&
 cd my-studio &&
 uv add git+https://github.com/isnbh0/poser &&
 uv run init-workspace --setup surge &&
@@ -33,10 +35,10 @@ The chain stops at the first failure. After `cd` succeeds, your shell stays in t
 `uv init` or `cd` fails, you remain in the parent directory, so resolve that error before
 continuing.
 
-Use the Git dependency shown here, not the unrelated PyPI package named `poser`. If adapting
-these steps to an existing project, inspect its files and dependencies first. The studio's
-`uv.lock` pins the resolved poser commit; keep it with the project, because re-resolving the bare
-Git URL can select a later commit.
+Use the Git dependency shown here, not the unrelated PyPI package named `poser`. To add poser to
+an existing project instead, inspect its files and dependencies first, then start from `uv add`.
+The studio's `uv.lock` pins the resolved poser commit; keep it with the studio, and commit it if
+you use version control, because re-resolving the bare Git URL can select a later commit.
 
 The setup copies `poser.toml` and `songs/demo.yaml` into your studio. Edit `poser.toml` for your
 instruments and create new files for your songs; keep `songs/demo.yaml` as the smoke-test demo.
