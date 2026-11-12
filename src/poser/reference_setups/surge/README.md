@@ -9,7 +9,7 @@ prerequisites and choices.
 An existing installation works. To install, download the macOS Intel/ARM Universal release from
 the official [Surge XT downloads page](https://surge-synthesizer.github.io/downloads/) and run
 the packaged installer, selecting VST3 and factory patches as needed. The installer installs for
-all users; obtain appropriate permission before downloading or installing software. See the
+all users, which needs administrator approval. See the
 [Surge XT manual](https://surge-synthesizer.github.io/manual-xt/) for installation details.
 
 The initializer searches for the VST3 bundle in this order:
@@ -17,7 +17,7 @@ The initializer searches for the VST3 bundle in this order:
 1. `/Library/Audio/Plug-Ins/VST3/Surge XT.vst3`
 2. `~/Library/Audio/Plug-Ins/VST3/Surge XT.vst3`
 
-Factory patches are optional and searched independently, first at
+Factory patches are searched independently, first at
 `/Library/Application Support/Surge XT/patches_factory`, then at
 `~/Library/Application Support/Surge XT/patches_factory`.
 

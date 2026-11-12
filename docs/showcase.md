@@ -1,4 +1,4 @@
-# Optional Surge showcase
+# Surge showcase
 
 [Download the audio preview (MP3)](audio/surge-showcase.mp3) ·
 [Editable song source](../src/poser/reference_setups/surge/showcase.py)
@@ -22,5 +22,5 @@ uv run export-song songs/showcase.py --destination deliveries/showcase
 ```
 
 The destination must be new. The export contains the matching source, WAV, report, images, and
-manifest. Plugin and preset binaries are not distributed. Other Surge versions, and repeated
-renders, may sound slightly different from the preview.
+manifest. Neither this repository nor the export includes the Surge plugin or its patches.
+Renders can differ slightly from the preview between runs and between Surge versions.

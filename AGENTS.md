@@ -1,17 +1,18 @@
 # Developing poser
 
 poser renders songs written as code through instrument backends and measures the result. This
-guide is for changing poser itself; to set up a studio, follow `docs/bootstrap.md`. A studio's
-`AGENTS.md`, copied once from `src/poser/scaffold/agents.md`, holds its owner's preferences, and
-its `poser.toml` holds instrument notes. `update-guide` generates the studio's `POSER.md` from
-the core reference (`src/poser/scaffold/guide.md`), those instrument notes, and adapter
-reference, plus packaged advice when `[guidance] advice` is enabled.
+guide is for changing poser itself; to set up a studio, people follow `docs/setup.md` and agents
+follow `docs/bootstrap.md`. A studio's `AGENTS.md`, copied once from
+`src/poser/scaffold/agents.md`, holds its owner's preferences, and its `poser.toml` holds
+instrument notes. `update-guide` generates the studio's `POSER.md` from the core reference
+(`src/poser/scaffold/guide.md`), those instrument notes, and adapter reference, plus packaged
+advice when `[guidance] advice` is enabled.
 
 ## Layout
 
-- `src/poser/core/`: the models, the ports (`core/ports.py`), and the use cases (`loading`,
-  `rendering`, `checking`, `capturing`, `analysis`, and `delivery`). The core imports only the
-  standard library, numpy, and itself.
+- `src/poser/core/`: the models, the ports (`core/ports.py`), and the use cases, such as
+  `loading`, `rendering`, `checking`, `capturing`, `analysis`, `delivery`, and `piano_roll`. The
+  core imports only the standard library, numpy, and itself.
 - `src/poser/adapters/`: the adapters behind the ports, such as the Pedalboard instrument in
   `adapters/pedalboard/`, the file render store, and the analysis adapters.
 - `src/poser/compose.py`: the composition root. It reads `poser.toml` and builds the adapters it
@@ -48,8 +49,9 @@ reference, plus packaged advice when `[guidance] advice` is enabled.
 
 - `make check` runs format, lint, types, and the tests that need no plugins.
 - `make test-real` runs the `real_plugins` tests, which load the instruments in a root
-  `poser.toml`, and the `real_scsynth` tests, which find `scsynth` through `SCSYNTH_PATH`, the
-  SuperCollider app bundle, or `PATH`. To create the root `poser.toml`, copy
+  `poser.toml`, and the `real_scsynth` tests. The test harness finds `scsynth` through
+  `SCSYNTH_PATH`, the SuperCollider app bundle, or `PATH`; the adapter itself runs only its
+  configured absolute path. To create the root `poser.toml`, copy
   `src/poser/reference_setups/surge/poser.toml` and edit its paths.
 - `make check-instruments` checks that each instrument in the root `poser.toml` loads and sounds.
 - To try the commands, run `uv --project <this repo> run init-workspace --setup surge` in a

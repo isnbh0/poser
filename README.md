@@ -17,10 +17,9 @@ to have it help:
 Set up poser for me by following https://raw.githubusercontent.com/isnbh0/poser/main/docs/bootstrap.md
 ```
 
-Both use the free Surge XT reference setup on macOS and can continue to your first song. An agent
-asked to set up poser takes the [bootstrap prompt](docs/bootstrap.md) as its instructions.
+Both use the free Surge XT reference setup on macOS and can continue to your first song.
 
-Hear an example and get its source in the [optional showcase](docs/showcase.md).
+Hear an example and get its source in the [showcase](docs/showcase.md).
 
 ## Surge demo
 
@@ -94,10 +93,9 @@ a built-in name, an import path, or a table with `use` and options:
 | `sections` | `[]` |
 
 Edit `AGENTS.md` for studio preferences and each instrument's `guide` in `poser.toml` for
-instrument notes. `POSER.md` is generated from poser's core guide, instrument notes, and adapter
-guides. Run `uv run update-guide` after changing `poser.toml`, and `uv run update-guide --check`
-to see whether the reference is current. The command writes only `POSER.md`, and refuses to
-replace one it did not generate. `CLAUDE.md` points to `AGENTS.md`.
+instrument notes. The guide, `POSER.md`, is generated; run `uv run update-guide` after changing
+`poser.toml`. It refuses to replace a `POSER.md` it did not generate. `CLAUDE.md` points to
+`AGENTS.md`.
 
 `POSER.md` includes composition advice by default; to turn it off, see
 [composition advice](docs/setup.md#composition-advice).
@@ -110,8 +108,8 @@ replace one it did not generate. `CLAUDE.md` points to `AGENTS.md`.
   two renders are sample-identical.
 - `uv run list-sounds`: list every sound a song can name, with a description; filter with
   `--instrument` and `--match`, and add `--json` for JSON.
-- `uv run piano-roll <song> --output <path.png>`: draw authored notes without loading plugins or
-  rendering audio; `--replace` replaces an existing PNG. Load only trusted Python songs.
+- `uv run piano-roll <song> --output <path.png>`: draw authored notes without plugins or audio;
+  `--replace` replaces an existing PNG.
 - `uv run render-song <song>`: render one aligned stem per track, rendering again only tracks
   whose inputs changed.
 - `uv run analyze-song <song>`: mix the stems and write the report, spectrograms, and a numbered
@@ -119,9 +117,11 @@ replace one it did not generate. `CLAUDE.md` points to `AGENTS.md`.
 - `uv run export-song <song> --destination <new-directory>`: render, analyze, and publish a
   verified matching delivery; repeat `--include <source-relative-file>` for local dependencies.
 - `uv run save-sound <instrument> <name> --description <text>`: open an instrument's window and
-  save its state as a sound when the window closes. It waits for a person to close the window,
-  so agents can't use it.
+  save its state as a sound when a person closes the window, so agents can't use it.
 - `uv run update-guide`: write `POSER.md` from poser and `poser.toml`; `--check` only compares.
+
+Commands that load a Python song (`render-song`, `analyze-song`, `export-song`, `piano-roll`) run
+its code; load only trusted songs.
 
 Every command but `init-workspace` takes `--config`, and those that use saved sounds or results
 take `--sounds-dir` or `--output-dir`, to work outside a workspace or on another one. With
@@ -129,10 +129,8 @@ take `--sounds-dir` or `--output-dir`, to work outside a workspace or on another
 
 ## Verified delivery
 
-Use `uv run export-song <song> --destination <new-directory>` for a matching delivery.
 Export publishes editable `source/`, `audio/`, `images/`, `report.json`, and a hash manifest
-only on success. Use a new destination each time and declare local source dependencies with
-repeatable `--include <source-relative-file>`.
+only on success.
 
 Use render and analyze while iterating. Export verifies that the delivered files match one render
 and analysis, and records the bundle as not auditioned. See the
@@ -170,11 +168,8 @@ share. In a uv workspace, make the workspace a package (`[tool.uv] package = tru
 
 ## Developing poser
 
-`make check` runs format, lint, types, and the tests that need no plugins. `make test-real` loads
-real plugins; it reads a `poser.toml` at the repository root, so copy
-`src/poser/reference_setups/surge/poser.toml` there and edit its paths first.
-[AGENTS.md](AGENTS.md) describes the layout and rules. For controlled composition experiments, see
-[advice ablation](docs/ablation.md).
+[AGENTS.md](AGENTS.md) describes the layout, rules, and checks. For controlled composition
+experiments, see [advice ablation](docs/ablation.md).
 
 ## License
 

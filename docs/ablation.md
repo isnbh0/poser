@@ -1,6 +1,6 @@
 # Advice ablation
 
-This procedure is for trial operators; composing models do not read it. The persistent
+This procedure is for trial operators; keep it out of composing models' context. The persistent
 `[guidance] advice` boolean controls only whether generated `POSER.md` includes packaged optional
 advice. API contracts, owner intent, permissions, defect reporting, truthful-delivery
 requirements, rendering, cache identity, and analysis thresholds are identical in both modes.
@@ -15,8 +15,8 @@ requirements, rendering, cache identity, and analysis thresholds are identical i
 2. Inventory the complete normal reading path: `AGENTS.md`, `CLAUDE.md`, `POSER.md`, `poser.toml`,
    the syntax demo, and everything those files require reading. Inspect configuration comments,
    instrument notes, owner instructions, and adapter guides for optional coaching. Advice-off
-   generated context must contain none. An operator can complete setup so the advice-off model
-   never reads guided onboarding, this procedure, or the showcase.
+   generated context must contain none. Complete setup yourself so the advice-off model never
+   reads guided onboarding, this procedure, or the showcase.
 3. For an existing advice-bearing studio, make clean trial copies before starting either model.
    Never edit the original owner files. Preserve operational settings and owner intent, removing
    only identified optional coaching identically from both copies. `update-guide` leaves owner
@@ -38,16 +38,15 @@ For each trial record:
   owner intent.
 - Poser revision, mode, configuration and generated-guide raw SHA-256 digests.
 - Actual context file inventory and digests, including required transitive reading and any
-  browsing.
-- Audited adapter, package, and guide identities and versions. Third-party adapter `guide` text
-  appears in both modes and may contain coaching; audit it or record it as unaudited exposure.
+  browsing. Advice-off still installs `advice.md` in the package, so record whether the model
+  could reach it.
+- Audited adapter, package, and guide identities and versions. Every adapter's `guide` text,
+  poser's own included, appears in both modes and may contain coaching; audit it or record it as
+  unaudited exposure.
 - Tool availability, permissions, budget, stop condition, and plugin and preset provenance and
   versions.
 - Editable outputs, declared dependencies, commands, diagnostics, successful exported bundles, and
   failed trial artifacts. Record listening status separately.
-
-Advice-off leaves `advice.md` in the installed package. If the model could browse the repository
-or received owner-provided coaching, label that exposure explicitly.
 
 ## Compare outcomes
 

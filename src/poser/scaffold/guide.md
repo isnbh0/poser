@@ -8,8 +8,8 @@ poser renders songs through configured instruments and measures the result.
 - Preserve owner work.
 - If composition was requested, continue after successful setup without asking again; ask only
   for missing consequential intent or permissions.
-- Playback requires permission. Report a song as "not auditioned" unless someone actually
-  listened; starting a player is not listening.
+- Playback requires permission. Report a song as "not auditioned" unless someone listened;
+  starting a player is not listening.
 - A passing analysis means no defects were found.
 - Never deliver an earlier mix as current after a failed attempt.
 
@@ -17,13 +17,13 @@ poser renders songs through configured instruments and measures the result.
 
 Defaults are Python (`.py`, with `build()` returning a `Song`) and YAML (`.yaml` or `.yml`).
 `adapters.song_formats` can enable either, both, or other formats; consult `poser.toml` and the
-adapters. If present and YAML is enabled, `songs/demo.yaml` shows that form. Both use the same
-song checks. Times are beats from 0; pitches are MIDI numbers, middle C is 60. A song's last note
-end or controller change must fall within 3600 seconds.
+adapters. If present and YAML is enabled, `songs/demo.yaml` shows that form. Every song format
+uses the same keys and checks. Times are beats from 0; pitches are MIDI numbers, middle C is 60.
+A song's last note end or controller change must fall within 3600 seconds.
 
-When the script format is enabled, song scripts import `poser` directly, without a PEP 723
-header, in this project's environment. Loading a Python song runs its `build()` code, so load
-only trusted scripts. This short song shows the form:
+When the script format is enabled, write song scripts that import `poser` directly and run in
+this project's environment; omit any PEP 723 header. Loading a Python song runs its `build()`
+code, so load only trusted scripts. This short song shows the form:
 
 ```python
 from poser import Song, Track, notes
@@ -70,22 +70,19 @@ Music helpers, from `poser`; their docstrings give the parameters:
 ## Sounds
 
 A `sound` is `<instrument>` (its default) or `<instrument>:<name>`, as `uv run list-sounds` prints.
-Each instrument has its own names. See "Instruments here" for this workspace.
-`uv run list-sounds --json` returns machine-readable listings. Repeat `--instrument <name>`
-for exact configured instrument names; `--match <substring>` filters IDs and descriptions
-case-insensitively, preserving listing order.
-`list-sounds` exits 0 for success (including empty matches), 1 for selected-source problems even
-when entries are filtered out, and 2 for unreadable config or unknown instruments.
+See "Instruments here" for this workspace. `uv run list-sounds --json` returns machine-readable
+listings. Repeat `--instrument <name>` for exact configured instrument names; `--match
+<substring>` filters IDs and descriptions case-insensitively.
 
 ## Rendering
 
 Core audio is stereo (2 channels) at 48000 Hz. Rendering adds a fixed 2 seconds after the last
 note end or controller change, so longer releases may be cut off.
 
-`uv run render-song <song>` writes and prints a stem path per node, caching by inputs. Only
-changed nodes render; gain-only edits render nothing. `--force` re-renders all nodes; `--json`
-prints a machine-readable report. Inputs include tempo and total length, so lengthening the song
-re-renders every node. Changing a track re-renders its chain.
+`uv run render-song <song>` writes and prints a stem path per node, caching by inputs, so only
+changed nodes render. Inputs include tempo and total length, so lengthening the song re-renders
+every node; changing a track re-renders its chain; gain-only edits render nothing. `--force`
+re-renders all nodes, and `--json` prints a machine-readable report.
 
 Exit codes, for both `render-song` and `analyze-song`:
 - 0: everything passed.
@@ -122,28 +119,25 @@ The bands are `sub` 20–60 Hz, `bass` 60–250 Hz, `low_mid` 250–500 Hz, `mid
 `high_mid` 2000–6000 Hz, and `high` 6000–20000 Hz.
 
 Track statuses from `render-song`: `rendered`, `silent`, `unknown_sound`, `load_failed`,
-`crashed`, `timed_out`, and `upstream_failed`, which means a node's upstream did not render, so
-neither does this one. Node statuses from
-`analyze-song`: `analyzed`, `missing_stem`, and `stale_stem`, which means the stem no longer
-matches the song or its sound; `detail` says why.
+`crashed`, `timed_out`, and `upstream_failed`, which means the node was skipped because an
+upstream node did not render. Node statuses from `analyze-song`: `analyzed`, `missing_stem`, and
+`stale_stem`, which means the stem no longer matches the song or its sound; `detail` says why.
 
 Defects fail the analysis: `silent`, for a node or the mix; `clipping`, for mix samples beyond
 full scale; and `headroom`, for a mix peak above -1 dBFS. A section's defects and errors also
 fail the analysis.
 
-`run` and `song_sha256` tell versions apart; `node_key` and `sound_key` show which nodes changed.
-
 ## Verified delivery
 
-To deliver a song, run `uv run export-song <song> --destination <new-directory>`. Export loads
-once, renders, analyzes, and publishes matching source, audio, report, images, and a hash
-manifest only on success. The destination must be unused and outside mutable
-stores. Repeat `--include <source-relative-file>` for declared local source dependencies.
-Export accepts `--config`, `--sounds-dir`, `--output-dir`, `--force`, and `--json`.
-Exit codes are 0 for publication; 1 when rendering, analysis, or I/O fails or inputs change
-during export; 2 for invalid arguments or configuration; and 3 when another run holds the song's
-lock. The manifest records
-`listening: "not_auditioned"`; report any actual audition separately. See the
+To deliver a song, run `uv run export-song <song> --destination <new-directory>`. Export
+renders, analyzes, and publishes matching source, audio, report, images, and a hash manifest only
+on success. Choose a destination that does not exist yet, neither lies inside nor contains the
+render store (`renders/` by default) or `.poser-init`, and contains neither `POSER.md` nor the
+song's inputs (the song, its includes, `poser.toml`, and `uv.lock`). Repeat `--include
+<source-relative-file>` for declared local source dependencies; `uv run export-song --help` lists
+the other options. Exit code 0 means published; 3 means another run holds the song's lock, so wait
+and rerun; any other code means nothing was published, and the message says why. The manifest
+records `listening: "not_auditioned"`; report any actual audition separately. See the
 [export contract](https://github.com/isnbh0/poser/blob/main/docs/setup.md#export-contract)
 for manifest details, portability, and reproducibility limits.
 
@@ -189,24 +183,23 @@ enters the mix at -6 dB. The dry branch receives the unscaled lead and enters at
 
 ## Feedback
 
-Opt into loops with `build()` returning `Graph(mode="feedback")`. Removing wires leaving `delay`
-nodes must make the graph acyclic. Each loop's `delay_samples` must be at least one render block
-(512 samples); smaller in-loop delays are refused, while off-loop delays allow any length.
-Rendering uses previous-block feedback; timing is the declared delay, without latency compensation.
+Opt into loops with `build()` returning `Graph(mode="feedback")`. Every loop must pass through a
+`delay` node: removing the wires leaving `delay` nodes must make the graph acyclic. A delay inside
+a loop needs `delay_samples` of at least one render block (512 samples); delays outside loops may
+be any length. Rendering uses previous-block feedback; timing is the declared delay, without
+latency compensation.
 
 ## Piano roll
 
 `uv run piano-roll <song> --output artifacts/piano-roll.png` writes a static PNG of authored
 notes, without loading plugins or rendering audio. Each source track has a panel in source order,
-with beats horizontally and MIDI pitch vertically. Rectangle widths show authored durations; opacity
-is `0.25 + 0.75 * velocity / 127`. Tempo and track names are shown, and empty graphs show
-`No authored notes`. Any configured song format works, including direct graphs.
+with beats horizontally and MIDI pitch vertically. Rectangle widths show authored durations, and
+opacity rises with velocity. Tempo and track names are shown. Any configured song format works,
+including direct graphs.
 `--config path/to/poser.toml` selects a workspace explicitly; the song may be outside it.
 
 Choose a `.png` output path; missing parents are created. Existing destinations are refused
-unless `--replace` is supplied. Input aliases, symlinks, and nonregular files are refused.
-Success prints the destination and returns 0; configuration, song, drawing, and I/O errors
-before the image is written return 2.
+unless `--replace` is supplied. Success prints the destination and returns 0; errors return 2.
 
 ## Commands
 
@@ -214,12 +207,11 @@ before the image is written return 2.
 - `uv run piano-roll`: create an authored-note PNG with required `--output`, as above.
 - `uv run list-sounds`: every sound a song can name, with a description.
 - `uv run check-instruments`: checks that each instrument loads and plays notes. Its
-  repeatability result (exact sample-value equality, no tolerance) and clipping result are
-  informational and never fail the check.
+  repeatability and clipping results are informational.
 - `uv run update-guide`: rewrite `POSER.md` after `poser.toml` changes; `--check` compares it.
-- `uv run save-sound`: for owners, not agents; only for instruments supporting capture.
+- `uv run save-sound`: do not run it. It opens an instrument's window and waits for a person to
+  close it, so it is for owners only, and only on instruments that support capture.
 
-`POSER.md` is generated from poser's guide, adapter guides, instrument `guide` notes in
-`poser.toml`, and packaged advice when enabled. Put studio preferences in `AGENTS.md` and
-instrument instructions in those notes. `[guidance] advice = false` in `poser.toml` excludes the
-packaged creative and workflow advice after `uv run update-guide`; a missing setting means true.
+Put studio preferences in `AGENTS.md` and instrument instructions in each instrument's `guide`
+in `poser.toml`. `[guidance] advice = false` in `poser.toml` drops the packaged advice at the next
+`uv run update-guide`; the default is true.

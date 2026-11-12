@@ -31,8 +31,7 @@ uv run render-song songs/demo.yaml &&
 uv run analyze-song songs/demo.yaml
 ```
 
-The chain stops at the first failure. After `cd` succeeds, your shell stays in the studio; if
-`uv init` or `cd` fails, you remain in the parent directory, so resolve that error before
+If `uv init` or `cd` fails, you remain in the parent directory; resolve that error before
 continuing.
 
 Use the Git dependency shown here, not the unrelated PyPI package named `poser`. To add poser to
@@ -44,18 +43,16 @@ The setup copies `poser.toml` and `songs/demo.yaml` into your studio. Edit `pose
 instruments and create new files for your songs; keep `songs/demo.yaml` as the smoke-test demo.
 Put studio-specific agent instructions in `AGENTS.md`; `CLAUDE.md` points to them. `POSER.md` is
 generated from poser, the current configuration, and its adapters. After changing `poser.toml` or
-other guide inputs, run `uv run update-guide` from the studio, and `uv run update-guide --check`
-to check whether the guide is current. `update-guide` rewrites only `POSER.md`.
+upgrading poser, run `uv run update-guide` from the studio, and `uv run update-guide --check` to
+check whether the guide is current.
 
-`check-instruments` checks that each instrument loads and plays notes. Exit 0 means all
-instruments pass, 1 means an instrument failed, and 2 means a configuration or workspace error.
-`repeatable` says whether two renders were sample-identical. A `pass` with `REPEATABLE no` (JSON
-`repeatable: false`) is still a pass and needs no repair. Clipping is reported but does not fail
-the check.
+`check-instruments` checks that each instrument loads and plays notes. `repeatable` says whether
+two renders were sample-identical. A `pass` with `REPEATABLE no` (JSON `repeatable: false`) is
+still a pass and needs no repair. Clipping is reported but does not fail the check.
 
 The demo mix is `renders/songs/demo.yaml/latest/mix.wav`; its report and spectrograms are in
-the same `latest/` directory. Analysis reports technical defects; listening to the mix is the
-only check of how it sounds.
+the same `latest/` directory. Analysis finds technical defects; listen to the mix to judge how it
+sounds.
 
 ## Composition advice
 
@@ -74,12 +71,9 @@ it.
 ## Compose your first song (optional)
 
 Read the studio's `AGENTS.md` and generated `POSER.md`, and run `uv run list-sounds` to see every
-sound a song can name. To narrow a large listing, repeat `--instrument <exact-name>` to scan only
-those instruments, and add `--match <substring>` to filter IDs and descriptions
-case-insensitively in listing order, for example
-`uv run list-sounds --instrument surge --match pad --json`. `list-sounds` exits 2 for an unknown
-instrument and 1 when a selected source has a problem, even if no entries match; an empty match
-exits 0.
+sound a song can name. To narrow a large listing, repeat `--instrument <exact-name>` and add
+`--match <substring>` to filter IDs and descriptions, for example
+`uv run list-sounds --instrument surge --match pad --json`.
 
 Create a new song file in YAML or Python, and replace `<song-path>` below with its path. Run from
 the studio:
@@ -101,9 +95,9 @@ uv run export-song <song-path> --destination deliveries/first-song
 ```
 
 Use a new destination each time, and add `--include <source-relative-file>`, once per file, for
-each local Python file the song depends on. For Surge the mix is WAV; other adapters may use
-another format. If export fails, fix the reported problem and rerun export; don't hand over an
-earlier mix.
+each local Python file the song depends on. The mix is WAV unless `[adapters] audio_files`
+selects another format. If export fails, fix the reported problem and rerun export; don't hand
+over an earlier mix.
 
 See the [export contract](#export-contract) for exit codes, manifest fields, and portability limits.
 
@@ -112,14 +106,15 @@ See the [export contract](#export-contract) for exit codes, manifest fields, and
 If initialization reports a missing plugin or invalid path, locate or install Surge, or specify
 its existing location as described in the
 [Surge guide](../src/poser/reference_setups/surge/README.md), and retry
-`uv run init-workspace --setup surge` with any needed overrides. Failed prerequisite checks create
-no studio template files, but the Python project and dependency created earlier remain. After an
-interrupted initialization, retry the same command, and keep `.poser-init`, which the initializer
-uses for recovery. The initializer refuses to overwrite files it owns and merges its required
-entries into an existing `.gitignore`; if it refuses, follow the diagnostic, which names the
-conflicting path.
+`uv run init-workspace --setup surge` with any needed overrides. Retry only `init-workspace`: a
+failed prerequisite check writes no studio files and leaves the Python project and poser
+dependency in place. After an interrupted initialization, retry the same command, and keep
+`.poser-init`, which the initializer uses for recovery. The initializer refuses to run if
+`AGENTS.md`, `POSER.md`, `CLAUDE.md`, `poser.toml`, or `songs/demo.yaml` already exists, and
+merges its required entries into an existing `.gitignore`; if it refuses, follow the diagnostic,
+which names the conflicting path.
 
-If initialization succeeds but `check-instruments` fails, keep the studio and read the diagnostic.
+If initialization succeeds but `check-instruments` fails, read the diagnostic.
 Failures include load errors, crashes, timeouts, non-finite output, silence, and missing notes.
 Correct the installation or `poser.toml`, run `uv run update-guide` if its inputs changed, and
 rerun `uv run check-instruments` before rendering and analyzing. Never reinitialize or delete files
@@ -127,9 +122,8 @@ to repair a studio that initialized successfully.
 
 ## Export contract
 
-`export-song` loads the song once and holds one lock across render, analysis, and publication. It
-takes the same configuration, sounds, and output path options as `render-song` and
-`analyze-song`.
+`export-song` holds one lock across render, analysis, and publication. It takes the same
+configuration, sounds, and output path options as `render-song` and `analyze-song`.
 
 ### Guarantees
 
@@ -159,17 +153,21 @@ takes the same configuration, sounds, and output path options as `render-song` a
   invocation directory, even when the configuration lives elsewhere; otherwise it is the
   discovered or configured workspace.
 - The destination and explicit path options resolve from the invocation directory.
-- Unsafe includes, source escapes, and overlap with inputs or with roots the render store mutates
-  are refused. A render store can export only if its `protected_roots()` declares its roots.
+- Unsafe includes and source escapes are refused.
+- The destination is refused if it already exists, has a parent that is not a directory,
+  overlaps a root the render store protects, overlaps the `.poser-init` namespace of the source
+  or configuration root, contains a captured input, or overlaps `POSER.md`. A render store can
+  export only if its `protected_roots()` declares its roots.
 
 ### Not covered
 
 - The configuration and plugin and preset binaries are not bundled; the recipient supplies them.
 - The manifest records configuration and `uv.lock` digests (or their absence), labeled by role
-  for the source and configuration roots. They record what was present and do not verify the
-  Python environment that ran export.
+  for the source and configuration roots. They are a record, not a verification of the Python
+  environment that ran export.
 - Section payloads are copied as opaque JSON with their embedded paths unchanged; when a bundle
   has them, the manifest declares `section_payload_portability: "opaque_not_verified"`.
 - Export does not sandbox Python or detect undeclared imports or other external inputs; declare
   local source dependencies with `--include`.
-- To deliver an earlier result, run export again.
+- Export renders the current source and never republishes an earlier render. To deliver an
+  earlier version, restore its source and export again.
