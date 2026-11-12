@@ -1,11 +1,11 @@
 # Developing poser
 
 poser renders songs written as code through instrument backends and measures the result. This
-guide is for changing poser itself. A studio's `AGENTS.md`, copied once from
-`src/poser/scaffold/agents.md`, holds its owner's preferences, and its `poser.toml` holds
-instrument notes. `update-guide` generates the studio's `POSER.md` from the core reference
-(`src/poser/scaffold/guide.md`), those instrument notes, and adapter reference, plus packaged
-advice when `[guidance] advice` is enabled.
+guide is for changing poser itself; to set up a studio, follow `docs/bootstrap.md`. A studio's
+`AGENTS.md`, copied once from `src/poser/scaffold/agents.md`, holds its owner's preferences, and
+its `poser.toml` holds instrument notes. `update-guide` generates the studio's `POSER.md` from
+the core reference (`src/poser/scaffold/guide.md`), those instrument notes, and adapter
+reference, plus packaged advice when `[guidance] advice` is enabled.
 
 ## Layout
 
