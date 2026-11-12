@@ -50,7 +50,7 @@ The report that drives the next revision, abridged, with illustrative metric val
   "mix": {
     "peak_dbfs": -10.05617342416529,
     "integrated_lufs": -19.345337407632602,
-    "spectrogram": "renders/songs/demo.yaml/latest/images/[mix].png",
+    "spectrogram": "/path/to/my-studio/renders/songs/demo.yaml/latest/images/[mix].png",
     "defects": []
   }
 }

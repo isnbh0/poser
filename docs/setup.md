@@ -108,8 +108,9 @@ its existing location as described in the
 [Surge guide](../src/poser/reference_setups/surge/README.md), and retry
 `uv run init-workspace --setup surge` with any needed overrides. Retry only `init-workspace`: a
 failed prerequisite check writes no studio files and leaves the Python project and poser
-dependency in place. After an interrupted initialization, retry the same command, and keep
-`.poser-init`, which the initializer uses for recovery. The initializer refuses to run if
+dependency in place. After an interrupted initialization, retry the same command. Keep
+`.poser-init`, which the initializer uses for recovery; it remains after every initialization and
+is gitignored. The initializer refuses to run if
 `AGENTS.md`, `POSER.md`, `CLAUDE.md`, `poser.toml`, or `songs/demo.yaml` already exists, and
 merges its required entries into an existing `.gitignore`; if it refuses, follow the diagnostic,
 which names the conflicting path.
