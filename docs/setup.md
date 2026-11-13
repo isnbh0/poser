@@ -42,9 +42,9 @@ you use version control, because re-resolving the bare Git URL can select a late
 The setup copies `poser.toml` and `songs/demo.yaml` into your studio. Edit `poser.toml` for your
 instruments and create new files for your songs; keep `songs/demo.yaml` as the smoke-test demo.
 Put studio-specific agent instructions in `AGENTS.md`; `CLAUDE.md` points to them. `POSER.md` is
-generated from poser, the current configuration, and its adapters. After changing `poser.toml` or
-upgrading poser, run `uv run update-guide` from the studio, and `uv run update-guide --check` to
-check whether the guide is current.
+generated from poser, the current configuration, and its adapters. After changing `poser.toml`,
+run `uv run update-guide` from the studio, and `uv run update-guide --check` to check whether the
+guide is current. To upgrade poser, follow [upgrading](upgrading.md).
 
 `check-instruments` checks that each instrument loads and plays notes. `repeatable` says whether
 two renders were sample-identical. A `pass` with `REPEATABLE no` (JSON `repeatable: false`) is

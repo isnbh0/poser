@@ -249,6 +249,7 @@ is poser's current recommendation and may gain frameworks as poser evolves; a li
 - `uv run check-instruments`: checks that each instrument loads and plays notes. Its
   repeatability and clipping results are informational.
 - `uv run update-guide`: rewrite `POSER.md` after `poser.toml` changes; `--check` compares it.
+  To upgrade poser, follow https://github.com/isnbh0/poser/blob/main/docs/upgrading.md.
 - `uv run save-sound`: do not run it. It opens an instrument's window and waits for a person to
   close it, so it is for owners only, and only on instruments that support capture.
 
