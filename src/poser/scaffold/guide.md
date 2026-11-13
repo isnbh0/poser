@@ -212,10 +212,35 @@ including direct graphs.
 Choose a `.png` output path; missing parents are created. Existing destinations are refused
 unless `--replace` is supplied. Success prints the destination and returns 0; errors return 2.
 
+## Framework readings
+
+Frameworks are lenses over the score, the authored notes: each reads the song in spans of beats
+covering it from 0 to its last beat, and gives every span one of three outcomes:
+- known: one reading, such as one key.
+- ambiguous: two or more candidates, most likely first.
+- unknowable: a reason the framework cannot tell. It is a result about the music, not a pass.
+
+Tracks marked `pitched: false` are never read. "Frameworks here" lists this workspace's
+frameworks, and each framework's own section says what it reads.
+
+`uv run read-song <song>` prints each framework's reading, without loading plugins or touching
+renders. Repeat `--track <name>` to read only those pitched tracks (the default is every pitched
+track), and `--framework <name>` to use only those configured frameworks (the default is all);
+`--json` prints the readings as JSON and `--config` selects a workspace explicitly. Exit codes:
+0 when every framework returned a reading, whatever its outcomes; 1 when a framework failed,
+printed as `<name>: error: <detail>`; 2 when the song or `poser.toml` cannot be read, or a
+`--track` or `--framework` name is unknown or the track is unpitched.
+
+`[adapters] frameworks` in `poser.toml` takes a preset name or a list of frameworks. The
+`western` preset, Western tonal harmony, is the default; `neutral` turns readings off. A preset
+is poser's current recommendation and may gain frameworks as poser evolves; a list, such as
+`frameworks = ["tonal"]`, pins them.
+
 ## Commands
 
 - `uv run render-song` and `uv run analyze-song`: render and analyze a song, as above.
 - `uv run piano-roll`: create an authored-note PNG with required `--output`, as above.
+- `uv run read-song`: read a song's score through the configured frameworks, as above.
 - `uv run list-sounds`: every sound a song can name, with a description.
 - `uv run check-instruments`: checks that each instrument loads and plays notes. Its
   repeatability and clipping results are informational.

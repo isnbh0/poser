@@ -19,6 +19,7 @@ from poser.core.jsonvalue import Json
 from poser.core.names import Identifier, NodeName, SongId, Suffix
 from poser.core.performance import Performance, PitchSupport
 from poser.core.piano_roll import PianoRoll
+from poser.core.reading import Reading, ReadingValue, ScoreRequest
 from poser.core.report import Levels, Measurements
 from poser.core.song import Song, is_int, is_number
 from poser.core.sounds import SoundEntry, SoundRef
@@ -693,6 +694,34 @@ class ReportSection(Protocol):
 
     def mix(self, request: SectionInput) -> SectionResult:
         """Analyze the mix."""
+        ...
+
+
+# Framework readings
+
+
+@runtime_checkable
+class Framework(Protocol):
+    """A lens over a song's score: reads every span of the song as known, ambiguous, or
+    unknowable."""
+
+    @property
+    def name(self) -> Identifier:
+        """The key under `frameworks` in a reading."""
+        ...
+
+    @property
+    def guide(self) -> str:
+        """A `## ` block for POSER.md describing the reading; reads only package data."""
+        ...
+
+    def read(self, request: ScoreRequest) -> Reading[ReadingValue]:
+        """Return a Reading whose `end` equals `request.end`, for every request, including one
+        that selects no tracks.
+
+        Decides from the request alone, writes nothing, and starts nothing. "I cannot tell" is an
+        Unknowable span, never an exception.
+        """
         ...
 
 

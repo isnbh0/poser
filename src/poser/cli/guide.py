@@ -36,6 +36,7 @@ def workspace_guide(composition: Composition) -> str:
         composition.instrument_notes(),
         (GuideBlock(advice, advice=True), *composition.guide_blocks()),
         advice=composition.config.guidance.advice,
+        frameworks=composition.framework_listing(),
     )
 
 

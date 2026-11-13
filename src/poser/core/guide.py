@@ -10,6 +10,7 @@ GENERATED = (
     "Edit AGENTS.md for studio instructions. -->"
 )
 INSTRUMENTS_HEADING = "## Instruments here"
+FRAMEWORKS_HEADING = "## Frameworks here"
 FIRST_INSTRUMENT_PLACEHOLDER = '"{first_instrument}"'
 
 
@@ -34,6 +35,34 @@ class InstrumentNote:
     guide: str | None
 
 
+@dataclass(frozen=True)
+class FrameworkListing:
+    preset: str | None  # The preset poser.toml names, or None for an explicit list.
+    names: tuple[Identifier, ...]  # The configured frameworks, in order.
+    default: bool = False  # Whether the preset is poser's default preset.
+
+
+def _framework_block(listing: FrameworkListing) -> str:
+    names = ", ".join(f"`{name}`" for name in listing.names)
+    if listing.preset is None:
+        text = (
+            f"Frameworks: {names} (listed in poser.toml)."
+            if names
+            else "No frameworks are listed in poser.toml; `read-song` reads nothing."
+        )
+    elif not listing.names:
+        text = (
+            f"Preset: `{listing.preset}`. No frameworks are configured; `read-song` reads nothing."
+        )
+    else:
+        default = " (the default)" if listing.default else ""
+        text = (
+            f"Preset: `{listing.preset}`{default}, poser's current recommendation. "
+            f"Frameworks: {names}. To pin them, list them in `[adapters] frameworks`."
+        )
+    return f"{FRAMEWORKS_HEADING}\n\n{text}"
+
+
 def _instrument_item(note: InstrumentNote) -> str:
     item = f"- `{note.name}` ({note.adapter})"
     if note.guide is None or not note.guide.strip():
@@ -50,8 +79,10 @@ def compose_guide(
     parts: Sequence[str | GuideBlock],
     *,
     advice: bool = True,
+    frameworks: FrameworkListing | None = None,
 ) -> str:
-    """Return the workspace guide: GENERATED, the core guide, the instruments, then each part.
+    """Return the workspace guide: GENERATED, the core guide, the instruments, the frameworks
+    when given, then each part.
 
     Blocks are separated by single blank lines, and the guide ends in one newline. The core
     guide's `"{first_instrument}"` placeholder becomes the first instrument's name, in quotes;
@@ -69,6 +100,8 @@ def compose_guide(
         if not isinstance(part, GuideBlock) or not part.advice or advice
     ]
     blocks = [f"{GENERATED}\nAdvice: {'on' if advice else 'off'}", core.strip(), listing]
+    if frameworks is not None:
+        blocks.append(_framework_block(frameworks))
     seen: set[str] = set()
     for part in selected:
         text = part.strip()

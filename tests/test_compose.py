@@ -20,9 +20,11 @@ from poser.adapters.mixing import GainMixer
 from poser.adapters.pedalboard.instrument import PedalboardInstrument
 from poser.adapters.song_formats import ScriptSongFormat, YamlSongFormat
 from poser.adapters.spectrogram import SpectrogramVisualizer
+from poser.adapters.tonal import GUIDE as TONAL_GUIDE
+from poser.adapters.tonal import TonalFramework
 from poser.adapters.wav import WavAudioFiles
 from poser.cli.common import load_composition
-from poser.compose import AdapterSpec, Composition, load, parse_config, read_config
+from poser.compose import PRESETS, AdapterSpec, Composition, load, parse_config, read_config
 from poser.core.names import Identifier
 from poser.core.ports import AdapterContext, ConfigError
 
@@ -269,6 +271,7 @@ def test_a_config_without_adapters_builds_the_built_in_adapters(tmp_path: Path) 
     assert isinstance(composition.measurer(), StandardMeasurer)
     assert isinstance(composition.visualizer(), SpectrogramVisualizer)
     assert composition.sections() == ()
+    assert [type(framework) for framework in composition.frameworks()] == [TonalFramework]
     assert isinstance(composition.instruments()[Identifier("serum")], PedalboardInstrument)
 
 
@@ -765,6 +768,7 @@ def test_guide_parts_hold_each_guide_once_in_order(
         composition.render_store().guide,  # ty: ignore[unresolved-attribute]
         composition.visualizer().guide,  # ty: ignore[unresolved-attribute]
         "## probe\n\nA fake section.\n",
+        TONAL_GUIDE,
     )
     for item in composition.config.instruments:
         assert "guide" not in item.spec.options
@@ -778,3 +782,97 @@ def test_adapter_spec_options_are_a_read_only_copy() -> None:
     assert spec.options == {"names": ["a"]}
     with pytest.raises(TypeError):
         spec.options["more"] = 1  # ty: ignore[invalid-assignment]
+
+
+# Frameworks
+
+
+def test_no_frameworks_key_selects_the_western_preset(tmp_path: Path) -> None:
+    composition = compose(tmp_path, SERUM)
+
+    (framework,) = composition.frameworks()
+    assert isinstance(framework, TonalFramework)
+    assert framework.name == "tonal"
+    assert framework.window_beats == 16
+    assert composition.config.preset == "western"
+    assert PRESETS["western"] == ("tonal",)
+
+
+def test_the_neutral_preset_selects_no_framework(tmp_path: Path) -> None:
+    composition = compose(tmp_path, SERUM + '[adapters]\nframeworks = "neutral"\n')
+
+    assert composition.frameworks() == ()
+    assert composition.config.preset == "neutral"
+    assert TONAL_GUIDE not in composition.guide_parts()
+
+
+def test_a_list_pins_frameworks_and_records_no_preset(tmp_path: Path) -> None:
+    text = SERUM + '[adapters]\nframeworks = [{{ use = "tonal", window_beats = 8 }}]\n'
+    composition = compose(tmp_path, text)
+
+    (framework,) = composition.frameworks()
+    assert isinstance(framework, TonalFramework)
+    assert framework.window_beats == 8
+    assert composition.config.preset is None
+    assert compose(tmp_path, SERUM + '[adapters]\nframeworks = ["tonal"]\n').config.preset is None
+
+
+def test_a_framework_name_in_place_of_a_preset_suggests_the_list(tmp_path: Path) -> None:
+    path = write_config(tmp_path, SERUM + '[adapters]\nframeworks = "tonal"\n')
+
+    with pytest.raises(ConfigError) as error:
+        read_config(path)
+
+    assert str(error.value) == (
+        f"{path}: adapters.frameworks: unknown preset 'tonal'; presets are neutral, western; "
+        'to select the tonal framework alone, write ["tonal"]'
+    )
+
+
+@pytest.mark.parametrize(
+    ("value", "where", "problem"),
+    [
+        (
+            '"modern"',
+            "adapters.frameworks",
+            "unknown preset 'modern'; presets are neutral, western",
+        ),
+        ("3", "adapters.frameworks", "must be a preset name or a list"),
+        ('["modal"]', "adapters.frameworks[0]", "'modal' is not a built-in ('tonal')"),
+    ],
+)
+def test_an_unusable_frameworks_value_is_refused(
+    tmp_path: Path, value: str, where: str, problem: str
+) -> None:
+    path = write_config(tmp_path, SERUM + f"[adapters]\nframeworks = {value}\n")
+
+    with pytest.raises(ConfigError, match=re.escape(f"{path}: {where}: {problem}")):
+        read_config(path)
+
+
+@pytest.mark.parametrize(
+    ("value", "where", "problem"),
+    [
+        ('["tonal", "tonal"]', "adapters.frameworks", "two frameworks are named 'tonal'"),
+        (
+            '[{{ use = "tonal", window_beats = 0.5 }}]',
+            "adapters.frameworks[0]",
+            "window_beats: must be a finite number of at least 1, got 0.5",
+        ),
+        (
+            '[{{ use = "tonal", window = 8 }}]',
+            "adapters.frameworks[0]",
+            "unknown option 'window'",
+        ),
+    ],
+    ids=["duplicate-name", "short-window", "unknown-option"],
+)
+def test_frameworks_are_checked_when_built(
+    tmp_path: Path, value: str, where: str, problem: str
+) -> None:
+    composition = compose(tmp_path, SERUM + f"[adapters]\nframeworks = {value}\n")
+
+    with pytest.raises(
+        ConfigError, match=re.escape(f"{tmp_path / 'poser.toml'}: {where}: {problem}")
+    ):
+        composition.frameworks()

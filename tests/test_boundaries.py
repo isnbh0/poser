@@ -23,6 +23,7 @@ USE_CASES = (
     "poser.core.capturing",
     "poser.core.analysis",
     "poser.core.delivery",
+    "poser.core.interpreting",
 )
 DYNAMIC_IMPORT_LOADERS = {"poser.adapters.loading", "poser.adapters.isolation"}
 ADAPTER_LIBRARIES = ("pedalboard", "mido", "yaml", "matplotlib", "scipy", "pyloudnorm")

@@ -1,11 +1,18 @@
 """Tests for `compose_guide`, which builds a studio's `POSER.md` from its parts."""
 
-import pytest
+from pathlib import Path
 
+import pytest
+from workspaces import make_workspace
+
+from poser.adapters.tonal import GUIDE as TONAL_GUIDE
+from poser.compose import load
 from poser.core.guide import (
     FIRST_INSTRUMENT_PLACEHOLDER,
+    FRAMEWORKS_HEADING,
     GENERATED,
     INSTRUMENTS_HEADING,
+    FrameworkListing,
     InstrumentNote,
     compose_guide,
 )
@@ -82,3 +89,51 @@ def test_no_instruments_leaves_the_placeholder() -> None:
 def test_a_part_without_a_section_heading_is_refused(part: str) -> None:
     with pytest.raises(ValueError, match="must start with a '## ' heading"):
         compose_guide(CORE, [SERUM], [part])
+
+
+TONAL = (Identifier("tonal"),)
+
+
+@pytest.mark.parametrize(
+    ("listing", "text"),
+    [
+        (
+            FrameworkListing("western", TONAL, default=True),
+            (
+                "Preset: `western` (the default), poser's current recommendation. "
+                "Frameworks: `tonal`. To pin them, list them in `[adapters] frameworks`."
+            ),
+        ),
+        (
+            FrameworkListing("neutral", ()),
+            "Preset: `neutral`. No frameworks are configured; `read-song` reads nothing.",
+        ),
+        (FrameworkListing(None, TONAL), "Frameworks: `tonal` (listed in poser.toml)."),
+    ],
+    ids=["default-preset", "neutral", "listed"],
+)
+def test_the_frameworks_block_follows_the_instruments(listing: FrameworkListing, text: str) -> None:
+    guide = compose_guide(CORE, [SERUM], ["## Store\n"], frameworks=listing)
+
+    assert f"{INSTRUMENTS_HEADING}\n\n- `serum` (pedalboard): A wavetable synth.\n\n" in guide
+    assert f"A wavetable synth.\n\n{FRAMEWORKS_HEADING}\n\n{text}\n\n## Store\n" in guide
+
+
+def test_no_listing_leaves_out_the_frameworks_block() -> None:
+    assert FRAMEWORKS_HEADING not in compose_guide(CORE, [SERUM], [])
+
+
+@pytest.mark.parametrize(
+    ("setting", "has_tonal"),
+    [("", True), ('frameworks = "neutral"\n', False), ('frameworks = ["tonal"]\n', True)],
+    ids=["default", "neutral", "listed"],
+)
+def test_the_tonal_guide_comes_with_the_tonal_framework(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, setting: str, has_tonal: bool
+) -> None:
+    workspace = make_workspace(tmp_path / "studio", monkeypatch)
+    if setting:
+        workspace.write_config(workspace.config.read_text() + "[adapters]\n" + setting)
+    composition = load(workspace.config, workspace.root / "sounds", workspace.renders)
+
+    assert (TONAL_GUIDE in composition.guide_parts()) is has_tonal

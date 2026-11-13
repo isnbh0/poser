@@ -18,6 +18,7 @@ import yaml
 ADAPTERS = """
 from fakes import FakeInstrument, FakeMixer, FakeSection, FakeSound, SavedSounds
 
+from poser.core.names import Identifier
 from poser.core.ports import ConfigError, RenderFailure, SoundListing
 from poser.core.statuses import RenderFailureStatus
 
@@ -93,6 +94,18 @@ def section(options, context):
     if options:
         raise ConfigError(f"unknown option {min(options)!r}")
     return made
+
+
+class RaisingFramework:
+    name = Identifier("broken")
+    guide = "## Broken framework"
+
+    def read(self, request):
+        raise RuntimeError("cannot read")
+
+
+def raising_framework(options, context):
+    return RaisingFramework()
 """
 
 INSTRUMENTS = """

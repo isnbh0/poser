@@ -12,13 +12,14 @@ from helpers import REPO_DIR, SCAFFOLD_DIR, SURGE_DIR, real_analyze, real_compos
 
 import poser
 from poser.adapters.song_formats import SONG_FORMATS
-from poser.compose import read_config
+from poser.compose import DEFAULT_PRESET, PRESETS, read_config
 from poser.core import analysis, music, report, song
 from poser.core.audio import NUM_CHANNELS, SAMPLE_RATE, TAIL_S
 from poser.core.graph import Graph
 from poser.core.guide import FIRST_INSTRUMENT_PLACEHOLDER
 from poser.core.loading import load_song
 from poser.core.ports import ResolvedSound
+from poser.core.reading import OUTCOME_TAGS
 from poser.core.song import MAX_SONG_S, Song, SongError, parse_song
 from poser.core.song import Song as SongValue
 from poser.core.sounds import parse_sound_ref
@@ -134,6 +135,24 @@ def test_commands_are_project_scripts() -> None:
     scripts = tomllib.loads((REPO_DIR / "pyproject.toml").read_text())["project"]["scripts"]
     commands = re.findall(r"uv run ([\w-]+)", GUIDE)
     assert set(commands) <= set(scripts)
+
+
+def section(heading: str) -> str:
+    """Return the text under a `##` heading, up to the next one."""
+    start = LINES.index(f"## {heading}")
+    end = next(
+        (i for i, line in enumerate(LINES[start + 1 :], start + 1) if line.startswith("## ")),
+        len(LINES),
+    )
+    return "\n".join(LINES[start + 1 : end])
+
+
+def test_framework_readings_name_every_outcome_and_preset() -> None:
+    text = section("Framework readings")
+    assert re.findall(r"^- (\w+):", text, re.MULTILINE) == list(OUTCOME_TAGS)
+    named = set(BACKTICKED.findall(text))
+    assert set(PRESETS) <= named
+    assert f"`{DEFAULT_PRESET}` preset" in " ".join(text.split())
 
 
 def test_statuses_and_defects_are_named() -> None:
