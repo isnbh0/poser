@@ -23,7 +23,7 @@ from poser_scsynth.scores import build_score, hz
 
 from poser.core.audio import NUM_CHANNELS, SAMPLE_RATE, Audio, read_raw_audio
 from poser.core.names import Identifier
-from poser.core.performance import Control, NoteOff, NoteOn, Performance
+from poser.core.performance import Control, NoteOff, NoteOn, Performance, PitchSupport
 from poser.core.ports import (
     AdapterContext,
     RenderFailure,
@@ -312,6 +312,37 @@ def test_score_bytes_are_deterministic() -> None:
     assert build_score(DEMO_SYNTHDEF, meta, performance, SAMPLE_RATE) == build_score(
         DEMO_SYNTHDEF, meta, performance, SAMPLE_RATE
     )
+
+
+# A whole-pitch performance's command file, digested before scores.py took real pitches.
+PINNED_SCORE_SHA256 = "39b4db7df538e3a6dc031a9ce756d23269db0d09027da252722cf8285eefeb62"
+
+
+def test_whole_pitch_score_bytes_are_pinned() -> None:
+    performance, meta = score_events()
+    score = build_score(DEMO_SYNTHDEF, meta, performance, SAMPLE_RATE)
+    assert hashlib.sha256(score).hexdigest() == PINNED_SCORE_SHA256
+
+
+def test_fractional_pitch_sounds_at_its_exact_frequency() -> None:
+    score = decode_score(
+        build_score(DEMO_SYNTHDEF, {}, performance_of(NoteOn(0, 69.5, 100)), SAMPLE_RATE)
+    )
+    (args,) = messages_of(score, "/s_new")
+    expected = 440.0 * 2.0 ** (0.5 / 12.0)
+    assert args[4:6] == ["freq", struct.unpack(">f", struct.pack(">f", expected))[0]]
+    assert expected == pytest.approx(452.893, abs=1e-3)
+
+
+def test_note_off_releases_only_its_exact_pitch() -> None:
+    performance = performance_of(NoteOn(0, 69, 100), NoteOn(10, 69.5, 100), NoteOff(20, 69.5))
+    score = decode_score(build_score(DEMO_SYNTHDEF, {}, performance, SAMPLE_RATE))
+    assert [args[1] for args in messages_of(score, "/s_new")] == [1000, 1001]
+    assert messages_of(score, "/n_set") == [[1001, "gate", 0.0]]
+
+
+def test_instrument_plays_continuous_pitch(instrument: ScsynthInstrument) -> None:
+    assert instrument.pitches is PitchSupport.CONTINUOUS
 
 
 # Identities

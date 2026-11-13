@@ -113,6 +113,23 @@ def test_real_voice_has_the_requested_pitch_and_releases(
     assert np.max(np.abs(audio.samples[:, SAMPLE_RATE * 3 // 2 :])) == 0
 
 
+def strongest_frequency(instrument: ScsynthInstrument, tmp_path: Path, pitch: float) -> float:
+    """Render one 3-second note at bpm 60 and return the strongest bin from 0.5 s to 2.5 s."""
+    song = Song(60, (Track("lead", "sc", (Note(0, pitch, 3, 100),)),))
+    audio = render_song(instrument, tmp_path, song, f"pitch-{pitch}.npy")
+    sustain = audio.samples[0, SAMPLE_RATE // 2 : SAMPLE_RATE * 5 // 2]
+    frequencies = np.fft.rfftfreq(sustain.size, 1 / SAMPLE_RATE)
+    return float(frequencies[np.argmax(np.abs(np.fft.rfft(sustain)))])
+
+
+def test_real_fractional_pitch_sounds_at_its_frequency(
+    instrument: ScsynthInstrument, tmp_path: Path
+) -> None:
+    # A 2-second window has 0.5 Hz bins, fine enough to tell 440 from 452.893 within 1 Hz.
+    assert strongest_frequency(instrument, tmp_path, 69) == pytest.approx(440.0, abs=1)
+    assert strongest_frequency(instrument, tmp_path, 69.5) == pytest.approx(452.893, abs=1)
+
+
 def test_real_polyphony_renders_inside_the_timeout(
     instrument: ScsynthInstrument, tmp_path: Path
 ) -> None:

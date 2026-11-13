@@ -194,7 +194,7 @@ class ScsynthInstrument:
 
     @property
     def pitches(self) -> PitchSupport:
-        return PitchSupport.SEMITONES
+        return PitchSupport.CONTINUOUS
 
     @property
     def guide(self) -> str:

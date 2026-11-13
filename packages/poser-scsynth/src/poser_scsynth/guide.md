@@ -13,6 +13,8 @@ non-realtime. A track names one of its sounds as `<instrument>:<source>/<path>`,
   nothing. Mapped controls affect all sounding voices, including release tails, and their
   latest values initialize future notes; a controller change on a note's beat applies to that
   note from its start.
+- The instrument plays any pitch from 0 to 127 at its exact frequency, so fractional pitches
+  such as 60.5 render as written.
 - Every note-on starts a synth with `freq` (Hz, A4 = 440), `amp` (velocity / 127), and `gate`
   1, plus the latest mapped controller values; the note-off sets `gate` to 0. Mapped controller
   values arrive as value / 127, from 0 to 1. poser never frees a synth, so a synthdef should
@@ -20,8 +22,6 @@ non-realtime. A track names one of its sounds as `<instrument>:<source>/<path>`,
 - `sources` in `poser.toml` names sound folders; `saved` reads artifact pairs directly under
   `<sounds_dir>/<instrument>/`. Case matters in `<source>/<path>`; `builtin` and `saved` are
   reserved source names.
-- A scsynth instrument plays whole MIDI pitches only; a fractional pitch fails as
-  `unsupported_pitch`.
 - This adapter provides no effect recipes and no `save-sound` capture.
 - The `scsynth` option names the engine binary, whose path varies by install. Without it, sounds
   still list and resolve, and renders fail with `load_failed`.

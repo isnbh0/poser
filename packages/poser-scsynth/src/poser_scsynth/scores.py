@@ -57,7 +57,7 @@ def command_file(bundles: Sequence[bytes]) -> bytes:
 
 
 def hz(pitch: float) -> float:
-    """Twelve-tone equal temperament, MIDI 69 = 440 Hz."""
+    """The MIDI pitch scale: 69 = 440 Hz, and 1 = a twelve-tone equal-tempered semitone."""
     return 440.0 * 2.0 ** ((pitch - 69) / 12.0)
 
 
@@ -71,7 +71,8 @@ def build_score(
 def compile_score(recipe: SoundRecipe, performance: Performance, sample_rate: int) -> bytes:
     """Compile an already-checked recipe, without any engine or filesystem access.
 
-    Notes own distinct ids; note-offs release per-pitch LIFO, unmatched offs drop. Controllers
+    Notes own distinct ids; note-offs release per-pitch LIFO by exact pitch, so 69.5 never
+    releases a 69 node; unmatched offs drop. Controllers
     are track-wide state: every mapped change sets the root group (all existing voices, even
     during release), and is latched into every future note. Thus controls before simultaneous
     note-ons and during silent gaps have the same meaning as the core's automation timeline.
