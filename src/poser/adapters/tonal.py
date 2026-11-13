@@ -4,14 +4,19 @@ Each window's notes are weighted by how long they sound in it and counted by the
 twelve-tone pitch class. The thresholds below were calibrated against random notes, evenly spread
 clusters, and generated tonal songs (`tests/test_tonal.py`); changing one means rerunning that
 calibration.
+
+The module also holds the `key` vocabulary, which reads stated keys such as `A minor` from a
+song's `key` mark layer.
 """
 
 import math
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Literal
 
 from poser.core.jsonvalue import JsonValue
+from poser.core.music import LETTER_SEMITONES
 from poser.core.names import Identifier
 from poser.core.ports import AdapterContext, ConfigError
 from poser.core.reading import (
@@ -20,6 +25,7 @@ from poser.core.reading import (
     Outcome,
     Reading,
     ReadingSpan,
+    Rejected,
     ScoreRequest,
     Unknowable,
 )
@@ -240,3 +246,67 @@ def create_tonal(options: Mapping[str, JsonValue], _context: AdapterContext) -> 
     if not (is_number(window) and math.isfinite(window) and window >= MIN_WINDOW_BEATS):
         raise ConfigError(f"window_beats: must be a finite number of at least 1, got {window!r}")
     return TonalFramework(float(window))
+
+
+KEY_PATTERN = re.compile(r"([A-G])([#b]?) (major|minor)")
+ACCIDENTALS = {"": 0, "#": 1, "b": -1}
+KEY_REJECTION = "must be a tonic A to G with optional # or b, then major or minor, such as A minor"
+
+KEY_GUIDE = """\
+## Key marks
+
+The `key` layer states the author's key, written as a tonic `A` to `G` with an optional `#` or
+`b`, a space, and `major` or `minor`, such as `A minor`, `F# major`, or `Bb minor`. `read-song`
+shows it above the readings, as written. It never changes `tonal`'s reading.
+"""
+
+
+@dataclass(frozen=True)
+class KeyMark:
+    """A key an author states in a `key` mark."""
+
+    tonic: int  # 0 is C, 11 is B.
+    mode: Mode
+
+    def __post_init__(self) -> None:
+        if not (is_int(self.tonic) and 0 <= self.tonic <= 11):
+            raise ValueError(f"KeyMark.tonic must be an int from 0 to 11, got {self.tonic!r}")
+        if self.mode not in MODES:
+            raise ValueError(f"KeyMark.mode must be major or minor, got {self.mode!r}")
+
+    @property
+    def name(self) -> str:
+        return f"{NAMES[self.tonic]} {self.mode}"
+
+    def to_data(self) -> JsonValue:
+        return {"key": self.name, "tonic": self.tonic, "mode": self.mode}
+
+    def describe(self) -> str:
+        return self.name
+
+
+class KeyVocabulary:
+    """The `key` vocabulary: reads stated major and minor keys such as `A minor`."""
+
+    @property
+    def name(self) -> Identifier:
+        return Identifier("key")
+
+    @property
+    def guide(self) -> str:
+        return KEY_GUIDE
+
+    def parse(self, text: str) -> KeyMark | Rejected:
+        match = KEY_PATTERN.fullmatch(text)
+        if match is None:
+            return Rejected(KEY_REJECTION)
+        letter, accidental, mode = match.groups()
+        tonic = (LETTER_SEMITONES[letter] + ACCIDENTALS[accidental]) % 12
+        return KeyMark(tonic, "major" if mode == "major" else "minor")
+
+
+def create_key(options: Mapping[str, JsonValue], _context: AdapterContext) -> KeyVocabulary:
+    """The factory for `key`. It takes no options."""
+    for key in options:
+        raise ConfigError(f"unknown option {key!r}; key takes no options")
+    return KeyVocabulary()

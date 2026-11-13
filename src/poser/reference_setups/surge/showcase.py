@@ -8,7 +8,7 @@ from poser import Mark, Marks, Note, Song, Track
 
 
 def build() -> Song:
-    """A sparse opening, layered middle, and closing return in A minor."""
+    """A sparse opening, layered middle, and closing return."""
     progression = (("Am", 45), ("F", 41), ("C", 48), ("G", 43)) * 4
     roots = tuple(root for _, root in progression)
     bass = tuple(
@@ -43,7 +43,8 @@ def build() -> Song:
             {
                 "chords": [
                     Mark(bar * 4, bar * 4 + 4, name) for bar, (name, _) in enumerate(progression)
-                ]
+                ],
+                "key": [Mark(0, 64, "A minor")],
             }
         ),
     )

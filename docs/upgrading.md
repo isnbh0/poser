@@ -32,6 +32,10 @@ fix. A change listed here applies to every studio that pinned a poser commit fro
   frameworks` does; the default `western` preset reads `chords`. A studio that sets
   `frameworks = "neutral"` may also want `vocabularies = "neutral"`.
 
+- **New:** a `key` layer, such as `{beat: 0, end: 64, text: A minor}`, states the song's key, and
+  `read-song` shows it above `tonal`'s inferred key. Studios on the `western` preset read it
+  automatically; a studio with a pinned `vocabularies` list adds `"key"` to it.
+
 ## Framework-neutral pitch and readings
 
 - **Symptom:** `update-guide`, `check-instruments`, and other commands that build instruments

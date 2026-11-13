@@ -7,6 +7,7 @@ from workspaces import make_workspace
 
 from poser.adapters.chords import GUIDE as CHORDS_GUIDE
 from poser.adapters.tonal import GUIDE as TONAL_GUIDE
+from poser.adapters.tonal import KEY_GUIDE
 from poser.compose import load
 from poser.core.guide import (
     FIRST_INSTRUMENT_PLACEHOLDER,
@@ -94,6 +95,7 @@ def test_a_part_without_a_section_heading_is_refused(part: str) -> None:
 
 TONAL = (Identifier("tonal"),)
 CHORDS = (Identifier("chords"),)
+WESTERN_VOCABULARIES = (Identifier("chords"), Identifier("key"))
 NO_VOCABULARIES = "No vocabularies are configured; every mark layer is text."
 
 
@@ -106,14 +108,14 @@ NO_VOCABULARIES = "No vocabularies are configured; every mark layer is text."
                 TONAL,
                 default=True,
                 vocabulary_preset="western",
-                vocabularies=CHORDS,
+                vocabularies=WESTERN_VOCABULARIES,
                 vocabulary_default=True,
             ),
             (
                 "Preset: `western` (the default), poser's current recommendation. "
                 "Frameworks: `tonal`. To pin them, list them in `[adapters] frameworks`. "
-                "Vocabularies: `chords`, from the `western` preset (the default); to pin them, "
-                "list them in `[adapters] vocabularies`."
+                "Vocabularies: `chords`, `key`, from the `western` preset (the default); to pin "
+                "them, list them in `[adapters] vocabularies`."
             ),
         ),
         (
@@ -179,4 +181,33 @@ def test_the_chords_guide_comes_with_the_chords_vocabulary(
 
     assert (CHORDS_GUIDE in composition.guide_parts()) is has_chords
     listing = composition.framework_listing()
-    assert listing.vocabularies == (CHORDS if has_chords else ())
+    assert (
+        listing.vocabularies
+        == {
+            "": WESTERN_VOCABULARIES,
+            'vocabularies = "neutral"\n': (),
+            'vocabularies = ["chords"]\n': CHORDS,
+        }[setting]
+    )
+
+
+@pytest.mark.parametrize(
+    ("setting", "has_key"),
+    [
+        ("", True),
+        ('vocabularies = "neutral"\n', False),
+        ('vocabularies = ["chords"]\n', False),
+        ('vocabularies = ["key"]\n', True),
+    ],
+    ids=["default", "neutral", "chords-only", "key-only"],
+)
+def test_the_key_guide_comes_with_the_key_vocabulary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, setting: str, has_key: bool
+) -> None:
+    workspace = make_workspace(tmp_path / "studio", monkeypatch)
+    if setting:
+        workspace.write_config(workspace.config.read_text() + "[adapters]\n" + setting)
+    composition = load(workspace.config, workspace.root / "sounds", workspace.renders)
+
+    assert (KEY_GUIDE in composition.guide_parts()) is has_key
+    assert (Identifier("key") in composition.framework_listing().vocabularies) is has_key

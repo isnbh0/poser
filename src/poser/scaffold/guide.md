@@ -256,8 +256,9 @@ unpitched, or a vocabulary rejects a label, naming the mark, such as `marks.chor
 `western` preset, Western tonal harmony, is the default; `neutral` turns readings off. A preset
 is poser's current recommendation and may gain frameworks as poser evolves; a list, such as
 `frameworks = ["tonal"]`, pins them. `[adapters] vocabularies` takes a preset name or a list of
-vocabularies the same way: the `western` preset, the default, reads `chords` layers; `neutral`
-reads none, so every layer is text; and a list, such as `vocabularies = ["chords"]`, pins them.
+vocabularies the same way: the `western` preset, the default, reads `chords` and `key` layers;
+`neutral` reads none, so every layer is text; and a list, such as `vocabularies = ["chords"]`,
+pins them.
 
 ## Commands
 

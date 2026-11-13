@@ -12,18 +12,30 @@ from poser.adapters.tonal import (
     BETWEEN,
     EVEN,
     GUIDE,
+    KEY_GUIDE,
     NO_FIT,
     SILENCE,
     TOO_FEW,
+    KeyMark,
+    KeyVocabulary,
     TonalKey,
+    create_key,
     create_tonal,
     read_keys,
 )
 from poser.core.graph import Graph
 from poser.core.loading import load_song
 from poser.core.names import NodeName
-from poser.core.ports import AdapterContext
-from poser.core.reading import Ambiguous, Known, Outcome, Reading, ScoreRequest, Unknowable
+from poser.core.ports import AdapterContext, ConfigError, Vocabulary
+from poser.core.reading import (
+    Ambiguous,
+    Known,
+    Outcome,
+    Reading,
+    Rejected,
+    ScoreRequest,
+    Unknowable,
+)
 from poser.core.rules import Note
 from poser.core.song import Song, Track
 
@@ -226,6 +238,107 @@ def test_the_guide_states_every_reason() -> None:
     text = " ".join(GUIDE.split())
     for reason in (SILENCE, BETWEEN, TOO_FEW, EVEN, "no key fits"):
         assert reason in text
+
+
+# The key vocabulary: stated keys in a `key` mark layer.
+
+KEY_REASON = "must be a tonic A to G with optional # or b, then major or minor, such as A minor"
+LETTER_CLASSES = {"C": 0, "D": 2, "E": 4, "F": 5, "G": 7, "A": 9, "B": 11}
+ACCIDENTAL_STEPS = {"": 0, "#": 1, "b": -1}
+KEY_GRID = [
+    (f"{letter}{accidental} {mode}", (pitch + step) % 12, mode)
+    for letter, pitch in LETTER_CLASSES.items()
+    for accidental, step in ACCIDENTAL_STEPS.items()
+    for mode in ("major", "minor")
+]
+
+
+def test_the_key_grid_has_42_labels() -> None:
+    assert len(KEY_GRID) == 42
+
+
+@pytest.mark.parametrize(("text", "tonic", "mode"), KEY_GRID)
+def test_the_key_vocabulary_parses_every_tonic_and_mode(text: str, tonic: int, mode: str) -> None:
+    parsed = KeyVocabulary().parse(text)
+    assert isinstance(parsed, KeyMark)
+    assert (parsed.tonic, parsed.mode) == (tonic, mode)
+
+
+@pytest.mark.parametrize(
+    ("text", "tonic"), [("Cb major", 11), ("B# minor", 0), ("E# major", 5), ("Bb minor", 10)]
+)
+def test_accidentals_wrap_around_the_octave(text: str, tonic: int) -> None:
+    parsed = KeyVocabulary().parse(text)
+    assert isinstance(parsed, KeyMark)
+    assert parsed.tonic == tonic
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "",
+        "a minor",
+        "A Minor",
+        "A  minor",
+        "A dorian",
+        "H major",
+        "A## major",
+        " A minor",
+        "A minor ",
+        "A minor\n",
+        "Ab",
+    ],
+)
+def test_the_key_vocabulary_rejects_other_spellings(text: str) -> None:
+    assert KeyVocabulary().parse(text) == Rejected(KEY_REASON)
+
+
+@pytest.mark.parametrize(("text", "tonic", "mode"), KEY_GRID)
+def test_a_parsed_key_describes_itself_as_a_label_it_parses_back(
+    text: str, tonic: int, mode: str
+) -> None:
+    vocabulary = KeyVocabulary()
+    parsed = vocabulary.parse(text)
+    assert isinstance(parsed, KeyMark)
+    assert vocabulary.parse(parsed.describe()) == parsed
+
+
+def test_a_key_mark_writes_its_name_tonic_and_mode() -> None:
+    mark = KeyMark(9, "minor")
+    assert mark.describe() == "A minor"
+    assert mark.to_data() == {"key": "A minor", "tonic": 9, "mode": "minor"}
+    assert KeyMark(10, "major").describe() == "A# major"
+
+
+@pytest.mark.parametrize(
+    ("tonic", "mode", "message"),
+    [
+        (-1, "major", "KeyMark.tonic"),
+        (12, "major", "KeyMark.tonic"),
+        (1.0, "major", "KeyMark.tonic"),
+        (True, "major", "KeyMark.tonic"),
+        ("C", "major", "KeyMark.tonic"),
+        (0, "dorian", "KeyMark.mode"),
+        (0, "Major", "KeyMark.mode"),
+    ],
+)
+def test_a_key_mark_validates_like_a_tonal_key(tonic: object, mode: object, message: str) -> None:
+    with pytest.raises(ValueError, match=message):
+        KeyMark(tonic, mode)  # ty: ignore[invalid-argument-type]
+    with pytest.raises(ValueError, match=message.replace("KeyMark", "TonalKey")):
+        TonalKey(tonic, mode, 0.9, 0.0)  # ty: ignore[invalid-argument-type]
+
+
+def test_the_key_factory_builds_a_vocabulary_and_takes_no_options() -> None:
+    root = Path("/studio")
+    context = AdapterContext(root, root, root)
+    vocabulary = create_key({}, context)
+    assert isinstance(vocabulary, Vocabulary)
+    assert vocabulary.name == "key"
+    assert vocabulary.guide == KEY_GUIDE
+    assert vocabulary.guide.startswith("## Key marks")
+    with pytest.raises(ConfigError, match="'window_beats'"):
+        create_key({"window_beats": 8}, context)
 
 
 # Calibration: these pin the seed sets, so any change in behaviour shows. The bounds hold for these

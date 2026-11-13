@@ -90,7 +90,12 @@ BUILTINS: Mapping[str, Mapping[str, str]] = MappingProxyType(
         "visualizer": MappingProxyType({"spectrogram": "poser.adapters.spectrogram:create"}),
         "sections": MappingProxyType[str, str]({}),
         "frameworks": MappingProxyType({"tonal": "poser.adapters.tonal:create_tonal"}),
-        "vocabularies": MappingProxyType({"chords": "poser.adapters.chords:create_chords"}),
+        "vocabularies": MappingProxyType(
+            {
+                "chords": "poser.adapters.chords:create_chords",
+                "key": "poser.adapters.tonal:create_key",
+            }
+        ),
         "piano_roll_drawer": MappingProxyType[str, str]({}),
     }
 )
@@ -119,7 +124,7 @@ PRESET_KEYS: Mapping[str, str] = MappingProxyType(
 # listing them.
 PRESETS: Mapping[str, Mapping[str, tuple[str, ...]]] = MappingProxyType(
     {
-        "western": MappingProxyType({FRAMEWORKS: ("tonal",), VOCABULARIES: ("chords",)}),
+        "western": MappingProxyType({FRAMEWORKS: ("tonal",), VOCABULARIES: ("chords", "key")}),
         "neutral": MappingProxyType({FRAMEWORKS: (), VOCABULARIES: ()}),
     }
 )

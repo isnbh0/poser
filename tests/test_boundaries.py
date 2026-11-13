@@ -434,3 +434,19 @@ def test_the_showcase_states_its_chords() -> None:
         Chord(7, "maj", 7),
     ]
     assert layer.marks[-1].mark.end == 63.5
+
+
+def test_the_showcase_states_its_key() -> None:
+    from poser.adapters.tonal import KeyMark, create_key
+    from poser.core.interpreting import interpret_marks
+    from poser.core.ports import AdapterContext
+    from poser.core.reading import ParsedLayer
+    from poser.reference_setups.surge.showcase import build
+
+    song = build()
+    (mark,) = song.marks.layers["key"]
+    assert (mark.beat, mark.end, mark.text) == (0, 64, "A minor")
+    root = Path()
+    layer = interpret_marks(song, [create_key({}, AdapterContext(root, root, root))]).layers["key"]
+    assert isinstance(layer, ParsedLayer)
+    assert [parsed.value for parsed in layer.marks] == [KeyMark(9, "minor")]

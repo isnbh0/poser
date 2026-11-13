@@ -23,7 +23,7 @@ from poser.adapters.pedalboard.instrument import PedalboardInstrument
 from poser.adapters.song_formats import ScriptSongFormat, YamlSongFormat
 from poser.adapters.spectrogram import SpectrogramVisualizer
 from poser.adapters.tonal import GUIDE as TONAL_GUIDE
-from poser.adapters.tonal import TonalFramework
+from poser.adapters.tonal import KEY_GUIDE, KeyVocabulary, TonalFramework
 from poser.adapters.wav import WavAudioFiles
 from poser.cli.common import load_composition
 from poser.compose import (
@@ -805,6 +805,7 @@ def test_guide_parts_hold_each_guide_once_in_order(
         "## probe\n\nA fake section.\n",
         TONAL_GUIDE,
         CHORDS_GUIDE,
+        KEY_GUIDE,
     )
     for item in composition.config.instruments:
         assert "guide" not in item.spec.options
@@ -920,12 +921,14 @@ def test_frameworks_are_checked_when_built(
 def test_no_vocabularies_key_selects_the_western_preset(tmp_path: Path) -> None:
     composition = compose(tmp_path, SERUM)
 
-    (vocabulary,) = composition.vocabularies()
-    assert isinstance(vocabulary, ChordsVocabulary)
-    assert vocabulary.name == "chords"
+    chords, key = composition.vocabularies()
+    assert isinstance(chords, ChordsVocabulary)
+    assert isinstance(key, KeyVocabulary)
+    assert (chords.name, key.name) == ("chords", "key")
     assert composition.config.vocabulary_preset == "western"
-    assert PRESETS["western"]["vocabularies"] == ("chords",)
+    assert PRESETS["western"]["vocabularies"] == ("chords", "key")
     assert CHORDS_GUIDE in composition.guide_parts()
+    assert KEY_GUIDE in composition.guide_parts()
 
 
 def test_the_neutral_preset_selects_no_vocabulary(tmp_path: Path) -> None:
@@ -936,6 +939,7 @@ def test_the_neutral_preset_selects_no_vocabulary(tmp_path: Path) -> None:
     assert composition.config.preset == "western"
     assert len(composition.frameworks()) == 1
     assert CHORDS_GUIDE not in composition.guide_parts()
+    assert KEY_GUIDE not in composition.guide_parts()
 
 
 def test_a_list_pins_vocabularies_and_records_no_preset(tmp_path: Path) -> None:
@@ -945,6 +949,15 @@ def test_a_list_pins_vocabularies_and_records_no_preset(tmp_path: Path) -> None:
     assert isinstance(vocabulary, ChordsVocabulary)
     assert composition.config.vocabulary_preset is None
     assert composition.config.preset == "western"
+
+
+def test_a_list_of_key_selects_only_the_key_vocabulary(tmp_path: Path) -> None:
+    composition = compose(tmp_path, SERUM + '[adapters]\nvocabularies = ["key"]\n')
+
+    (vocabulary,) = composition.vocabularies()
+    assert isinstance(vocabulary, KeyVocabulary)
+    assert KEY_GUIDE in composition.guide_parts()
+    assert CHORDS_GUIDE not in composition.guide_parts()
 
 
 def test_a_vocabulary_name_in_place_of_a_preset_suggests_the_list(tmp_path: Path) -> None:
@@ -968,7 +981,7 @@ def test_a_vocabulary_name_in_place_of_a_preset_suggests_the_list(tmp_path: Path
             "unknown preset 'modern'; presets are neutral, western",
         ),
         ("3", "adapters.vocabularies", "must be a preset name or a list"),
-        ('["roman"]', "adapters.vocabularies[0]", "'roman' is not a built-in ('chords')"),
+        ('["roman"]', "adapters.vocabularies[0]", "'roman' is not a built-in ('chords', 'key')"),
     ],
 )
 def test_an_unusable_vocabularies_value_is_refused(

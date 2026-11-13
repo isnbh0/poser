@@ -313,6 +313,55 @@ def test_a_rejected_label_exits_2_naming_the_mark(
     assert "'Amj7'" in captured.err
 
 
+def keyed(workspace: CommandWorkspace, text: str) -> Path:
+    raised = [(beat + 16, pitch + 6, length) for beat, pitch, length in CADENCE]
+    return write(
+        workspace.root / "keyed.yaml",
+        track("keys", CADENCE + raised),
+        track("bass", [(0, 48, 2), (4, 43, 2), (16, 54, 2), (20, 49, 2)]),
+        marks={"key": [{"beat": 0, "end": 64, "text": text}]},
+    )
+
+
+def test_a_stated_key_prints_above_the_inferred_key(
+    workspace: CommandWorkspace, capsys: pytest.CaptureFixture[str]
+) -> None:
+    song = keyed(workspace, "A minor")
+
+    assert read.main([str(song)]) == 0
+    assert capsys.readouterr().out == (
+        "key marks (key vocabulary)\n  beats 0-27: A minor\n" + TONAL_TEXT
+    )
+
+    assert read.main([str(song), "--json"]) == 0
+    data = json_object(json.loads(capsys.readouterr().out))
+    assert data is not None
+    assert data["marks"] == {
+        "key": {
+            "vocabulary": "key",
+            "marks": [
+                {
+                    "beat": 0,
+                    "end": 27,
+                    "text": "A minor",
+                    "value": {"key": "A minor", "tonic": 9, "mode": "minor"},
+                }
+            ],
+        }
+    }
+
+
+def test_a_misspelled_key_exits_2_naming_the_mark(
+    workspace: CommandWorkspace, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert read.main([str(keyed(workspace, "A mnior"))]) == 2
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "marks.key[0]" in captured.err
+    assert "'A mnior'" in captured.err
+
+
 def test_a_song_without_marks_prints_what_it_always_did(
     song: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
