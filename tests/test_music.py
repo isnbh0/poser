@@ -381,12 +381,18 @@ def test_transpose_degrees_refuses_a_result_out_of_range() -> None:
 
 
 @pytest.mark.parametrize(
-    "bad",
-    [(), (64, 60, 67), (60, 62.5, 64), (60, 62, 72), (60, 64, 75)],
-    ids=["empty", "unsorted", "fractional", "spans-12", "spans-15"],
+    ("bad", "message"),
+    [
+        ((), "scale is empty"),
+        ((64, 60, 67), "strictly ascending"),
+        ((60, 62.5, 64), "not an integer"),
+        ((60, 62, 72), "span less than 12"),
+        ((60, 64, 75), "span less than 12"),
+        ((-2, 0, 2), "outside 0 to 127"),
+        ((126, 128), "outside 0 to 127"),
+    ],
+    ids=["empty", "unsorted", "fractional", "spans-12", "spans-15", "below-0", "above-127"],
 )
-def test_transpose_degrees_rejects_malformed_scales(bad: tuple[int, ...]) -> None:
-    with pytest.raises(
-        ValueError, match=r"scale is empty|strictly ascending|not an integer|span less than 12"
-    ):
+def test_transpose_degrees_rejects_malformed_scales(bad: tuple[int, ...], message: str) -> None:
+    with pytest.raises(ValueError, match=message):
         transpose_degrees(notes([60], 0, 1, 100), bad, 1)

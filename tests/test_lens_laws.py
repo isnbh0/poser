@@ -110,21 +110,6 @@ def generated_notes() -> tuple[Note, ...]:
     return tuple(by_pitch.values())
 
 
-def move_in_range(
-    notes: tuple[Note, ...], steps_scale: tuple[int, ...], steps: int
-) -> tuple[tuple[Note, ...], tuple[Note, ...]]:
-    """The notes whose move by `steps` stays in 0 to 127, and those notes moved."""
-    try:
-        return notes, transpose_degrees(notes, steps_scale, steps)
-    except ValueError:
-        if len(notes) == 1:
-            return (), ()
-        half = len(notes) // 2
-        low, low_moved = move_in_range(notes[:half], steps_scale, steps)
-        high, high_moved = move_in_range(notes[half:], steps_scale, steps)
-        return low + high, low_moved + high_moved
-
-
 @pytest.mark.parametrize("mode", DEGREE_MODES)
 @pytest.mark.parametrize("root", range(60, 72))
 def test_degree_moves_round_trip_and_stay_on_the_scale(root: int, mode: str) -> None:
@@ -134,8 +119,9 @@ def test_degree_moves_round_trip_and_stay_on_the_scale(root: int, mode: str) -> 
         n for n in generated_notes() if isinstance(n.pitch, int) and n.pitch % 12 in classes
     )
     assert on_scale
+    # Generated pitches lie in 24 to 103 and 8 scale steps span at most 14 semitones, so every
+    # move stays in 0 to 127, and any refusal here is a defect.
     for steps in DEGREE_STEPS:
-        movable, moved = move_in_range(on_scale, steps_scale, steps)
-        assert movable
+        moved = transpose_degrees(on_scale, steps_scale, steps)
         assert all(isinstance(n.pitch, int) and n.pitch % 12 in classes for n in moved)
-        assert transpose_degrees(moved, steps_scale, -steps) == movable
+        assert transpose_degrees(moved, steps_scale, -steps) == on_scale

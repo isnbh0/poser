@@ -74,9 +74,9 @@ def compile_score(recipe: SoundRecipe, performance: Performance, sample_rate: in
     Notes own distinct ids; note-offs release per-pitch LIFO by exact pitch, so 69.5 never
     releases a 69 node; unmatched offs drop. Controllers are track-wide state: every mapped
     change sets the root group (all existing voices, even during release), and is latched into
-    every future note. Thus controls before simultaneous
-    note-ons and during silent gaps have the same meaning as the core's automation timeline.
-    Unmapped controls drop. The final empty bundle runs the engine past the stem's last frame.
+    every future note. Thus controls before simultaneous note-ons and during silent gaps have the
+    same meaning as the core's automation timeline. Unmapped controls drop. The final empty
+    bundle runs the engine past the stem's last frame.
     """
     bundles = [osc_bundle(0.0, [_message("/d_recv", [recipe.synthdef])])]
     mapping = dict(recipe.controls)

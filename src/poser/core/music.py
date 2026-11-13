@@ -232,9 +232,7 @@ def _check_scale(scale: Sequence[int]) -> tuple[int, ...]:
     checked = tuple(scale)
     if not checked:
         raise ValueError("scale is empty")
-    for value in checked:
-        if not is_int(value):
-            raise ValueError(f"scale has pitch {value!r}, which is not an integer")
+    _check_pitches(checked, "scale")
     if any(later <= earlier for earlier, later in itertools.pairwise(checked)):
         raise ValueError(f"scale {list(checked)} must be strictly ascending")
     if checked[-1] - checked[0] >= 12:

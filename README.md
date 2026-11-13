@@ -91,6 +91,7 @@ a built-in name, an import path, or a table with `use` and options:
 | `measurer` | `"standard"` |
 | `visualizer` | `"spectrogram"` |
 | `sections` | `[]` |
+| `frameworks` | `"western"`, a preset name; a list pins the frameworks |
 
 Edit `AGENTS.md` for studio preferences and each instrument's `guide` in `poser.toml` for
 instrument notes. The guide, `POSER.md`, is generated; run `uv run update-guide` after changing

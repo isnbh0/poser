@@ -271,10 +271,11 @@ class Instrument(Protocol):
     - `identity` is a recipe identity: equal when the render inputs are equal, without promising
       identical samples. It covers every input the adapter controls and can read cheaply.
     - `adapter_version` rises whenever the adapter's own code renders one identity differently.
-    - An instrument declaring `pitches` as `SEMITONES` receives only performances whose pitches
-      are all whole: the core's render path builds every track's performance through
-      `perform_for` and fails a track it cannot play as `unsupported_pitch`. `Performance` is
-      public, so code outside the render path could still build a fractional one.
+    - An instrument declaring `pitches` as anything but `PitchSupport.CONTINUOUS` receives only
+      performances whose pitches are all whole: the core's render path builds every track's
+      performance through `perform_for` and fails a track it cannot play as
+      `unsupported_pitch`. `Performance` is public, so code outside the render path could still
+      build a fractional one.
     """
 
     @property
