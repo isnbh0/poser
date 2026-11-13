@@ -130,13 +130,13 @@ The bands are `sub` 20–60 Hz, `bass` 60–250 Hz, `low_mid` 250–500 Hz, `mid
 
 Track statuses from `render-song`: `rendered`, `silent`, `unknown_sound`, `load_failed`, `crashed`,
 `timed_out`, `late_start`, `unsupported_pitch`, which means the track has a fractional pitch and its
-instrument plays only whole pitches, and `upstream_failed`, which means the node was skipped because
-an upstream node did not render. A track whose sound begins more than 0.1 s after its first note is
-rendered again, up to three times in all, and `render-song` and `export-song` print a line for each
-retry. A track that starts at the same moment in all three renders is kept, as starting late by
-design; `late_start` means every attempt started late, not all by the same amount, so the track left
-no stem. Node statuses from `analyze-song`: `analyzed`, `missing_stem`, and `stale_stem`, which
-means the stem no longer matches the song or its sound; `detail` says why.
+instrument does not declare that it plays any pitch, and `upstream_failed`, which means the node was
+skipped because an upstream node did not render. A track whose sound begins more than 0.1 s after
+its first note is rendered again, up to three times in all, and `render-song` and `export-song`
+print a line for each retry. A track that starts at the same moment in all three renders is kept, as
+starting late by design; `late_start` means every attempt started late, not all by the same amount,
+so the track left no stem. Node statuses from `analyze-song`: `analyzed`, `missing_stem`, and
+`stale_stem`, which means the stem no longer matches the song or its sound; `detail` says why.
 
 Defects fail the analysis: `silent`, for a node or the mix; `clipping`, for mix samples beyond
 full scale; and `headroom`, for a mix peak above -1 dBFS. A section's defects and errors also

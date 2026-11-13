@@ -3,7 +3,8 @@
 Transposing a song by `k` semitones shifts every `tonal` reading by `k`, exactly. Every
 generated pitch is exact in binary floating point, so `pitch + k` is exact for an integer `k`.
 The laws are established for these seeds, windows, and shifts; they show that `tonal` is
-rotation-equivariant, not that its readings are musically right.
+rotation-equivariant (ambiguous candidates as a set, since the tonic orders exact ties), not
+that its readings are musically right.
 """
 
 from collections import Counter
