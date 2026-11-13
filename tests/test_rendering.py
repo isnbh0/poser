@@ -1406,7 +1406,7 @@ def pinned_song() -> Song:
 
 
 def test_integer_pitch_node_keys_are_pinned() -> None:
-    """These digests were computed before pitch became a number, so existing stems stay current."""
+    """These digests pin whole-pitch node keys, so stems already rendered stay current."""
     graph = pinned_song().graph()
 
     assert [(node.name, node_key(graph, node, None, ())) for node in graph.nodes] == [

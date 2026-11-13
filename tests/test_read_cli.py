@@ -160,3 +160,8 @@ def test_a_song_of_unpitched_tracks_reads_no_track(
         "tonal (tracks: none; every track is unpitched)\n"
         "  beats 0-1: unknowable: no selected notes sound\n"
     )
+
+
+def test_span_boundaries_print_without_float_noise() -> None:
+    assert read._beat(3 * 1.1) == "3.3"
+    assert read._beat(16.0) == "16"

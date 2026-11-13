@@ -314,7 +314,7 @@ def test_score_bytes_are_deterministic() -> None:
     )
 
 
-# A whole-pitch performance's command file, digested before scores.py took real pitches.
+# The digest of a whole-pitch performance's command file, pinned so whole-pitch scores stay fixed.
 PINNED_SCORE_SHA256 = "39b4db7df538e3a6dc031a9ce756d23269db0d09027da252722cf8285eefeb62"
 
 

@@ -73,7 +73,7 @@ def instrument(name, options, context):
 
 
 class PitchlessInstrument:
-    # An instrument written before instruments declared `pitches`.
+    # An instrument that does not declare `pitches`.
 
     @property
     def adapter_id(self):

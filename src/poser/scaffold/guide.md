@@ -23,8 +23,8 @@ middle C is 60, A4 is 69 = 440 Hz, and each whole step of 1 is a twelve-tone equ
 semitone. Any number from 0 to 127 is allowed, so 60.5 is a quarter tone above middle C. An
 instrument plays either any pitch or only whole pitches, and a fractional pitch on a whole-pitch
 instrument fails as `unsupported_pitch`; poser's own adapters say which in their sections of this
-guide. Mark a track `pitched: false` when its pitches pick drums or other keys rather than notes;
-its pitches must then be whole.
+guide. Mark a track `pitched: false` when its pitches pick drums or other mapped sounds rather than
+notes; its pitches must then be whole, and it is left out of readings but sounds the same.
 A song's last note end or controller change must fall within 3600 seconds.
 
 When the script format is enabled, write song scripts that import `poser` directly and run in
@@ -130,7 +130,7 @@ The bands are `sub` 20–60 Hz, `bass` 60–250 Hz, `low_mid` 250–500 Hz, `mid
 
 Track statuses from `render-song`: `rendered`, `silent`, `unknown_sound`, `load_failed`, `crashed`,
 `timed_out`, `late_start`, `unsupported_pitch`, which means the track has a fractional pitch and its
-instrument does not declare that it plays any pitch, and `upstream_failed`, which means the node was
+instrument plays only whole pitches, and `upstream_failed`, which means the node was
 skipped because an upstream node did not render. A track whose sound begins more than 0.1 s after
 its first note is rendered again, up to three times in all, and `render-song` and `export-song`
 print a line for each retry. A track that starts at the same moment in all three renders is kept, as

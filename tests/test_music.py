@@ -396,3 +396,10 @@ def test_transpose_degrees_refuses_a_result_out_of_range() -> None:
 def test_transpose_degrees_rejects_malformed_scales(bad: tuple[int, ...], message: str) -> None:
     with pytest.raises(ValueError, match=message):
         transpose_degrees(notes([60], 0, 1, 100), bad, 1)
+
+
+def test_transpose_helpers_refuse_bare_pitches() -> None:
+    with pytest.raises(ValueError, match="transpose takes notes"):
+        transpose(scale(60, "major"), 7)  # ty: ignore[invalid-argument-type]
+    with pytest.raises(ValueError, match="transpose_degrees takes notes"):
+        transpose_degrees([60], scale(60, "major"), 1)  # ty: ignore[invalid-argument-type]

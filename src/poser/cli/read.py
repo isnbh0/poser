@@ -33,7 +33,7 @@ PROG = "read-song"
 
 
 def _beat(value: float) -> str:
-    return str(int(value)) if float(value).is_integer() else repr(float(value))
+    return str(int(value)) if float(value).is_integer() else repr(round(float(value), 6))
 
 
 def _describe(outcome: Outcome[ReadingValue]) -> str:

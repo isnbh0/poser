@@ -204,6 +204,16 @@ def notes(
     )
 
 
+def _given_notes(notes: Iterable[Note], helper: str) -> tuple[Note, ...]:
+    given = tuple(notes)
+    for item in given:
+        if not isinstance(item, Note):
+            raise ValueError(
+                f"{helper} takes notes, such as notes([60, 64], 0, 1, 100); got {item!r}"
+            )
+    return given
+
+
 def _moved(notes: Sequence[Note], results: Sequence[float], helper: str) -> tuple[Note, ...]:
     """Return the notes at their new pitches, or raise naming the first result outside 0 to 127."""
     for note, result in zip(notes, results, strict=True):
@@ -218,11 +228,11 @@ def _moved(notes: Sequence[Note], results: Sequence[float], helper: str) -> tupl
 def transpose(notes: Iterable[Note], interval: float) -> tuple[Note, ...]:
     """Move every pitch by `interval` semitones, any finite number, such as 7 or -0.25.
 
-    Every frequency is multiplied by exactly 2 ** (interval / 12), so this works on any pitch.
+    Every frequency is multiplied by 2 ** (interval / 12), so this works on any pitch.
     Beats, lengths, and velocities are unchanged.
     """
     _require_number(interval, "transpose interval")
-    given = tuple(notes)
+    given = _given_notes(notes, "transpose")
     return _moved(given, [note.pitch + interval for note in given], "transpose")
 
 
@@ -252,7 +262,7 @@ def transpose_degrees(
     `scale` is one octave of a mode, as `scale()` returns it. A note is on the scale when its pitch
     is an integer whose pitch class is in the scale. Off-scale notes, including every fractional
     pitch, raise unless `off_scale="below"`, which moves each by the same amount as the highest
-    scale note at or below it.
+    scale note at or below it, so a chromatic note moves as a sharpened scale note.
     """
     steps_in_octave = _check_scale(scale)
     _require_int(steps, "transpose_degrees steps")
@@ -266,7 +276,7 @@ def transpose_degrees(
         octave, position = divmod(index, count)
         return root + offsets[position] + 12 * octave
 
-    given = tuple(notes)
+    given = _given_notes(notes, "transpose_degrees")
     results: list[float] = []
     off: list[Note] = []
     for note in given:

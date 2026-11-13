@@ -61,11 +61,13 @@ default assumes four 4-beat bars per window, the same assumption `bar_dbfs` make
 `frameworks = [{ use = "tonal", window_beats = 8 }]` in `[adapters]`.
 
 Each note counts for the beats it sounds in the window, whatever its velocity, under its
-nearest twelve-tone pitch class. Just intonation, meantone, and 19-EDO diatonic steps stay
-within 32 cents of a twelve-tone pitch, so they read as their keys; a note more than 40 cents
-from the nearest one lies between two classes. A key's value reports `correlation` and
-`deviation_cents`, the window's sounding-time-weighted mean distance from twelve-tone equal
-temperament.
+nearest twelve-tone pitch class, so a long held note can outweigh a melody: a scale over a held
+tonic pedal reads "no key fits". Repeat `--track` to read a melody without its drone. A note
+more than 40 cents from the nearest class lies between two classes. Classes sit at twelve-tone
+equal temperament from A4 = 440 Hz, so a just, meantone, or 19-EDO scale reads as its key when
+its tonic sits near a twelve-tone pitch, and the same music tuned 45 cents away does not. A
+key's value reports `correlation` and `deviation_cents`, the window's sounding-time-weighted
+mean distance from twelve-tone equal temperament.
 
 A window is, in this order:
 - unknowable, "no selected notes sound", when nothing sounds in it;
@@ -78,9 +80,11 @@ A window is, in this order:
 - unknowable, "no key fits", when the best of the 24 correlations is below 0.75;
 - known, when exactly one key is within 0.05 of the best correlation and that is at least 0.85;
 - otherwise ambiguous, listing every key within 0.05 of the best, most likely first. A lone key
-  between 0.75 and 0.85 is too weak to call, and is listed with the runners-up.
+  between 0.75 and 0.85 is too weak to call, and is listed with the key or keys tied for the
+  next correlation, however poorly they fit; compare the correlations to see a weak lone fit.
 
-Only major and minor keys are read: a modal melody reads as its relative major or minor.
+Only major and minor keys are read. A modal melody that dwells on its final reads as the major
+or minor key on that final, so a D dorian chant reads as D minor.
 Unpitched tracks are never read.
 """
 
@@ -193,6 +197,8 @@ def read_keys(request: ScoreRequest, window_beats: float) -> Reading[TonalKey]:
 
     Deterministic, and independent of the order notes are visited in: every sum is exact.
     """
+    if not (is_number(window_beats) and math.isfinite(window_beats) and window_beats > 0):
+        raise ValueError(f"window_beats must be a finite positive number, got {window_beats!r}")
     end = request.end
     spans: list[ReadingSpan[TonalKey]] = []
     index = 0

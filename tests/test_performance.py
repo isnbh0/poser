@@ -428,8 +428,8 @@ def test_a_performance_with_fractional_pitches_round_trips() -> None:
     assert pitches == [60.5, 60.5, 61.25, 61.25]
 
 
-def test_an_integer_performance_serializes_exactly_as_before() -> None:
-    """The literal was captured before pitch became a number."""
+def test_an_integer_performance_serializes_to_the_pinned_literal() -> None:
+    """The literal pins how a whole-pitch performance serializes."""
     track = Track(
         "lead",
         "Serum",

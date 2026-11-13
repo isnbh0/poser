@@ -265,3 +265,10 @@ def test_tonal_songs_are_mostly_known_in_their_key() -> None:
                 (outcome.value.tonic, outcome.value.mode) == (tonic, mode)
             )
     assert right / windows >= 0.9
+
+
+@pytest.mark.parametrize("window", [0, -1, float("nan"), float("inf")])
+def test_read_keys_refuses_a_window_that_is_not_a_positive_number(window: float) -> None:
+    song, _ = tonal_song(0)
+    with pytest.raises(ValueError, match="window_beats must be a finite positive number"):
+        read_keys(ScoreRequest.default(song), window)

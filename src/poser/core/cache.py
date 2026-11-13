@@ -38,8 +38,8 @@ def node_key(
     each feeding wire's upstream node key, wire kind, and wire gain, in render order, so a
     changed input changes every key downstream of it; the list is empty while no node accepts
     wires. Numbers are normalized so that `1` and `1.0` give the same key; a pitch is already
-    normalized, an integral one stored as an int, so whole pitches keep the keys they had when
-    pitch was always an int. `pitched` is left out, because it does not change the audio.
+    normalized, an integral one stored as an int, so a whole pitch digests as the int it
+    equals. `pitched` is left out, because it does not change the audio.
     """
     return digest(
         {
