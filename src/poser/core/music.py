@@ -5,11 +5,14 @@ Nothing here touches plugins, MIDI messages, or files, so every result is an ord
 scientific pitch notation, where middle C is `C4` = 60 and `A4` = 69.
 """
 
+import bisect
+import itertools
 import math
 import random
 import re
 from collections.abc import Iterable, Sequence
 from dataclasses import replace
+from typing import Literal
 
 from poser.core.song import Note, is_int, is_number
 
@@ -199,3 +202,89 @@ def notes(
         Note(beat=beat + (step or 0) * index, pitch=value, length=length, velocity=velocity)
         for index, value in enumerate(placed)
     )
+
+
+def _moved(notes: Sequence[Note], results: Sequence[float], helper: str) -> tuple[Note, ...]:
+    """Return the notes at their new pitches, or raise naming the first result outside 0 to 127."""
+    for note, result in zip(notes, results, strict=True):
+        if not 0 <= result <= 127:
+            raise ValueError(
+                f"{helper} moves the note at beat {note.beat} from pitch {note.pitch} to "
+                f"{result}, outside 0 to 127"
+            )
+    return tuple(replace(note, pitch=result) for note, result in zip(notes, results, strict=True))
+
+
+def transpose(notes: Iterable[Note], interval: float) -> tuple[Note, ...]:
+    """Move every pitch by `interval` semitones, any finite number, such as 7 or -0.25.
+
+    Every frequency is multiplied by exactly 2 ** (interval / 12), so this works on any pitch.
+    Beats, lengths, and velocities are unchanged.
+    """
+    _require_number(interval, "transpose interval")
+    given = tuple(notes)
+    return _moved(given, [note.pitch + interval for note in given], "transpose")
+
+
+def _check_scale(scale: Sequence[int]) -> tuple[int, ...]:
+    if isinstance(scale, str) or not isinstance(scale, Sequence):
+        raise ValueError(f"scale {scale!r} must be a sequence of integer pitches")
+    checked = tuple(scale)
+    if not checked:
+        raise ValueError("scale is empty")
+    for value in checked:
+        if not is_int(value):
+            raise ValueError(f"scale has pitch {value!r}, which is not an integer")
+    if any(later <= earlier for earlier, later in itertools.pairwise(checked)):
+        raise ValueError(f"scale {list(checked)} must be strictly ascending")
+    if checked[-1] - checked[0] >= 12:
+        raise ValueError(f"scale {list(checked)} must span less than 12, one octave of a mode")
+    return checked
+
+
+def transpose_degrees(
+    notes: Iterable[Note],
+    scale: Sequence[int],
+    steps: int,
+    *,
+    off_scale: Literal["refuse", "below"] = "refuse",
+) -> tuple[Note, ...]:
+    """Move every note `steps` positions along `scale`, continued through every octave.
+
+    `scale` is one octave of a mode, as `scale()` returns it. A note is on the scale when its pitch
+    is an integer whose pitch class is in the scale. Off-scale notes, including every fractional
+    pitch, raise unless `off_scale="below"`, which moves each by the same amount as the highest
+    scale note at or below it.
+    """
+    steps_in_octave = _check_scale(scale)
+    _require_int(steps, "transpose_degrees steps")
+    if off_scale not in ("refuse", "below"):
+        raise ValueError(f'off_scale {off_scale!r} must be "refuse" or "below"')
+    root = steps_in_octave[0]
+    offsets = [value - root for value in steps_in_octave]
+    count = len(offsets)
+
+    def continued(index: int) -> int:
+        octave, position = divmod(index, count)
+        return root + offsets[position] + 12 * octave
+
+    given = tuple(notes)
+    results: list[float] = []
+    off: list[Note] = []
+    for note in given:
+        # Scale pitches are integers, so the highest one at or below the pitch is also the highest
+        # at or below its floor.
+        octave, within = divmod(math.floor(note.pitch) - root, 12)
+        position = bisect.bisect_right(offsets, within) - 1
+        if not (is_int(note.pitch) and offsets[position] == within):
+            off.append(note)
+        index = octave * count + position
+        results.append(note.pitch + continued(index + steps) - continued(index))
+    if off and off_scale == "refuse":
+        first = off[0]
+        counted = "1 note is" if len(off) == 1 else f"{len(off)} notes are"
+        raise ValueError(
+            f"{counted} off the scale, first at beat {first.beat} with pitch {first.pitch}; "
+            f'pass off_scale="below" to move each by the same amount as the scale note below it'
+        )
+    return _moved(given, results, "transpose_degrees")

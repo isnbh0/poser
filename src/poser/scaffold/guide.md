@@ -72,6 +72,9 @@ Music helpers, from `poser`; their docstrings give the parameters:
 - `notes` — notes from pitches, together as a chord or `step` beats apart as a line.
 - `swing` — notes with every off-beat moved later, for a swung feel.
 - `humanize` — notes with seeded, repeatable velocity and timing variation.
+- `transpose` — notes moved by an interval in semitones, any number; works on any pitch.
+- `transpose_degrees` — notes moved along a scale; refuses off-scale notes unless
+  `off_scale="below"`.
 
 ## Sounds
 

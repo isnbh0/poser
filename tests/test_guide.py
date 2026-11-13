@@ -31,7 +31,17 @@ LINES = GUIDE.splitlines()
 FENCE = re.compile(r"^```([a-z]+)\n(.*?)^```$", re.MULTILINE | re.DOTALL)
 BACKTICKED = re.compile(r"`([^`\n]+)`")
 INT_RANGE = re.compile(r"^(-?\d+) to (-?\d+)$")
-MUSIC_HELPERS = ("pitch", "scale", "degree", "chord", "swing", "humanize", "notes")
+MUSIC_HELPERS = (
+    "pitch",
+    "scale",
+    "degree",
+    "chord",
+    "swing",
+    "humanize",
+    "notes",
+    "transpose",
+    "transpose_degrees",
+)
 COMPOSER_API = [
     "ControlChange",
     "Graph",
@@ -48,6 +58,8 @@ COMPOSER_API = [
     "pitch",
     "scale",
     "swing",
+    "transpose",
+    "transpose_degrees",
 ]
 
 

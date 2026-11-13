@@ -9,7 +9,17 @@ from pathlib import Path
 import pytest
 
 from poser.core import music
-from poser.core.music import chord, degree, humanize, notes, pitch, scale, swing
+from poser.core.music import (
+    chord,
+    degree,
+    humanize,
+    notes,
+    pitch,
+    scale,
+    swing,
+    transpose,
+    transpose_degrees,
+)
 from poser.core.song import Note
 
 
@@ -306,3 +316,77 @@ def test_twelve_tone_helpers_still_take_whole_pitches() -> None:
         music.scale(60.5, "major")  # ty: ignore[invalid-argument-type]
     with pytest.raises(ValueError, match=r"not an integer|must be an integer"):
         music.chord(60.5, "maj")  # ty: ignore[invalid-argument-type]
+
+
+def pitches(moved: tuple[Note, ...]) -> list[float]:
+    return [note.pitch for note in moved]
+
+
+def test_transpose_moves_any_pitch_by_any_interval() -> None:
+    melody = notes([60, 60.5, 61], 0, 1, 100, step=1)
+    assert pitches(transpose(melody, 7)) == [67, 67.5, 68]
+    assert pitches(transpose(melody, -0.25)) == [59.75, 60.25, 60.75]
+    assert [(n.beat, n.length, n.velocity) for n in transpose(melody, 7)] == [
+        (n.beat, n.length, n.velocity) for n in melody
+    ]
+
+
+def test_transpose_stores_a_whole_result_as_an_int() -> None:
+    (moved,) = transpose(notes([60], 0, 1, 100), 7.0)
+    assert moved.pitch == 67
+    assert isinstance(moved.pitch, int)
+
+
+def test_transpose_refuses_a_result_out_of_range() -> None:
+    melody = notes([60, 120, 125], 0, 1, 100, step=1)
+    with pytest.raises(
+        ValueError, match=r"^transpose moves the note at beat 1 from pitch 120 to 128"
+    ):
+        transpose(melody, 8)
+
+
+C_MAJOR = scale(60, "major")
+
+
+def test_transpose_degrees_moves_scale_notes_along_the_scale() -> None:
+    melody = notes(C_MAJOR, 0, 1, 100, step=1)
+    assert pitches(transpose_degrees(melody, C_MAJOR, 4)) == [67, 69, 71, 72, 74, 76, 77]
+    assert pitches(transpose_degrees(notes([60], 0, 1, 100), C_MAJOR, -1)) == [59]
+
+
+@pytest.mark.parametrize("off", [61, 60.5])
+def test_transpose_degrees_refuses_off_scale_notes_by_default(off: float) -> None:
+    melody = notes([60, off, 64, off], 0, 1, 100, step=1)
+    with pytest.raises(
+        ValueError, match=rf"^2 notes are off the scale, first at beat 1 with pitch {off};"
+    ):
+        transpose_degrees(melody, C_MAJOR, 4)
+
+
+def test_transpose_degrees_moves_off_scale_notes_with_the_note_below() -> None:
+    melody = notes([61, 60.5, 70], 0, 1, 100, step=1)
+    assert pitches(transpose_degrees(melody, C_MAJOR, 4, off_scale="below")) == [68, 67.5, 77]
+
+
+def test_transpose_degrees_anchors_below_the_range() -> None:
+    # In D major, the scale note below pitch 0 is the continued scale's B at -1, and one step
+    # moves that B to C# at 1.
+    (moved,) = transpose_degrees(notes([0], 0, 1, 100), scale(62, "major"), 1, off_scale="below")
+    assert moved.pitch == 2
+
+
+def test_transpose_degrees_refuses_a_result_out_of_range() -> None:
+    with pytest.raises(ValueError, match=r"^transpose_degrees moves the note at beat 0"):
+        transpose_degrees(notes([127], 0, 1, 100), scale(60, "major"), 1)
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [(), (64, 60, 67), (60, 62.5, 64), (60, 62, 72), (60, 64, 75)],
+    ids=["empty", "unsorted", "fractional", "spans-12", "spans-15"],
+)
+def test_transpose_degrees_rejects_malformed_scales(bad: tuple[int, ...]) -> None:
+    with pytest.raises(
+        ValueError, match=r"scale is empty|strictly ascending|not an integer|span less than 12"
+    ):
+        transpose_degrees(notes([60], 0, 1, 100), bad, 1)
