@@ -51,15 +51,24 @@ def build() -> Song:
 | `gain` | track, optional | decibels | -60 to 12 |
 | `cc` | track, optional | list of controller changes, in time order | |
 | `pitched` | track, optional | true or false | false for drums and other key-mapped sounds |
-| `beat` | note, controller change | number | 0 or later |
+| `beat` | note, controller change, mark | number | 0 or later |
 | `pitch` | note | number | 0 to 127 |
 | `length` | note | beats | above 0 |
 | `velocity` | note | integer | 1 to 127 |
 | `control` | controller change | integer | 0 to 119 |
 | `value` | controller change | integer | 0 to 127 |
 | `shape` | controller change, optional | `step` or `linear` | |
+| `marks` | song, optional | layer names to lists of marks | lowercase letters, digits, `_`, `-`, starting with a letter or digit |
+| `end` | mark | number | after `beat` |
+| `text` | mark | text | one line, no leading or trailing spaces |
 
 A `step` holds until that controller's next change; `linear` ramps to it and needs a later one.
+
+Marks are the author's labels over spans of beats, in layers named for what they describe, such as
+`chords`, `key`, or `parts`. Marks in a layer are in order and do not overlap, and a gap means
+nothing was said there. Marks may extend past the last note; anything reading them stops at the
+song's end. Marks never change audio or readings. In Python, write
+`marks=Marks({"chords": [Mark(0, 4, "Am"), Mark(4, 8, "F")]})`.
 
 Track `effects` form a recipe chain: the first hears the track, each next hears its predecessor.
 Nodes are named `<track>.<effect>`, with repeats numbered (`bass.drive.2`). Track `gain` fades

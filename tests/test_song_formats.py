@@ -1,5 +1,6 @@
 """Tests for the song formats: YAML song files and Python song scripts."""
 
+import hashlib
 import os
 import stat
 from pathlib import Path
@@ -10,17 +11,19 @@ import pytest
 import yaml
 from contracts import check_record_writer_contract, check_song_format_contract
 from helpers import SURGE_DIR
-from test_song import cc_track_song, gain_song, helper_song, valid_song
+from test_song import cc_track_song, gain_song, helper_song, two_layer_song, valid_song
 
 from poser.adapters import song_formats
 from poser.adapters.song_formats import (
     SONG_FORMATS,
     ScriptSongFormat,
     YamlSongFormat,
+    _UniqueKeyLoader,
     write_yaml_song,
 )
 from poser.core.graph import Graph, Node, Wire
 from poser.core.loading import load_song
+from poser.core.marks import Mark, Marks
 from poser.core.song import Note, Song, SongError, Track
 
 
@@ -559,3 +562,110 @@ def test_yaml_data_with_engine_is_refused(tmp_path: Path) -> None:
         load_song(path, SONG_FORMATS)
 
     assert error.value.problems == ["tracks[0]: unknown key 'engine'"]
+
+
+# Marks: records keep their text without marks, carry marks when present, and keys never repeat.
+
+# The dump of `helper_song()` before marks existed, pinned so records of songs without marks keep
+# their bytes and their `song_sha256`.
+HELPER_SONG_SHA256 = "9c522a73c99dbbfb9b40dbf4226849606cb293d61776495ddfc0e0c323ec32ed"
+
+
+def test_a_dump_without_marks_is_unchanged() -> None:
+    text = YamlSongFormat().dump(helper_song())
+    assert "marks" not in text
+    assert hashlib.sha256(text.encode()).hexdigest() == HELPER_SONG_SHA256
+
+
+def test_a_dump_with_marks_loads_back_equal(tmp_path: Path) -> None:
+    song = two_layer_song()
+    text = YamlSongFormat().dump(song)
+    assert text.startswith(YamlSongFormat().dump(helper_song()))
+    assert "marks:\n  chords:\n" in text
+    path = tmp_path / "song.yaml"
+    path.write_text(text)
+    assert loaded(path) == song
+
+
+MARKED_SONG = """bpm: 120
+tracks:
+  - name: lead
+    sound: serum
+    notes:
+      - {beat: 0, pitch: 60, length: 4, velocity: 90}
+marks:
+  parts:
+    - {beat: 0, end: 4, text: intro}
+"""
+
+
+@pytest.mark.parametrize(
+    ("text", "key", "line"),
+    [
+        (MARKED_SONG + "  parts:\n    - {beat: 4, end: 8, text: verse}\n", "parts", 10),
+        ("bpm: 90\n" + MARKED_SONG, "bpm", 2),
+        (MARKED_SONG.replace("velocity: 90}", "velocity: 90, beat: 1}"), "beat", 6),
+    ],
+)
+def test_a_repeated_yaml_key_fails_naming_the_key_and_line(
+    tmp_path: Path, text: str, key: str, line: int
+) -> None:
+    path = tmp_path / "song.yaml"
+    path.write_text(text)
+    with pytest.raises(SongError) as error:
+        loaded(path)
+    assert error.value.problems == [f"cannot read {path}: duplicate key {key!r} at line {line}"]
+
+
+def test_yaml_merge_keys_still_load(tmp_path: Path) -> None:
+    path = tmp_path / "song.yaml"
+    path.write_text(
+        "bpm: 120\ntracks:\n  - name: lead\n    sound: serum\n    notes:\n"
+        "      - &note {beat: 0, pitch: 60, length: 1, velocity: 90}\n"
+        "      - {<<: *note, beat: 1}\n"
+    )
+    song = loaded(path)
+    assert isinstance(song, Song)
+    assert [(n.beat, n.pitch, n.velocity) for n in song.tracks[0].notes] == [
+        (0, 60, 90),
+        (1, 60, 90),
+    ]
+
+
+def test_a_merge_of_a_mapping_that_overrides_its_own_merge_is_no_duplicate(
+    tmp_path: Path,
+) -> None:
+    # The alias `y` merges `x` before `x` itself is built, which flattens `x` in place.
+    text = "base: &base {a: 1}\nouter:\n  x: &x {<<: *base, a: 2}\ny: {<<: *x}\n"
+    path = tmp_path / "song.yaml"
+    path.write_text(text)
+    with pytest.raises(SongError) as error:
+        loaded(path)
+    assert not any("duplicate" in problem for problem in error.value.problems)
+    assert yaml.load(text, Loader=_UniqueKeyLoader) == yaml.safe_load(text)  # noqa: S506
+
+
+def test_a_mapping_merged_elsewhere_still_refuses_its_own_duplicates(tmp_path: Path) -> None:
+    path = tmp_path / "song.yaml"
+    path.write_text("m: &m {a: 1, a: 2}\nn: {<<: *m}\n")
+    with pytest.raises(SongError, match="duplicate key 'a' at line 1"):
+        loaded(path)
+
+
+def test_a_script_song_keeps_its_marks(tmp_path: Path) -> None:
+    path = write_script(
+        tmp_path,
+        """
+from poser import Mark, Marks, Note, Song, Track
+
+
+def build():
+    lead = Track("lead", "serum", (Note(0, 60, 4, 90),))
+    return Song(120, (lead,), marks=Marks({"parts": [Mark(0, 8, "intro")]}))
+""",
+    )
+
+    song = load_song(path, SONG_FORMATS)
+
+    assert isinstance(song, Song)
+    assert song.marks == Marks({"parts": [Mark(0, 8, "intro")]})

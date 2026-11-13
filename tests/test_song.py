@@ -7,6 +7,7 @@ from typing import cast
 import pytest
 
 from poser.core.graph import Graph, GraphError, Node, Wire
+from poser.core.marks import NO_MARKS, Mark, Marks
 from poser.core.music import chord, notes, pitch, scale, swing
 from poser.core.names import Identifier, TrackName
 from poser.core.song import (
@@ -852,3 +853,109 @@ def test_a_compiled_graph_carries_pitched_on_the_track_node() -> None:
 def test_only_a_track_node_can_be_unpitched() -> None:
     with pytest.raises(GraphError, match=r"Node\.pitched: only a track node can be unpitched"):
         Node("wet", "effect", effect="reverb", pitched=False)
+
+
+# Marks: no law ties them to the notes, compiled graphs drop them, and YAML carries them.
+
+
+def one_track_song(marks: Marks = NO_MARKS) -> Song:
+    """A song whose last beat is 4."""
+    return Song(100, (Track("lead", "serum", (Note(0, 60, 4, 90),)),), marks=marks)
+
+
+@pytest.mark.parametrize("beat", [0, 3.5, 100])
+def test_marks_may_start_anywhere_after_the_song_starts(beat: float) -> None:
+    song = one_track_song(Marks({"parts": [Mark(beat, beat + 8, "x")]}))
+    assert song.marks.layers["parts"][0].beat == beat
+
+
+def test_a_song_rejects_marks_that_are_not_marks() -> None:
+    with pytest.raises(SongError, match=r"Song\.marks: must be Marks"):
+        Song(100, one_track_song().tracks, marks={"parts": []})  # ty: ignore[invalid-argument-type]
+
+
+def test_compiled_graphs_carry_no_marks() -> None:
+    song = one_track_song(Marks({"parts": [Mark(0, 4, "intro")]}))
+    assert song.graph().marks == Marks()
+    assert song.graph() == one_track_song().graph()
+
+
+def two_layer_song() -> Song:
+    return Song(
+        helper_song().bpm,
+        helper_song().tracks,
+        marks=Marks(
+            {
+                "chords": [Mark(0, 4, "Am"), Mark(4, 8.5, "F/C")],
+                "parts": [Mark(0, 2, "intro"), Mark(6, 100, "verse")],
+            }
+        ),
+    )
+
+
+def test_songs_with_marks_round_trip_through_parse_song() -> None:
+    song = two_layer_song()
+    data = song_to_data(song)
+    assert list(data) == ["bpm", "tracks", "marks"]
+    assert data["marks"]["chords"][1] == {"beat": 4, "end": 8.5, "text": "F/C"}
+    assert parse_song(data) == song
+
+
+def test_songs_without_marks_write_no_marks_key() -> None:
+    data = song_to_data(helper_song())
+    assert "marks" not in data
+    assert data == {k: v for k, v in song_to_data(two_layer_song()).items() if k != "marks"}
+
+
+def with_marks(marks: object) -> dict[str, object]:
+    return {**valid_song(), "marks": marks}
+
+
+MARK = {"beat": 0, "end": 4, "text": "Am"}
+
+
+@pytest.mark.parametrize(
+    ("marks", "problem"),
+    [
+        ([MARK], "marks: must be a mapping of layer names to marks"),
+        ({"chords": MARK}, "marks.chords: must be a list of marks"),
+        ({"chords": []}, "marks.chords: must list at least one mark"),
+        ({"chords": ["Am"]}, "marks.chords[0]: must be a mapping"),
+        ({"chords": [{"beat": 0, "text": "Am"}]}, "marks.chords[0]: missing key 'end'"),
+        ({"chords": [{"beat": -1, "text": "Am"}]}, "marks.chords[0].beat: must not be negative"),
+        ({"chords": [{**MARK, "bass": 1}]}, "marks.chords[0]: unknown key 'bass'"),
+        ({"chords": [{**MARK, "text": 7}]}, "marks.chords[0].text: must be text; quote numbers"),
+        ({"chords": [{**MARK, "text": True}]}, "marks.chords[0].text: must be text"),
+        ({"chords": [{**MARK, "end": 0}]}, "marks.chords[0].end: must be after beat"),
+        (
+            {"chords": [MARK, {**MARK, "beat": 3, "end": 5}]},
+            "marks.chords[1]: must start at or after the previous mark's end, beat 4, got beat 3",
+        ),
+        ({"Chords": [MARK]}, "marks.Chords: layer names are lowercase letters"),
+        ({1: [MARK]}, "marks.1: layer names are lowercase letters"),
+        ({"": [MARK]}, "marks.'': layer names are lowercase letters"),
+        ({"a b": [MARK]}, "marks.'a b': layer names are lowercase letters"),
+    ],
+)
+def test_yaml_marks_problems_name_their_path(marks: object, problem: str) -> None:
+    with pytest.raises(SongError) as error:
+        parse_song(with_marks(marks))
+    assert any(p.startswith(problem) for p in error.value.problems), error.value.problems
+
+
+def test_every_broken_mark_is_reported_at_once() -> None:
+    marks = {
+        "chords": [{"beat": 0, "end": 4}, {**MARK, "text": " Am"}],
+        "Parts": [MARK],
+        "key": [MARK, {**MARK, "beat": 1}],
+    }
+    with pytest.raises(SongError) as error:
+        parse_song({**with_marks(marks), "bpm": 0})
+    paths = [problem.split(":")[0] for problem in error.value.problems]
+    assert paths == [
+        "bpm",
+        "marks.chords[0]",
+        "marks.chords[1].text",
+        "marks.Parts",
+        "marks.key[1]",
+    ]

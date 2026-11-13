@@ -27,6 +27,7 @@ from poser.core.analysis import AnalysisTools, analyze_song
 from poser.core.audio import NUM_CHANNELS, SAMPLE_RATE, Audio
 from poser.core.cache import Stamp, StampProblem, node_key, sound_key
 from poser.core.graph import BUFFER_SIZE, Graph, Node, Wire
+from poser.core.marks import Mark, Marks
 from poser.core.names import Identifier, NodeName, SongId, TrackName
 from poser.core.performance import (
     Control,
@@ -1474,3 +1475,48 @@ def test_a_whole_pitch_song_on_a_semitone_instrument_renders_as_before(tmp_path:
     assert [request.performance for request in setup.instrument.renders] == [
         perform(song, track) for track in song.tracks
     ]
+
+
+# Marks: the author's marks reach neither render key.
+
+KEY_MARKS = Marks(
+    {
+        "parts": [Mark(0, 1, "intro"), Mark(1, 100, "coda — fin")],
+        "chords": [Mark(0, 2, "C"), Mark(2, 64, "Gsus4/D")],
+    }
+)
+
+
+def test_marks_cannot_change_a_node_key() -> None:
+    """Fails if a change routes marks into `node_key`: the pinned digests stay pinned."""
+    marked = dataclasses.replace(pinned_song().graph(), marks=KEY_MARKS)
+
+    assert marked.marks == KEY_MARKS
+    assert [(node.name, node_key(marked, node, None, ())) for node in marked.nodes] == [
+        ("chord", "e0dbc5b150e2e4a1b57074736bc424d9528449c1ebca643d0b0ce28675230cbc"),
+        ("line", "16fb96053a9f6ed6dbe849904065436d74719a046abcccc0c9f74f4a8a55e6f6"),
+    ]
+
+
+def test_marks_cannot_change_a_cycle_key() -> None:
+    """Fails if a change routes marks into `cycle_key`."""
+    note = (Note(0, 60, 1, 100),)
+    lead = Node("lead", "track", sound="fake", notes=note)
+    loop = Node("lead.loop", "effect", effect="crush")
+    late = Node("lead.late", "delay", delay_samples=BUFFER_SIZE)
+    wires = (
+        Wire("lead", "lead.loop", "audio"),
+        Wire("lead.loop", "lead.late", "audio"),
+        Wire("lead.late", "lead.loop", "audio"),
+    )
+    graph = Graph(120, (lead, loop, late), wires, mode="feedback")
+    marked = dataclasses.replace(graph, marks=KEY_MARKS)
+    members = (late, loop)
+    identities = {"lead.loop": "crush-identity", "lead.late": None}
+    inside = wires[1:]
+    upstream = (("lead", "lead.loop", "audio", 0.0),)
+
+    def key(on: Graph) -> str:
+        return cache.cycle_key(on, loop, members, identities, inside, upstream)
+
+    assert key(marked) == key(graph)

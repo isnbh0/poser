@@ -19,6 +19,7 @@ from poser.core.graph import (
     Wire,
     instantaneous_order,
 )
+from poser.core.marks import Mark, Marks
 from poser.core.song import ControlChange, Note, Song, Track, parse_song
 
 
@@ -702,3 +703,25 @@ def test_instantaneous_order_is_deterministic_and_ties_break_by_name() -> None:
     assert first == second == ("drive", "sum", "late")
     with pytest.raises(GraphError, match="instantaneous wires form a cycle"):
         instantaneous_order(["a", "b"], [], [("a", "b"), ("b", "a")])
+
+
+# Marks: a graph holds the author's marks and writes them only when there are any.
+
+
+def test_a_graph_accepts_marks_and_rejects_anything_else() -> None:
+    marks = Marks({"parts": [Mark(0, 4, "intro")]})
+    assert Graph(120, (make_node(),), marks=marks).marks == marks
+    assert Graph(120, (make_node(),)).marks == Marks()
+    with pytest.raises(GraphError, match=r"Graph\.marks: must be Marks"):
+        Graph(120, (make_node(),), marks={"parts": []})  # ty: ignore[invalid-argument-type]
+
+
+def test_to_data_writes_marks_only_when_there_are_any() -> None:
+    plain = Graph(120, (make_node(),))
+    marked = Graph(120, (make_node(),), marks=Marks({"parts": [Mark(0, 4.5, "intro")]}))
+
+    assert "marks" not in plain.to_data()
+    assert plain.to_data() == Graph(120, (make_node(),), marks=Marks()).to_data()
+    assert list(marked.to_data()) == ["bpm", "mode", "nodes", "wires", "marks"]
+    assert marked.to_data()["marks"] == {"parts": [{"beat": 0, "end": 4.5, "text": "intro"}]}
+    assert {k: v for k, v in marked.to_data().items() if k != "marks"} == plain.to_data()

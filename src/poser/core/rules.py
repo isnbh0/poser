@@ -151,6 +151,44 @@ def _note_problems(values: Mapping[str, object], where: str) -> list[str]:
     return problems
 
 
+def _bound_problems(value: object, where: str) -> list[str]:
+    """Check one bound of a span: a finite number."""
+    if is_number(value):
+        return []
+    return [f"{where}: must be a finite number, got {value!r}"]
+
+
+def _span_problems(start: object, end: object, where: str, start_field: str) -> list[str]:
+    """Check a span of beats: finite bounds with `0 <= start < end`.
+
+    Every span type checks its bounds here; `start_field` names its start, such as `beat`.
+    """
+    problems = _bound_problems(start, _at(where, start_field)) + _bound_problems(
+        end, _at(where, "end")
+    )
+    if problems or not (is_number(start) and is_number(end)):
+        return problems
+    if start < 0:
+        problems.append(f"{_at(where, start_field)}: must not be negative, got {start!r}")
+    # Compared as stored: two ints can round to one float.
+    if float(end) <= float(start):
+        problems.append(f"{_at(where, 'end')}: must be after {start_field} {start!r}, got {end!r}")
+    return problems
+
+
+def _line_problems(text: object, where: str) -> list[str]:
+    """Check a label: one non-empty line of text without leading or trailing spaces."""
+    if not isinstance(text, str):
+        return [
+            f"{where}: must be text; quote numbers and words like yes or no in YAML, got {text!r}"
+        ]
+    if not text or "\r" in text or "\n" in text or text != text.strip():
+        return [
+            f"{where}: must be one non-empty line without leading or trailing spaces, got {text!r}"
+        ]
+    return []
+
+
 def is_shape(value: object) -> TypeGuard[Shape]:
     return value in SHAPES
 

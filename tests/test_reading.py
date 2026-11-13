@@ -1,6 +1,7 @@
 """The reading types' laws, the score request, and `read_song`'s error handling."""
 
 import math
+import re
 from dataclasses import dataclass
 from typing import cast
 
@@ -101,9 +102,23 @@ def test_unknowable_needs_one_line_of_reason(reason: str) -> None:
         Unknowable(reason)
 
 
-@pytest.mark.parametrize(("start", "end"), [(2, 2), (3, 2), (-1, 2), (0, math.inf)])
-def test_a_span_needs_a_finite_start_before_its_end(start: float, end: float) -> None:
-    with pytest.raises(ValueError, match="ReadingSpan"):
+@pytest.mark.parametrize(
+    ("start", "end", "problem"),
+    [
+        (2, 2, "ReadingSpan.end: must be after start 2"),
+        (3, 2, "ReadingSpan.end: must be after start 3"),
+        (-1, 2, "ReadingSpan.start: must not be negative"),
+        (0, math.inf, "ReadingSpan.end: must be a finite number"),
+        (-math.inf, 1, "ReadingSpan.start: must be a finite number"),
+        (math.nan, 1, "ReadingSpan.start: must be a finite number"),
+        (0, math.nan, "ReadingSpan.end: must be a finite number"),
+        (True, 2, "ReadingSpan.start: must be a finite number"),
+        ("0", 2, "ReadingSpan.start: must be a finite number"),
+        (2**53, 2**53 + 1, "ReadingSpan.end: must be after start"),
+    ],
+)
+def test_a_span_needs_a_finite_start_before_its_end(start: float, end: float, problem: str) -> None:
+    with pytest.raises(ValueError, match=re.escape(problem)):
         ReadingSpan(start, end, Unknowable("why"))
 
 

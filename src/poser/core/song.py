@@ -5,6 +5,18 @@ from dataclasses import dataclass
 from typing import NotRequired, TypedDict, cast
 
 from poser.core.graph import Graph, Node, Wire
+from poser.core.marks import (
+    NO_MARKS,
+    Mark,
+    Marks,
+    MarksData,
+    _layer_list_problems,
+    _layer_name_problems,
+    _layer_order_problems,
+    _mark_problems,
+    _marks_field_problems,
+    _marks_to_data,
+)
 from poser.core.names import TrackName
 
 # `CONTROL_MAX` and `MAX_SONG_S` stay importable from here, where every module found them before.
@@ -40,6 +52,8 @@ from poser.core.rules import (
 from poser.core.sounds import SoundRef, parse_sound_ref
 
 SONG_KEYS = {"bpm", "tracks"}
+OPTIONAL_SONG_KEYS = {"marks"}
+MARK_KEYS = {"beat", "end", "text"}
 TRACK_KEYS = {"name", "sound", "notes"}
 OPTIONAL_TRACK_KEYS = {"gain", "cc", "effects", "pitched"}
 NOTE_KEYS = {"beat", "pitch", "length", "velocity"}
@@ -92,9 +106,12 @@ class Track:
 class Song:
     bpm: float
     tracks: tuple[Track, ...]
+    # The author's marks, which no render, key, or reading uses.
+    marks: Marks = NO_MARKS
 
     def __post_init__(self) -> None:
-        if problems := _song_problems({"bpm": self.bpm, "tracks": self.tracks}, "Song"):
+        values = {"bpm": self.bpm, "tracks": self.tracks, "marks": self.marks}
+        if problems := _song_problems(values, "Song"):
             raise SongError(problems)
         object.__setattr__(self, "tracks", tuple(self.tracks))
 
@@ -109,7 +126,7 @@ class Song:
         a problem naming it. Chain nodes are named `<track>.<effect>`, and a recipe a track lists
         twice takes an ordinal: `<track>.drive.2`. The track's gain compiles onto the chain's
         leaf, so the fader survives chains; the leaf's gain is in no key, so a gain-only edit
-        renders nothing.
+        renders nothing. The graph carries no marks: nothing that renders reads them.
         """
         known = set(effects)
         problems = [
@@ -138,7 +155,7 @@ class Song:
             )
             previous = track.name
             counts: dict[str, int] = {}
-            for last, recipe in _marks(track.effects):
+            for last, recipe in _leaf_flags(track.effects):
                 counts[recipe] = counts.get(recipe, 0) + 1
                 name = _instance_name(f"{track.name}.{recipe}", counts[recipe], generated)
                 if name in authored:
@@ -186,7 +203,7 @@ def song_graph(song: Song | Graph, effects: Sequence[str] = ()) -> Graph:
     return song.graph(effects)
 
 
-def _marks(recipes: Sequence[str]) -> Sequence[tuple[bool, str]]:
+def _leaf_flags(recipes: Sequence[str]) -> Sequence[tuple[bool, str]]:
     """Pair each of a chain's recipes with whether it is the chain's leaf."""
     return [(index == len(recipes) - 1, recipe) for index, recipe in enumerate(recipes)]
 
@@ -217,11 +234,14 @@ class TrackData(TypedDict):
 class SongData(TypedDict):
     bpm: float
     tracks: list[TrackData]
+    marks: NotRequired[MarksData]
 
 
 def _song_problems(values: Mapping[str, object], where: str) -> list[str]:
     """Check every field of a song built in code, whose tracks are objects."""
     problems = _song_field_problems(values, where)
+    if "marks" in values:
+        problems += _marks_field_problems(values["marks"], where)
     tracks = values["tracks"]
     if isinstance(tracks, list | tuple):
         items = cast("Sequence[object]", tracks)
@@ -366,6 +386,49 @@ def _parse_track(value: object, where: str, problems: list[str]) -> Track | None
     )
 
 
+def _parse_mark(value: object, where: str, problems: list[str]) -> Mark | None:
+    data = _mapping(value)
+    if data is None:
+        problems.append(f"{where}: must be a mapping, got {value!r}")
+        return None
+    _check_keys(data, MARK_KEYS, where, problems)
+
+    field_problems = _mark_problems(_present(data, MARK_KEYS), where)
+    problems += field_problems
+    beat, end, text = data.get("beat"), data.get("end"), data.get("text")
+    # These fail only when a problem was reported. A missing key reads as None.
+    if field_problems or not (is_number(beat) and is_number(end) and isinstance(text, str)):
+        return None
+    return Mark(beat=beat, end=end, text=text)
+
+
+def _parse_marks(value: object, problems: list[str]) -> Marks:
+    """Parse a song's marks, reporting every problem at its path, such as `marks.chords[1]`."""
+    data = _mapping(value)
+    if data is None:
+        problems.append(f"marks: must be a mapping of layer names to marks, got {value!r}")
+        return Marks()
+    before = len(problems)
+    layers: dict[str, list[Mark]] = {}
+    for name, raw in data.items():
+        where = f"marks.{name}"
+        problems += _layer_name_problems(name, "marks")
+        list_problems = _layer_list_problems(raw, where)
+        problems += list_problems
+        if list_problems or not isinstance(raw, list):
+            continue
+        parsed = [
+            (index, _parse_mark(item, f"{where}[{index}]", problems))
+            for index, item in enumerate(raw)
+        ]
+        valid = [(index, mark) for index, mark in parsed if mark is not None]
+        problems += _layer_order_problems(valid, where)
+        if isinstance(name, str):
+            layers[name] = [mark for _, mark in valid]
+    # Marks are built only from a layer set without problems, which the constructor accepts.
+    return Marks() if len(problems) > before else Marks(layers)
+
+
 def parse_song(value: object) -> Song:
     """Validate loaded song data, reporting every problem found rather than only the first."""
     data = _mapping(value)
@@ -373,7 +436,7 @@ def parse_song(value: object) -> Song:
         raise SongError([f"song must be a mapping, got {value!r}"])
 
     problems: list[str] = []
-    _check_keys(data, SONG_KEYS, "", problems)
+    _check_keys(data, SONG_KEYS, "", problems, OPTIONAL_SONG_KEYS)
     problems += _song_field_problems(_present(data, SONG_KEYS), "")
 
     raw_tracks = data.get("tracks")
@@ -385,6 +448,7 @@ def parse_song(value: object) -> Song:
         ]
         tracks = [track for track in parsed if track is not None]
     problems += _duplicate_name_problems(tracks, "")
+    marks = _parse_marks(data["marks"], problems) if "marks" in data else Marks()
 
     bpm = data.get("bpm")
     # `bpm` fails `is_number` only when a problem was reported.
@@ -392,7 +456,7 @@ def parse_song(value: object) -> Song:
         raise SongError(problems)
     if problems := _length_problems(bpm, tracks, "song"):
         raise SongError(problems)
-    return Song(bpm=bpm, tracks=tuple(tracks))
+    return Song(bpm=bpm, tracks=tuple(tracks), marks=marks)
 
 
 def _track_to_data(track: Track) -> TrackData:
@@ -422,7 +486,11 @@ def song_to_data(song: Song) -> SongData:
 
     Numbers are written in one spelling, so equal songs give equal data.
     """
-    return {
+    data: SongData = {
         "bpm": _plain(song.bpm),
         "tracks": [_track_to_data(track) for track in song.tracks],
     }
+    # A song without marks keeps the record text it had before marks existed.
+    if song.marks:
+        data["marks"] = _marks_to_data(song.marks)
+    return data

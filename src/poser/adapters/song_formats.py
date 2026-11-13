@@ -6,6 +6,7 @@ import stat
 import tempfile
 from collections.abc import Mapping
 from pathlib import Path
+from typing import override
 
 import yaml
 
@@ -15,6 +16,54 @@ from poser.core.jsonvalue import JsonValue
 from poser.core.names import Suffix
 from poser.core.ports import AdapterContext, SongFormat
 from poser.core.song import Song, SongError, parse_song, song_to_data
+
+
+class _DuplicateKeyError(yaml.YAMLError):
+    """A YAML mapping repeats a key, which `yaml.safe_load` would drop silently."""
+
+
+_MERGE_TAG = "tag:yaml.org,2002:merge"
+
+
+class _UniqueKeyLoader(yaml.SafeLoader):
+    """The safe loader, refusing any mapping that repeats a key.
+
+    Merging (`<<`) rewrites an anchored mapping's pairs in place, possibly before that mapping
+    is built, so each mapping's own keys are recorded on first sight and checked from there.
+    """
+
+    def __init__(self, stream: str) -> None:
+        super().__init__(stream)
+        self._own_keys: dict[int, list[yaml.Node]] = {}
+
+    def _record(self, node: yaml.MappingNode) -> list[yaml.Node]:
+        return self._own_keys.setdefault(
+            id(node), [key for key, _ in node.value if key.tag != _MERGE_TAG]
+        )
+
+    @override
+    def flatten_mapping(self, node: yaml.MappingNode) -> None:
+        self._record(node)
+        super().flatten_mapping(node)
+
+    @override
+    def construct_mapping(
+        self,
+        node: yaml.MappingNode,
+        deep: bool = False,
+    ) -> dict[object, object]:
+        seen: set[object] = set()
+        for key_node in self._record(node):
+            key = self.construct_object(key_node, deep=deep)
+            try:
+                repeated = key in seen
+            except TypeError:
+                continue  # An unhashable key; the safe loader reports it.
+            if repeated:
+                line = key_node.start_mark.line + 1
+                raise _DuplicateKeyError(f"duplicate key {key!r} at line {line}")
+            seen.add(key)
+        return super().construct_mapping(node, deep=deep)
 
 
 class YamlSongFormat:
@@ -30,7 +79,7 @@ class YamlSongFormat:
 
     def load(self, path: Path) -> Song:
         try:
-            data = yaml.safe_load(path.read_text())
+            data = yaml.load(path.read_text(), Loader=_UniqueKeyLoader)  # noqa: S506
         except (OSError, UnicodeDecodeError, yaml.YAMLError) as error:
             raise SongError([f"cannot read {path}: {error}"]) from error
         return parse_song(data)

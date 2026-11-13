@@ -15,7 +15,7 @@ from typing import ClassVar, Protocol, cast, runtime_checkable
 from poser.core.graph import Graph
 from poser.core.jsonvalue import JsonValue
 from poser.core.names import Identifier, NodeName
-from poser.core.rules import Note, _plain
+from poser.core.rules import Note, _plain, _span_problems
 from poser.core.song import Song, is_number, song_last_beat
 
 
@@ -98,14 +98,12 @@ class ReadingSpan[V: ReadingValue]:
     outcome: Outcome[V]
 
     def __post_init__(self) -> None:
-        start = _finite("ReadingSpan", "start", self.start)
-        end = _finite("ReadingSpan", "end", self.end)
-        if not 0 <= start < end:
-            raise ValueError(f"ReadingSpan needs 0 <= start < end, got {start!r} to {end!r}")
+        if problems := _span_problems(self.start, self.end, "ReadingSpan", "start"):
+            raise ValueError("\n".join(problems))
         if not isinstance(self.outcome, Known | Ambiguous | Unknowable):
             raise ValueError(f"ReadingSpan.outcome must be an outcome, got {self.outcome!r}")
-        object.__setattr__(self, "start", start)
-        object.__setattr__(self, "end", end)
+        object.__setattr__(self, "start", float(self.start))
+        object.__setattr__(self, "end", float(self.end))
 
 
 @dataclass(frozen=True)

@@ -15,6 +15,17 @@ uv run check-instruments
 If a command fails after the upgrade, find its message below, newest change first, and apply the
 fix. A change listed here applies to every studio that pinned a poser commit from before it.
 
+## Song marks
+
+- **Symptom:** a YAML song fails to load with `cannot read <song>: duplicate key '<key>' at line
+  <n>`.
+  **Cause:** the YAML loader used to keep the last of two equal keys in a mapping and drop the
+  other silently; it now refuses any repeated key.
+  **Fix:** remove or rename the duplicate key at that line.
+
+- **New:** a song may carry an optional `marks` key: layers of the author's labels over spans of
+  beats, such as `chords` or `parts`. Marks never change audio or readings.
+
 ## Framework-neutral pitch and readings
 
 - **Symptom:** `update-guide`, `check-instruments`, and other commands that build instruments

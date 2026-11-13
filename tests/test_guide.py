@@ -45,6 +45,8 @@ MUSIC_HELPERS = (
 COMPOSER_API = [
     "ControlChange",
     "Graph",
+    "Mark",
+    "Marks",
     "Node",
     "Note",
     "Song",
@@ -207,6 +209,8 @@ def test_bands_are_named_with_their_ranges() -> None:
 def test_song_keys_match_the_code() -> None:
     keys = (
         song.SONG_KEYS
+        | song.OPTIONAL_SONG_KEYS
+        | song.MARK_KEYS
         | song.TRACK_KEYS
         | song.OPTIONAL_TRACK_KEYS
         | song.NOTE_KEYS
@@ -228,9 +232,13 @@ def with_key(key: str, value: object) -> dict[str, object]:
         "notes": [note],
         "cc": [cc],
     }
+    mark: dict[str, object] = {"beat": 0, "end": 1, "text": "a"}
     data: dict[str, object] = {"bpm": 100, "tracks": [track]}
-    if key in song.SONG_KEYS:
+    if key in song.SONG_KEYS | song.OPTIONAL_SONG_KEYS:
         data[key] = value
+    if key in song.MARK_KEYS - {"beat"}:
+        mark[key] = value
+        data["marks"] = {"parts": [mark]}
     if key in song.TRACK_KEYS | song.OPTIONAL_TRACK_KEYS:
         track[key] = value
     if key in song.NOTE_KEYS:
@@ -238,6 +246,54 @@ def with_key(key: str, value: object) -> dict[str, object]:
     if key in song.CC_KEYS | song.OPTIONAL_CC_KEYS:
         cc[key] = value
     return data
+
+
+# A valid value for every key in the Songs table, so `with_key` places each one.
+VALID_NOTES = [{"beat": 0, "pitch": 62, "length": 1, "velocity": 90}]
+VALID_VALUES: dict[str, object] = {
+    "bpm": 120,
+    "tracks": [{"name": "solo", "sound": "serum", "notes": VALID_NOTES}],
+    "name": "solo",
+    "sound": "serum:Pad",
+    "effects": [],
+    "notes": VALID_NOTES,
+    "gain": -3,
+    "cc": [],
+    "pitched": True,
+    "beat": 0.5,
+    "pitch": 64,
+    "length": 2,
+    "velocity": 90,
+    "control": 7,
+    "value": 64,
+    "shape": "step",
+    "marks": {"parts": [{"beat": 0, "end": 4, "text": "intro"}]},
+    "end": 8,
+    "text": "verse two",
+}
+
+
+def test_every_song_key_is_placed_and_accepts_a_valid_value() -> None:
+    assert set(VALID_VALUES) == set(first_column("Songs"))
+    for key, value in VALID_VALUES.items():
+        data = with_key(key, value)
+        assert data != with_key(key, object()), f"with_key does not place {key!r}"
+        parse_song(data)
+
+
+def test_mark_rows_match_validation() -> None:
+    rows = {row[0]: row[1:] for row in table("Songs")}
+    assert rows["`marks`"][0] == "song, optional"
+    assert rows["`end`"][:2] == ["mark", "number"]
+    assert rows["`text`"][:2] == ["mark", "text"]
+    for rejected in (0, -1):
+        with pytest.raises(SongError):
+            parse_song(with_key("end", rejected))
+    for rejected in ("", " a", "a\nb", 5):
+        with pytest.raises(SongError):
+            parse_song(with_key("text", rejected))
+    with pytest.raises(SongError):
+        parse_song(with_key("marks", {"Parts": [{"beat": 0, "end": 1, "text": "a"}]}))
 
 
 def integer_ranges() -> list[tuple[str, int, int]]:
