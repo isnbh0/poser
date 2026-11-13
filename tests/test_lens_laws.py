@@ -101,9 +101,13 @@ def test_transpose_round_trips(seed: int) -> None:
 
 @cache
 def generated_notes() -> tuple[Note, ...]:
-    return tuple(
-        note for seed in SEEDS for track in random_song(seed).tracks for note in track.notes
-    )
+    """One generated note per distinct pitch: `transpose_degrees` reads only a note's pitch."""
+    by_pitch: dict[float, Note] = {}
+    for seed in SEEDS:
+        for track in random_song(seed).tracks:
+            for note in track.notes:
+                by_pitch.setdefault(note.pitch, note)
+    return tuple(by_pitch.values())
 
 
 def move_in_range(

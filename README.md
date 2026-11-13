@@ -110,6 +110,8 @@ instrument notes. The guide, `POSER.md`, is generated; run `uv run update-guide`
   `--instrument` and `--match`, and add `--json` for JSON.
 - `uv run piano-roll <song> --output <path.png>`: draw authored notes without plugins or audio;
   `--replace` replaces an existing PNG.
+- `uv run read-song <song>`: read the song's authored notes through the configured frameworks,
+  such as key reading, without plugins or audio; add `--json` for JSON.
 - `uv run render-song <song>`: render one aligned stem per track, rendering again only tracks
   whose inputs changed.
 - `uv run analyze-song <song>`: mix the stems and write the report, spectrograms, and a numbered
@@ -120,8 +122,8 @@ instrument notes. The guide, `POSER.md`, is generated; run `uv run update-guide`
   save its state as a sound when a person closes the window, so agents can't use it.
 - `uv run update-guide`: write `POSER.md` from poser and `poser.toml`; `--check` only compares.
 
-Commands that load a Python song (`render-song`, `analyze-song`, `export-song`, `piano-roll`) run
-its code; load only trusted songs.
+Commands that load a Python song (`render-song`, `analyze-song`, `export-song`, `piano-roll`,
+`read-song`) run its code; load only trusted songs.
 
 Every command but `init-workspace` takes `--config`, and those that use saved sounds or results
 take `--sounds-dir` or `--output-dir`, to work outside a workspace or on another one. With

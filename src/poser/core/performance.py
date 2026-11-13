@@ -200,11 +200,11 @@ def perform_for(
 ) -> Performance | PitchProblem:
     """Return what the member's instrument plays, or the problem when it cannot play the pitches.
 
-    The render path builds every track's performance here, so an instrument declaring
-    `SEMITONES` receives only whole pitches. `Performance` is public, so code outside the render
-    path can still build a fractional one; the instrument's own conversion is the backstop.
+    The render path builds every track's performance here, so an instrument declaring anything
+    but `CONTINUOUS` receives only whole pitches. `Performance` is public, so code outside the
+    render path can still build a fractional one; the instrument's own conversion is the backstop.
     """
-    if pitches is PitchSupport.SEMITONES:
+    if pitches is not PitchSupport.CONTINUOUS:
         fractional = [note for note in timed.notes if not isinstance(note.pitch, int)]
         if fractional:
             first = min(fractional, key=lambda note: note.beat)

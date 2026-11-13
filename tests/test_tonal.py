@@ -12,6 +12,7 @@ from poser.adapters.tonal import (
     BETWEEN,
     EVEN,
     GUIDE,
+    NO_FIT,
     SILENCE,
     TOO_FEW,
     TonalKey,
@@ -118,11 +119,39 @@ def test_a_19_edo_cadence_is_c_major() -> None:
         ([(i, 60 + 0.5 * i, 1) for i in range(24)], BETWEEN),
         ([(0.1 * pc, 60 + pc, 0.3) for pc in range(12)], EVEN),
         ([(0, 60, 1), (0, 64, 1), (0, 67, 1)], TOO_FEW),
+        ([(0, 69, 2), (2, 61, 2), (4, 64, 3), (7, 70, 2), (9, 67, 1)], NO_FIT),
     ],
-    ids=["19-edo-chromatic", "quarter-tones", "staggered-even", "c-major-triad"],
+    ids=["19-edo-chromatic", "quarter-tones", "staggered-even", "c-major-triad", "no-fit"],
 )
 def test_unknowable_fixtures(specs: Sequence[Spec], reason: str) -> None:
     assert whole(one_track(specs)) == Unknowable(reason)
+
+
+def test_two_close_strong_keys_are_ambiguous() -> None:
+    """A best fit above the strong threshold is still ambiguous with a key within the lead."""
+    outcome = whole(one_track([(0, 70, 2), (2, 69, 2), (4, 65, 3), (7, 62, 3), (10, 60, 2)]))
+    assert isinstance(outcome, Ambiguous), outcome
+    keys = [(key.tonic, key.mode, round(key.correlation, 4)) for key in outcome.candidates]
+    assert keys == [(2, "minor", 0.8695), (5, "major", 0.8382)]
+
+
+def test_a_lone_weak_fit_is_ambiguous_with_the_runner_up() -> None:
+    """A lone best key below the strong threshold is listed with the next-best key."""
+    outcome = whole(one_track([(0, 64, 1), (1, 69, 3), (4, 70, 1), (5, 66, 1), (6, 62, 1)]))
+    assert isinstance(outcome, Ambiguous), outcome
+    keys = [(key.tonic, key.mode, round(key.correlation, 4)) for key in outcome.candidates]
+    assert keys == [(9, "major", 0.7533), (2, "major", 0.5964)]
+
+
+def test_a_lone_weak_fit_lists_every_key_tied_for_second() -> None:
+    song, _ = tonal_song(140)
+    spans = read_keys(ScoreRequest.default(song), 7.5).spans
+    (span,) = [span for span in spans if span.start == 15]
+    assert isinstance(span.outcome, Ambiguous), span.outcome
+    best, *tied = span.outcome.candidates
+    assert (best.tonic, best.mode, round(best.correlation, 4)) == (1, "major", 0.8238)
+    assert [(key.tonic, key.mode) for key in tied] == [(5, "minor"), (10, "minor")]
+    assert tied[0].correlation == tied[1].correlation < best.correlation - 0.05
 
 
 # Other cases

@@ -95,7 +95,7 @@ def test_ambiguous_needs_two_distinct_candidates() -> None:
         Ambiguous((A, B, Label("a")))
 
 
-@pytest.mark.parametrize("reason", ["", "  ", "two\nlines"])
+@pytest.mark.parametrize("reason", ["", "  ", "two\nlines", "trailing\n", "carriage\rreturn"])
 def test_unknowable_needs_one_line_of_reason(reason: str) -> None:
     with pytest.raises(ValueError, match="one non-empty line"):
         Unknowable(reason)

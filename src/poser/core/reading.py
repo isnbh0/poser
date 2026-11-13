@@ -72,7 +72,9 @@ class Unknowable:
 
     def __post_init__(self) -> None:
         reason = self.reason
-        if not (isinstance(reason, str) and reason.strip() and len(reason.splitlines()) == 1):
+        if not (
+            isinstance(reason, str) and reason.strip() and not any(c in reason for c in "\r\n")
+        ):
             raise ValueError(f"Unknowable.reason must be one non-empty line, got {reason!r}")
 
 

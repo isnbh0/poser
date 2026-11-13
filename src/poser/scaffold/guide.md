@@ -21,8 +21,9 @@ adapters. If present and YAML is enabled, `songs/demo.yaml` shows that form. Eve
 uses the same keys and checks. Times are beats from 0; pitches are numbers on the MIDI scale:
 middle C is 60, A4 is 69 = 440 Hz, and each whole step of 1 is a twelve-tone equal-tempered
 semitone. Any number from 0 to 127 is allowed, so 60.5 is a quarter tone above middle C. An
-instrument plays either any pitch or only whole pitches; its adapter's section of this guide says
-which. Mark a track `pitched: false` when its pitches pick drums or other keys rather than notes;
+instrument plays either any pitch or only whole pitches, and a fractional pitch on a whole-pitch
+instrument fails as `unsupported_pitch`; poser's own adapters say which in their sections of this
+guide. Mark a track `pitched: false` when its pitches pick drums or other keys rather than notes;
 its pitches must then be whole.
 A song's last note end or controller change must fall within 3600 seconds.
 
@@ -128,9 +129,9 @@ The bands are `sub` 20–60 Hz, `bass` 60–250 Hz, `low_mid` 250–500 Hz, `mid
 `high_mid` 2000–6000 Hz, and `high` 6000–20000 Hz.
 
 Track statuses from `render-song`: `rendered`, `silent`, `unknown_sound`, `load_failed`, `crashed`,
-`timed_out`, `late_start`, `unsupported_pitch`, which means the track has a fractional pitch and
-its instrument plays only whole pitches, and `upstream_failed`, which means the node was skipped
-because an upstream node did not render. A track whose sound begins more than 0.1 s after its first note is
+`timed_out`, `late_start`, `unsupported_pitch`, which means the track has a fractional pitch and its
+instrument plays only whole pitches, and `upstream_failed`, which means the node was skipped because
+an upstream node did not render. A track whose sound begins more than 0.1 s after its first note is
 rendered again, up to three times in all, and `render-song` and `export-song` print a line for each
 retry. A track that starts at the same moment in all three renders is kept, as starting late by
 design; `late_start` means every attempt started late, not all by the same amount, so the track left

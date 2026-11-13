@@ -162,7 +162,7 @@ class WorkspaceConfig:
     adapters: Mapping[str, AdapterSpec | tuple[AdapterSpec, ...]]
     guidance: GuidanceConfig = field(default_factory=GuidanceConfig)
     # The preset `[adapters] frameworks` names, or None for an explicit list.
-    preset: str | None = DEFAULT_PRESET
+    preset: str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "adapters", MappingProxyType(dict(self.adapters)))

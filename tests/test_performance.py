@@ -445,6 +445,14 @@ def test_an_integer_performance_serializes_exactly_as_before() -> None:
     )
 
 
+def test_perform_for_refuses_a_fraction_unless_support_is_exactly_continuous() -> None:
+    quarter = make_track("lead", Note(0, 60.5, 1, 100))
+    song = make_song(quarter)
+    # A third-party instrument might declare the plain string; only the enum member plays fractions.
+    assert isinstance(perform_for(song, quarter, "semitones"), PitchProblem)  # ty: ignore[invalid-argument-type]
+    assert isinstance(perform_for(song, quarter, "continuous"), PitchProblem)  # ty: ignore[invalid-argument-type]
+
+
 def test_perform_for_refuses_a_fraction_only_on_a_semitone_instrument() -> None:
     whole = make_track("lead", Note(0, 60, 1, 100))
     quarter = make_track("lead", Note(2, 64.5, 1, 100), Note(0, 60, 1, 100), Note(1, 60.5, 1, 90))
