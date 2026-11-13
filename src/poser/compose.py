@@ -114,6 +114,7 @@ DEFAULT_PRESET = "western"
 NON_EMPTY_LISTS = frozenset({"song_formats"})
 TOP_LEVEL_KEYS = frozenset({"instruments", "effects", "adapters", "guidance"})
 ADAPTER_KEY = "adapter"  # An instrument table's spelling of `use`.
+UPGRADING_URL = "https://github.com/isnbh0/poser/blob/main/docs/upgrading.md"
 GUIDE_KEY = "guide"  # An instrument table's note for the guide; compose's, not the adapter's.
 USE_KEY = "use"
 _NAME = r"[A-Za-z_][A-Za-z0-9_]*"
@@ -413,7 +414,12 @@ class Composition:
                 for member in get_protocol_members(port)
                 if inspect.getattr_static(made, member, _ABSENT) is _ABSENT
             )
-            reason = f": it lacks {', '.join(lacking)}" if lacking else ""
+            reason = (
+                f": it lacks {', '.join(lacking)}; if it was written for an earlier poser, see "
+                f"{UPGRADING_URL}"
+                if lacking
+                else ""
+            )
             article = "an" if port.__name__[0] in "AEIOU" else "a"
             raise self._fail(
                 where,

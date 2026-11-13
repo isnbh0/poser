@@ -17,8 +17,8 @@ fix. A change listed here applies to every studio that pinned a poser commit fro
 
 ## Framework-neutral pitch and readings
 
-- **Symptom:** a command that builds instruments fails with
-  `… made a <Class>, which is not an Instrument: it lacks pitches`.
+- **Symptom:** `update-guide`, `check-instruments`, and other commands that build instruments
+  fail with `… made a <Class>, which is not an Instrument: it lacks pitches; …`.
   **Cause:** an instrument adapter outside poser predates the `pitches` property of the
   `Instrument` port. poser's own adapters already declare it.
   **Fix:** add the property to the adapter class:

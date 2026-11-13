@@ -24,7 +24,15 @@ from poser.adapters.tonal import GUIDE as TONAL_GUIDE
 from poser.adapters.tonal import TonalFramework
 from poser.adapters.wav import WavAudioFiles
 from poser.cli.common import load_composition
-from poser.compose import PRESETS, AdapterSpec, Composition, load, parse_config, read_config
+from poser.compose import (
+    PRESETS,
+    UPGRADING_URL,
+    AdapterSpec,
+    Composition,
+    load,
+    parse_config,
+    read_config,
+)
 from poser.core.names import Identifier
 from poser.core.ports import AdapterContext, ConfigError
 
@@ -664,7 +672,8 @@ def test_an_effect_factory_that_cannot_build_the_port_is_a_config_error(
     assert str(error.value) == (
         f"{tmp_path / 'poser.toml'}: effects.drive: "
         f"'{module.__name__}:not_an_effect' made a object, which is not an Effect: it lacks "
-        "adapter_id, adapter_version, render, resolve"
+        f"adapter_id, adapter_version, render, resolve; if it was written for an earlier poser, "
+        f"see {UPGRADING_URL}"
     )
 
 
@@ -684,7 +693,7 @@ def test_an_instrument_without_pitches_is_a_config_error_naming_it(
     assert str(error.value) == (
         f"{tmp_path / 'poser.toml'}: instruments.old: "
         f"'{module.__name__}:pitchless_instrument' made a PitchlessInstrument, which is not an "
-        "Instrument: it lacks pitches"
+        f"Instrument: it lacks pitches; if it was written for an earlier poser, see {UPGRADING_URL}"
     )
 
 
