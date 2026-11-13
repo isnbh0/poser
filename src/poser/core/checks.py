@@ -53,7 +53,11 @@ def check_status(status: SoundFailureStatus | RenderFailureStatus) -> CheckStatu
             return CheckStatus.TIMED_OUT
         # Only the core sets these, and a check gets its statuses from adapters, so they cannot
         # reach here; a render it could not complete would be a crash of the check.
-        case RenderFailureStatus.UPSTREAM_FAILED | RenderFailureStatus.LATE_START:
+        case (
+            RenderFailureStatus.UPSTREAM_FAILED
+            | RenderFailureStatus.LATE_START
+            | RenderFailureStatus.UNSUPPORTED_PITCH
+        ):
             return CheckStatus.CRASHED
         case _:
             assert_never(status)

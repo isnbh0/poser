@@ -12,7 +12,10 @@ from poser.core.performance import (
     NoteOff,
     NoteOn,
     Performance,
+    PitchProblem,
+    PitchSupport,
     perform,
+    perform_for,
     performance_from_data,
     performance_to_data,
 )
@@ -35,7 +38,7 @@ def performed(track: Track, song: Song | None = None) -> Performance:
     return perform(song or make_song(track), track)
 
 
-def note_events(track: Track) -> list[tuple[str, int, int]]:
+def note_events(track: Track) -> list[tuple[str, float, int]]:
     """Return each note event's kind, pitch, and sample."""
     return [
         ("note_on" if isinstance(event, NoteOn) else "note_off", event.pitch, event.sample)
@@ -44,9 +47,9 @@ def note_events(track: Track) -> list[tuple[str, int, int]]:
     ]
 
 
-def event_fields(track: Track) -> list[tuple[str, int, int]]:
+def event_fields(track: Track) -> list[tuple[str, float, int]]:
     """Return each event's kind, its pitch or controller, and its sample."""
-    fields: list[tuple[str, int, int]] = []
+    fields: list[tuple[str, float, int]] = []
     for event in performed(track).events:
         match event:
             case NoteOff(sample, pitch):
@@ -272,7 +275,7 @@ def test_performance_uses_a_controller_change_after_the_last_note() -> None:
     ],
 )
 def test_event_constructor_refuses_values_out_of_range(build: Callable[[], object]) -> None:
-    with pytest.raises(ValueError, match="must be an integer"):
+    with pytest.raises(ValueError, match=r"must be an integer|must be a number"):
         build()
 
 
@@ -362,7 +365,7 @@ def test_performed_song_round_trips_through_data() -> None:
         {"samples": 100, "events": [["cc", 0, 1, 0, 9]]},
         {"samples": 100, "events": [[]]},
         {"samples": 100, "events": ["off"]},
-        {"samples": 100, "events": [["off", 0, 60.0]]},
+        {"samples": 100, "events": [["off", 0.0, 60]]},
         {"samples": 100, "events": [["off", 0, True]]},
         {"samples": 100, "events": [], "extra": 1},
         {"samples": 100},
@@ -395,3 +398,66 @@ def test_performed_song_round_trips_through_data() -> None:
 def test_malformed_performance_data_raises_value_error(data: object) -> None:
     with pytest.raises(ValueError):  # noqa: PT011 -- each case has its own message.
         performance_from_data(data)
+
+
+# Pitch is a number from 0 to 127; whole pitches serialize exactly as before.
+
+
+def test_note_events_take_a_fractional_pitch_and_store_a_whole_one_as_an_int() -> None:
+    assert NoteOn(0, 60.5, 100).pitch == 60.5
+    assert NoteOff(0, 60.5).pitch == 60.5
+    whole = NoteOn(0, 60.0, 100)
+    assert type(whole.pitch) is int
+    assert whole == NoteOn(0, 60, 100)
+
+
+@pytest.mark.parametrize("pitch", [-1, 128, float("nan"), True])
+def test_note_events_reject_a_pitch_outside_the_numbers_from_0_to_127(pitch: object) -> None:
+    with pytest.raises(ValueError, match="pitch must be a number from 0 to 127"):
+        NoteOn(0, pitch, 100)  # ty: ignore[invalid-argument-type]
+    with pytest.raises(ValueError, match="pitch must be a number from 0 to 127"):
+        NoteOff(0, pitch)  # ty: ignore[invalid-argument-type]
+
+
+def test_a_performance_with_fractional_pitches_round_trips() -> None:
+    track = make_track("lead", Note(0, 60.5, 1, 100), Note(1, 61.25, 0.5, 90))
+    performance = performed(track)
+
+    assert performance_from_data(performance_to_data(performance)) == performance
+    pitches = [event.pitch for event in performance.events if isinstance(event, NoteOn | NoteOff)]
+    assert pitches == [60.5, 60.5, 61.25, 61.25]
+
+
+def test_an_integer_performance_serializes_exactly_as_before() -> None:
+    """The literal was captured before pitch became a number."""
+    track = Track(
+        "lead",
+        "Serum",
+        (Note(0, 60, 0.5, 100), Note(0.5, 62, 0.25, 90)),
+        cc=(ControlChange(0.25, 1, 10),),
+    )
+
+    data = performance_to_data(performed(track))
+
+    assert json.dumps(data) == (
+        '{"samples": 114000, "events": [["cc", 0, 1, 10], ["on", 0, 60, 100], '
+        '["off", 12000, 60], ["on", 12000, 62, 90], ["off", 18000, 62]]}'
+    )
+
+
+def test_perform_for_refuses_a_fraction_only_on_a_semitone_instrument() -> None:
+    whole = make_track("lead", Note(0, 60, 1, 100))
+    quarter = make_track("lead", Note(2, 64.5, 1, 100), Note(0, 60, 1, 100), Note(1, 60.5, 1, 90))
+
+    problem = perform_for(make_song(quarter), quarter, PitchSupport.SEMITONES)
+
+    assert problem == PitchProblem(
+        "plays only whole MIDI pitches; 2 notes are fractional, first at beat 1 with pitch 60.5"
+    )
+    for track, pitches in [
+        (whole, PitchSupport.SEMITONES),
+        (whole, PitchSupport.CONTINUOUS),
+        (quarter, PitchSupport.CONTINUOUS),
+    ]:
+        song = make_song(track)
+        assert perform_for(song, track, pitches) == perform(song, track)

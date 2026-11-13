@@ -36,7 +36,7 @@ from poser.core.audio import (
 from poser.core.cache import Stamp, cycle_key, delay_identity, node_key, sound_key
 from poser.core.graph import Graph, Node, Wire
 from poser.core.names import Identifier, NodeName, SongId
-from poser.core.performance import NoteOn, Performance, perform
+from poser.core.performance import NoteOn, Performance, PitchProblem, perform_for
 from poser.core.ports import (
     AudioFileError,
     AudioFiles,
@@ -826,6 +826,9 @@ def _render_track_node(
 ) -> Audio | TrackResult:
     """Render a track node: the instrument plays the node's performance into raw audio.
 
+    A node with a pitch its instrument cannot play fails as `unsupported_pitch` before the
+    instrument is called.
+
     A render whose sound begins late after its first note (`late_start_s`) is tried again, up to
     RENDER_ATTEMPTS times, each attempt under its own timeout. A failed attempt is not retried. When
     every attempt starts late by the same amount, the late start is the sound's own and the last
@@ -835,7 +838,14 @@ def _render_track_node(
     if not isinstance(adapter, Instrument) or not isinstance(sound, ResolvedSound):
         raise ValueError(f"a track node resolved to a {type(adapter).__name__}, not an instrument")
     name = NodeName(node.name)
-    performance = perform(song, node)
+    performance = perform_for(song, node, adapter.pitches)
+    if isinstance(performance, PitchProblem):
+        instrument = parse_sound_ref(cast("str", node.sound)).instrument
+        return TrackResult(
+            name,
+            RenderFailureStatus.UNSUPPORTED_PITCH,
+            detail=f"instrument '{instrument}' {performance.detail}",
+        )
     # Only a stem written in this run can be stamped.
     with tempfile.TemporaryDirectory() as directory:
         attempt = 1

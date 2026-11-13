@@ -32,6 +32,7 @@ from poser.core.rules import (
     _song_field_problems,
     _track_field_problems,
     _track_problems,
+    _unpitched_problems,
     is_int,
     is_number,
     is_shape,
@@ -40,7 +41,7 @@ from poser.core.sounds import SoundRef, parse_sound_ref
 
 SONG_KEYS = {"bpm", "tracks"}
 TRACK_KEYS = {"name", "sound", "notes"}
-OPTIONAL_TRACK_KEYS = {"gain", "cc", "effects"}
+OPTIONAL_TRACK_KEYS = {"gain", "cc", "effects", "pitched"}
 NOTE_KEYS = {"beat", "pitch", "length", "velocity"}
 CC_KEYS = {"beat", "control", "value"}
 OPTIONAL_CC_KEYS = {"shape"}
@@ -54,6 +55,9 @@ class Track:
     gain: float = 0.0
     cc: tuple[ControlChange, ...] = ()
     effects: tuple[str, ...] = ()
+    # False when the track's pitches select keys of its sound, such as drums in a kit, rather
+    # than frequencies; its pitches are then whole.
+    pitched: bool = True
 
     def __post_init__(self) -> None:
         values = {
@@ -63,6 +67,7 @@ class Track:
             "notes": self.notes,
             "cc": self.cc,
             "effects": self.effects,
+            "pitched": self.pitched,
         }
         if problems := _track_problems(values, "Track"):
             raise SongError(problems)
@@ -128,6 +133,7 @@ class Song:
                     sound=track.sound,
                     notes=track.notes,
                     cc=track.cc,
+                    pitched=track.pitched,
                 )
             )
             previous = track.name
@@ -205,6 +211,7 @@ class TrackData(TypedDict):
     gain: NotRequired[float]
     notes: list[NoteData]
     cc: NotRequired[list[ControlData]]
+    pitched: NotRequired[bool]
 
 
 class SongData(TypedDict):
@@ -269,7 +276,7 @@ def _parse_note(value: object, where: str, problems: list[str]) -> Note | None:
     length, velocity = data.get("length"), data.get("velocity")
     # These fail only when a problem was reported. A missing key reads as None.
     if field_problems or not (
-        is_number(beat) and is_int(pitch) and is_number(length) and is_int(velocity)
+        is_number(beat) and is_number(pitch) and is_number(length) and is_int(velocity)
     ):
         return None
     return Note(beat=beat, pitch=pitch, length=length, velocity=velocity)
@@ -334,6 +341,11 @@ def _parse_track(value: object, where: str, problems: list[str]) -> Track | None
 
     cc = _parse_cc(data["cc"], where, problems) if "cc" in data else ()
 
+    pitched = data.get("pitched", True)
+    if pitched is False:
+        valid = [(index, note) for index, note in enumerate(notes) if note is not None]
+        problems += _unpitched_problems(valid, where)
+
     name, sound = data.get("name"), data.get("sound")
     gain = data.get("gain", 0.0)
     raw_effects = data.get("effects", [])
@@ -341,7 +353,7 @@ def _parse_track(value: object, where: str, problems: list[str]) -> Track | None
     # Each of these fails only when a problem was reported. A missing key reads as None.
     if len(problems) > before or not is_number(gain) or "notes" not in data:
         return None
-    if not (isinstance(name, str) and isinstance(sound, str)):
+    if not (isinstance(name, str) and isinstance(sound, str) and isinstance(pitched, bool)):
         return None
     return Track(
         name=name,
@@ -350,6 +362,7 @@ def _parse_track(value: object, where: str, problems: list[str]) -> Track | None
         gain=gain,
         cc=cc,
         effects=effects,
+        pitched=pitched,
     )
 
 
@@ -390,6 +403,7 @@ def _track_to_data(track: Track) -> TrackData:
         "gain": track.gain,
         "notes": [_note_to_data(note) for note in track.notes],
         "cc": [_control_to_data(change) for change in track.cc],
+        "pitched": track.pitched,
     }
     # Defaults are left out, so a song without gains or controller changes keeps its old text.
     if not track.effects:
@@ -398,6 +412,8 @@ def _track_to_data(track: Track) -> TrackData:
         del data["gain"]
     if not track.cc:
         del data["cc"]
+    if track.pitched:
+        del data["pitched"]
     return data
 
 

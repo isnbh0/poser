@@ -17,7 +17,7 @@ from poser.core.cache import Stamp, StampProblem
 from poser.core.graph import Graph, Node, Wire
 from poser.core.jsonvalue import Json
 from poser.core.names import Identifier, NodeName, SongId, Suffix
-from poser.core.performance import Performance
+from poser.core.performance import Performance, PitchSupport
 from poser.core.piano_roll import PianoRoll
 from poser.core.report import Levels, Measurements
 from poser.core.song import Song, is_int, is_number
@@ -270,6 +270,10 @@ class Instrument(Protocol):
     - `identity` is a recipe identity: equal when the render inputs are equal, without promising
       identical samples. It covers every input the adapter controls and can read cheaply.
     - `adapter_version` rises whenever the adapter's own code renders one identity differently.
+    - An instrument declaring `pitches` as `SEMITONES` receives only performances whose pitches
+      are all whole: the core's render path builds every track's performance through
+      `perform_for` and fails a track it cannot play as `unsupported_pitch`. `Performance` is
+      public, so code outside the render path could still build a fractional one.
     """
 
     @property
@@ -280,6 +284,11 @@ class Instrument(Protocol):
     @property
     def adapter_version(self) -> str:
         """Non-empty; raised when the output for one identity changes."""
+        ...
+
+    @property
+    def pitches(self) -> PitchSupport:
+        """Which pitches the instrument plays. Declaring it reads nothing and starts nothing."""
         ...
 
     def sounds(self) -> SoundListing:

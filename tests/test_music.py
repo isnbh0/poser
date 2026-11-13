@@ -246,7 +246,7 @@ def untyped(function: Callable[..., object]) -> Callable[..., object]:
 @pytest.mark.parametrize(
     "call",
     [
-        lambda: untyped(music.notes)([60.5], 0, 1, 80),
+        lambda: untyped(music.notes)([True], 0, 1, 80),
         lambda: untyped(music.notes)([60], 0, 1, 80.5),
         lambda: untyped(music.notes)([60], 0, 1, True),
         lambda: untyped(music.notes)([60], True, 1, 80),
@@ -290,3 +290,19 @@ def test_humanize_draws_only_from_random_random() -> None:
             )
         )
     assert humanize(SIXTEEN[:2], 5, velocity=10, timing=0.05) == tuple(expected)
+
+
+def test_notes_places_fractional_pitches() -> None:
+    assert notes([60.5, 64], 0, 1, 100) == (
+        Note(beat=0, pitch=60.5, length=1, velocity=100),
+        Note(beat=0, pitch=64, length=1, velocity=100),
+    )
+    with pytest.raises(ValueError, match="outside 0 to 127"):
+        notes([127.5], 0, 1, 100)
+
+
+def test_twelve_tone_helpers_still_take_whole_pitches() -> None:
+    with pytest.raises(ValueError, match=r"not an integer|must be an integer"):
+        music.scale(60.5, "major")  # ty: ignore[invalid-argument-type]
+    with pytest.raises(ValueError, match=r"not an integer|must be an integer"):
+        music.chord(60.5, "maj")  # ty: ignore[invalid-argument-type]

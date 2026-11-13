@@ -6,7 +6,7 @@ from typing import cast
 
 import pytest
 
-from poser.core.graph import Graph, Node, Wire
+from poser.core.graph import Graph, GraphError, Node, Wire
 from poser.core.music import chord, notes, pitch, scale, swing
 from poser.core.names import Identifier, TrackName
 from poser.core.song import (
@@ -93,7 +93,7 @@ def set_note(song: dict[str, object], key: str, value: object) -> None:
         (lambda s: set_track(s, "sound", ""), "tracks[0].sound"),
         (lambda s: set_note(s, "pitch", -1), "notes[0].pitch"),
         (lambda s: set_note(s, "pitch", 128), "notes[0].pitch"),
-        (lambda s: set_note(s, "pitch", 60.5), "notes[0].pitch"),
+        (lambda s: set_note(s, "pitch", 127.5), "notes[0].pitch"),
         (lambda s: set_note(s, "velocity", 0), "notes[0].velocity"),
         (lambda s: set_note(s, "velocity", 128), "notes[0].velocity"),
         (lambda s: set_note(s, "beat", -1), "notes[0].beat"),
@@ -424,7 +424,7 @@ def make_song(bpm: object, tracks: object) -> Song:
         (lambda: make_note(beat=-1), "Note.beat:"),
         (lambda: make_note(beat="0"), "Note.beat:"),
         (lambda: make_note(pitch=128), "Note.pitch:"),
-        (lambda: make_note(pitch=60.0), "Note.pitch:"),
+        (lambda: make_note(pitch=-0.5), "Note.pitch:"),
         (lambda: make_note(length=0), "Note.length:"),
         (lambda: make_note(velocity=0), "Note.velocity:"),
         (lambda: make_note(velocity=True), "Note.velocity:"),
@@ -723,3 +723,132 @@ def test_song_graph_compiles_a_song_as_its_method_does() -> None:
     song = chain_song("drive")
 
     assert song_graph(song, ("drive",)) == song.graph(("drive",))
+
+
+# Pitch is a number on the MIDI scale, and a track can be unpitched.
+
+
+@pytest.mark.parametrize("value", [0, 127, 60.5, 60.25])
+def test_a_pitch_is_any_number_from_0_to_127(value: float) -> None:
+    song = valid_song()
+    set_note(song, "pitch", value)
+
+    assert parse_song(song).tracks[0].notes[0].pitch == value
+
+
+@pytest.mark.parametrize("value", [-0.5, 127.5, float("nan"), float("inf"), True, "60"])
+def test_a_pitch_outside_the_numbers_from_0_to_127_is_rejected(value: object) -> None:
+    song = valid_song()
+    set_note(song, "pitch", value)
+
+    with pytest.raises(SongError) as error:
+        parse_song(song)
+
+    assert any(
+        ".pitch" in problem and "a number from 0 to 127" in problem
+        for problem in error.value.problems
+    )
+
+
+def test_a_yaml_shaped_fractional_note_reaches_the_song() -> None:
+    data = {
+        "bpm": 120,
+        "tracks": [
+            {
+                "name": "lead",
+                "sound": "serum",
+                "notes": [{"beat": 0, "pitch": 60.5, "length": 1, "velocity": 100}],
+            }
+        ],
+    }
+
+    assert parse_song(data).tracks[0].notes == (Note(beat=0, pitch=60.5, length=1, velocity=100),)
+
+
+def test_an_integral_pitch_is_stored_as_an_int() -> None:
+    note = Note(beat=0, pitch=60.0, length=1, velocity=100)
+
+    assert type(note.pitch) is int
+    assert note.pitch == 60
+    assert note == Note(beat=0, pitch=60, length=1, velocity=100)
+    assert type(Note(beat=0, pitch=60.5, length=1, velocity=100).pitch) is float
+
+
+def test_the_record_keeps_a_fractional_pitch_and_writes_an_integral_one_as_an_int() -> None:
+    notes = (
+        Note(beat=0, pitch=60.5, length=1, velocity=100),
+        Note(beat=1, pitch=60.0, length=1, velocity=100),
+    )
+    song = Song(bpm=120, tracks=(Track("lead", "serum", notes),))
+
+    data = song_to_data(song)
+    pitches = [note["pitch"] for note in data["tracks"][0]["notes"]]
+
+    assert pitches == [60.5, 60]
+    assert [type(value) for value in pitches] == [float, int]
+    assert parse_song(data) == song
+
+
+@pytest.mark.parametrize("value", [True, False])
+def test_pitched_parses_as_a_bool(value: bool) -> None:
+    song = valid_song()
+    set_track(song, "pitched", value)
+
+    assert parse_song(song).tracks[0].pitched is value
+
+
+@pytest.mark.parametrize("value", ["false", 0, 1, None])
+def test_pitched_rejects_a_non_bool(value: object) -> None:
+    song = valid_song()
+    set_track(song, "pitched", value)
+
+    with pytest.raises(SongError, match=r"tracks\[0\]\.pitched: must be true or false"):
+        parse_song(song)
+
+
+def test_an_unpitched_track_rejects_a_fractional_pitch_naming_the_note() -> None:
+    song = valid_song()
+    set_track(song, "pitched", False)
+    track = first_track(song)
+    track["notes"] = [valid_note(), {**valid_note(), "pitch": 60.5}]
+
+    with pytest.raises(SongError) as error:
+        parse_song(song)
+
+    assert error.value.problems == [
+        (
+            "tracks[0].notes[1].pitch: an unpitched track's pitches are key numbers and must be "
+            "whole, got 60.5"
+        )
+    ]
+    with pytest.raises(SongError, match=r"Track\.notes\[0\]\.pitch: an unpitched track"):
+        Track("kit", "drums", (Note(0, 60.5, 1, 100),), pitched=False)
+
+
+def test_the_record_writes_pitched_only_when_false() -> None:
+    note = (Note(0, 36, 1, 100),)
+    pitched = Song(bpm=120, tracks=(Track("lead", "serum", note),))
+    unpitched = Song(bpm=120, tracks=(Track("kit", "drums", note, pitched=False),))
+
+    assert "pitched" not in song_to_data(pitched)["tracks"][0]
+    assert song_to_data(unpitched)["tracks"][0].get("pitched") is False
+    assert parse_song(song_to_data(unpitched)) == unpitched
+
+
+def test_a_compiled_graph_carries_pitched_on_the_track_node() -> None:
+    note = (Note(0, 36, 1, 100),)
+    song = Song(
+        bpm=120,
+        tracks=(Track("lead", "serum", note), Track("kit", "drums", note, pitched=False)),
+    )
+
+    graph = song.graph()
+
+    assert [(node.name, node.pitched) for node in graph.nodes] == [("lead", True), ("kit", False)]
+    assert graph.to_data()["nodes"][1].get("pitched") is False
+    assert "pitched" not in graph.to_data()["nodes"][0]
+
+
+def test_only_a_track_node_can_be_unpitched() -> None:
+    with pytest.raises(GraphError, match=r"Node\.pitched: only a track node can be unpitched"):
+        Node("wet", "effect", effect="reverb", pitched=False)

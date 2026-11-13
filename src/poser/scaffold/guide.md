@@ -18,7 +18,12 @@ poser renders songs through configured instruments and measures the result.
 Defaults are Python (`.py`, with `build()` returning a `Song`) and YAML (`.yaml` or `.yml`).
 `adapters.song_formats` can enable either, both, or other formats; consult `poser.toml` and the
 adapters. If present and YAML is enabled, `songs/demo.yaml` shows that form. Every song format
-uses the same keys and checks. Times are beats from 0; pitches are MIDI numbers, middle C is 60.
+uses the same keys and checks. Times are beats from 0; pitches are numbers on the MIDI scale:
+middle C is 60, A4 is 69 = 440 Hz, and each whole step of 1 is a twelve-tone equal-tempered
+semitone. Any number from 0 to 127 is allowed, so 60.5 is a quarter tone above middle C. An
+instrument plays either any pitch or only whole pitches; its adapter's section of this guide says
+which. Mark a track `pitched: false` when its pitches pick drums or other keys rather than notes;
+its pitches must then be whole.
 A song's last note end or controller change must fall within 3600 seconds.
 
 When the script format is enabled, write song scripts that import `poser` directly and run in
@@ -44,8 +49,9 @@ def build() -> Song:
 | `notes` | track | list of notes | |
 | `gain` | track, optional | decibels | -60 to 12 |
 | `cc` | track, optional | list of controller changes, in time order | |
+| `pitched` | track, optional | true or false | false for drums and other key-mapped sounds |
 | `beat` | note, controller change | number | 0 or later |
-| `pitch` | note | integer | 0 to 127 |
+| `pitch` | note | number | 0 to 127 |
 | `length` | note | beats | above 0 |
 | `velocity` | note | integer | 1 to 127 |
 | `control` | controller change | integer | 0 to 119 |
@@ -119,8 +125,9 @@ The bands are `sub` 20–60 Hz, `bass` 60–250 Hz, `low_mid` 250–500 Hz, `mid
 `high_mid` 2000–6000 Hz, and `high` 6000–20000 Hz.
 
 Track statuses from `render-song`: `rendered`, `silent`, `unknown_sound`, `load_failed`, `crashed`,
-`timed_out`, `late_start`, and `upstream_failed`, which means the node was skipped because an
-upstream node did not render. A track whose sound begins more than 0.1 s after its first note is
+`timed_out`, `late_start`, `unsupported_pitch`, which means the track has a fractional pitch and
+its instrument plays only whole pitches, and `upstream_failed`, which means the node was skipped
+because an upstream node did not render. A track whose sound begins more than 0.1 s after its first note is
 rendered again, up to three times in all, and `render-song` and `export-song` print a line for each
 retry. A track that starts at the same moment in all three renders is kept, as starting late by
 design; `late_start` means every attempt started late, not all by the same amount, so the track left

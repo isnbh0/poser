@@ -58,7 +58,7 @@ from poser.adapters.pedalboard.worker import (
 from poser.core.audio import write_raw_audio
 from poser.core.jsonvalue import Json, JsonValue, digest, json_object
 from poser.core.names import Identifier, Suffix
-from poser.core.performance import performance_to_data
+from poser.core.performance import PitchSupport, performance_to_data
 from poser.core.ports import (
     AdapterContext,
     Captured,
@@ -158,6 +158,11 @@ class PedalboardInstrument:
     def adapter_version(self) -> str:
         # 3: a late start is rendered again after a wait, so stems from 2 may hold missed notes.
         return "3"
+
+    @property
+    def pitches(self) -> PitchSupport:
+        # A plugin receives MIDI note numbers, which are whole.
+        return PitchSupport.SEMITONES
 
     @property
     def guide(self) -> str:

@@ -1,13 +1,30 @@
 """Performances: what an instrument plays for one track, as events in samples."""
 
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import cast
 
 from poser.core.audio import sample_at, stem_samples
 from poser.core.graph import Graph
 from poser.core.jsonvalue import JsonValue, json_object
-from poser.core.rules import CONTROL_MAX, ControlChange, Timed, is_int
+from poser.core.rules import (
+    CONTROL_MAX,
+    ControlChange,
+    Timed,
+    _plain,
+    is_int,
+    is_number,
+    is_pitch,
+    normal_pitch,
+)
 from poser.core.song import Song
+
+
+class PitchSupport(StrEnum):
+    """Which pitches an instrument plays, and so which performances it can receive."""
+
+    SEMITONES = "semitones"  # Only whole pitches 0 to 127, as MIDI note numbers.
+    CONTINUOUS = "continuous"  # Any pitch from 0 to 127.
 
 
 def _check_int(owner: str, field: str, value: object, low: int, high: int | None) -> None:
@@ -16,14 +33,20 @@ def _check_int(owner: str, field: str, value: object, low: int, high: int | None
         raise ValueError(f"{owner}.{field} must be an integer {bounds}, got {value!r}")
 
 
+def _check_pitch(owner: str, value: object) -> None:
+    if not is_pitch(value):
+        raise ValueError(f"{owner}.pitch must be a number from 0 to 127, got {value!r}")
+
+
 @dataclass(frozen=True)
 class NoteOff:
     sample: int
-    pitch: int  # 0 to 127
+    pitch: float  # 0 to 127; an integral pitch is stored as an int, any other as a float.
 
     def __post_init__(self) -> None:
         _check_int("NoteOff", "sample", self.sample, 0, None)
-        _check_int("NoteOff", "pitch", self.pitch, 0, 127)
+        _check_pitch("NoteOff", self.pitch)
+        object.__setattr__(self, "pitch", normal_pitch(self.pitch))
 
 
 @dataclass(frozen=True)
@@ -41,13 +64,14 @@ class Control:
 @dataclass(frozen=True)
 class NoteOn:
     sample: int
-    pitch: int  # 0 to 127
+    pitch: float  # 0 to 127; an integral pitch is stored as an int, any other as a float.
     velocity: int  # 1 to 127
 
     def __post_init__(self) -> None:
         _check_int("NoteOn", "sample", self.sample, 0, None)
-        _check_int("NoteOn", "pitch", self.pitch, 0, 127)
+        _check_pitch("NoteOn", self.pitch)
         _check_int("NoteOn", "velocity", self.velocity, 1, 127)
+        object.__setattr__(self, "pitch", normal_pitch(self.pitch))
 
 
 type Event = NoteOff | Control | NoteOn
@@ -164,6 +188,35 @@ def perform(song: Song | Graph, timed: Timed) -> Performance:
     return Performance(stem_samples(song), tuple(events))
 
 
+@dataclass(frozen=True)
+class PitchProblem:
+    """Why an instrument cannot play a member's notes."""
+
+    detail: str  # Names the first offending note's beat and pitch, and how many notes are affected.
+
+
+def perform_for(
+    song: Song | Graph, timed: Timed, pitches: PitchSupport
+) -> Performance | PitchProblem:
+    """Return what the member's instrument plays, or the problem when it cannot play the pitches.
+
+    The render path builds every track's performance here, so an instrument declaring
+    `SEMITONES` receives only whole pitches. `Performance` is public, so code outside the render
+    path can still build a fractional one; the instrument's own conversion is the backstop.
+    """
+    if pitches is PitchSupport.SEMITONES:
+        fractional = [note for note in timed.notes if not isinstance(note.pitch, int)]
+        if fractional:
+            first = min(fractional, key=lambda note: note.beat)
+            count = len(fractional)
+            notes = "1 note is" if count == 1 else f"{count} notes are"
+            return PitchProblem(
+                f"plays only whole MIDI pitches; {notes} fractional, first at beat "
+                f"{_plain(first.beat)} with pitch {first.pitch}"
+            )
+    return perform(song, timed)
+
+
 def _event_to_data(event: Event) -> JsonValue:
     match event:
         case NoteOff(sample, pitch):
@@ -186,8 +239,15 @@ def _event_from_data(value: object) -> Event:
     if not isinstance(value, list) or not value:
         raise ValueError(f"an event must be a non-empty list, got {value!r}")
     tag, *fields = cast("list[object]", value)
-    if not all(is_int(field) for field in fields):
-        raise ValueError(f"an event's fields must be integers, got {value!r}")
+    # A pitch is any number; every other field is an integer.
+    pitch_at = 1 if tag in ("off", "on") else None
+    if not all(
+        is_number(field) if index == pitch_at else is_int(field)
+        for index, field in enumerate(fields)
+    ):
+        raise ValueError(
+            f"an event's pitch must be a number and its other fields integers, got {value!r}"
+        )
     numbers = cast("list[int]", fields)
     match tag, numbers:
         case "off", [sample, pitch]:

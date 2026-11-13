@@ -28,7 +28,14 @@ from poser.core.audio import NUM_CHANNELS, SAMPLE_RATE, Audio
 from poser.core.cache import Stamp, StampProblem, node_key, sound_key
 from poser.core.graph import BUFFER_SIZE, Graph, Node, Wire
 from poser.core.names import Identifier, NodeName, SongId, TrackName
-from poser.core.performance import Control, NoteOff, NoteOn, Performance, perform
+from poser.core.performance import (
+    Control,
+    NoteOff,
+    NoteOn,
+    Performance,
+    PitchSupport,
+    perform,
+)
 from poser.core.ports import (
     Effect,
     EffectRenderRequest,
@@ -40,7 +47,7 @@ from poser.core.ports import (
 )
 from poser.core.rendering import ResolvedNode, TrackResult, render_song, resolve_node
 from poser.core.report import AnalysisStatus, NodeReport, Report
-from poser.core.song import Note, Song, Track
+from poser.core.song import ControlChange, Note, Song, Track
 from poser.core.statuses import (
     CORE_RENDER_FAILURES,
     RenderFailureStatus,
@@ -610,10 +617,10 @@ def test_perform_runs_before_the_old_stem_is_discarded(
     setup.render(make_song())
     stamp = setup.store.read_stamp(LEAD)
 
-    def refuse(song: Song, track: Track) -> None:
+    def refuse(song: Song, track: Track, pitches: PitchSupport) -> None:
         raise RuntimeError("perform failed")
 
-    monkeypatch.setattr(rendering, "perform", refuse)
+    monkeypatch.setattr(rendering, "perform_for", refuse)
     with pytest.raises(RuntimeError, match="perform failed"):
         setup.render(make_song(), force=True)
 
@@ -1377,3 +1384,93 @@ def test_an_adapter_without_a_block_pass_refuses_the_group(tmp_path: Path) -> No
     assert failure.status is RenderFailureStatus.LOAD_FAILED
     assert failure.detail is not None
     assert "no block pass" in failure.detail
+
+
+# Pitch: whole pitches keep their keys, and a whole-pitch instrument never sees a fraction.
+
+
+def pinned_song() -> Song:
+    """A fixed integer-pitch song: a chord with one controller change, and a line, at bpm 100."""
+    chord = tuple(Note(beat=0, pitch=p, length=2, velocity=90) for p in (60, 64, 67))
+    line = tuple(
+        Note(beat=b, pitch=p, length=0.5, velocity=100)
+        for b, p in ((0, 72), (0.5, 74), (1, 76), (1.5, 79))
+    )
+    return Song(
+        bpm=100,
+        tracks=(
+            Track("chord", "fake", chord, cc=(ControlChange(beat=1, control=74, value=64),)),
+            Track("line", "fake", line),
+        ),
+    )
+
+
+def test_integer_pitch_node_keys_are_pinned() -> None:
+    """These digests were computed before pitch became a number, so existing stems stay current."""
+    graph = pinned_song().graph()
+
+    assert [(node.name, node_key(graph, node, None, ())) for node in graph.nodes] == [
+        ("chord", "e0dbc5b150e2e4a1b57074736bc424d9528449c1ebca643d0b0ce28675230cbc"),
+        ("line", "16fb96053a9f6ed6dbe849904065436d74719a046abcccc0c9f74f4a8a55e6f6"),
+    ]
+
+
+def pitch_key(pitch: float, *, pitched: bool = True) -> str:
+    note = (Note(beat=0, pitch=pitch, length=1, velocity=100),)
+    graph = Song(120, (Track("lead", "fake", note, pitched=pitched),)).graph()
+    return node_key(graph, graph.nodes[0], None, ())
+
+
+def test_node_key_is_one_for_a_whole_pitch_and_distinct_for_a_fraction() -> None:
+    assert pitch_key(60) == pitch_key(60.0)
+    assert pitch_key(60.5) != pitch_key(60)
+    assert pitch_key(60, pitched=True) == pitch_key(60, pitched=False)
+
+
+QUARTER = (Note(beat=0, pitch=60, length=1, velocity=100), Note(4, 60.5, 1, 100))
+
+
+def pitch_setup(tmp_path: Path, pitches: PitchSupport) -> Setup:
+    instrument = FakeInstrument("fake", {None: FakeSound()}, pitches=pitches)
+    return Setup(tmp_path, instrument, FakeEffect("drive"))
+
+
+def test_a_fractional_pitch_on_a_semitone_instrument_is_unsupported_pitch(tmp_path: Path) -> None:
+    setup = pitch_setup(tmp_path, PitchSupport.SEMITONES)
+    song = Song(120, (Track("lead", "fake", QUARTER, effects=("drive",)),))
+
+    results = by_name(setup.render(song))
+
+    assert results[LEAD].status is RenderFailureStatus.UNSUPPORTED_PITCH
+    assert results[LEAD].detail == (
+        "instrument 'fake' plays only whole MIDI pitches; 1 note is fractional, first at beat 4 "
+        "with pitch 60.5"
+    )
+    assert setup.instrument.renders == []
+    assert results[DRIVE].status is RenderFailureStatus.UPSTREAM_FAILED
+    assert not setup.store.stem_path(LEAD).exists()
+
+
+def test_a_fractional_pitch_on_a_continuous_instrument_renders(tmp_path: Path) -> None:
+    setup = pitch_setup(tmp_path, PitchSupport.CONTINUOUS)
+    song = Song(120, (Track("lead", "fake", QUARTER),))
+
+    results = by_name(setup.render(song))
+
+    assert results[LEAD].status is StemStatus.RENDERED
+    (request,) = setup.instrument.renders
+    assert request.performance == perform(song, song.tracks[0])
+    pitches = [event.pitch for event in request.performance.events if isinstance(event, NoteOn)]
+    assert pitches == [60, 60.5]
+
+
+def test_a_whole_pitch_song_on_a_semitone_instrument_renders_as_before(tmp_path: Path) -> None:
+    setup = pitch_setup(tmp_path, PitchSupport.SEMITONES)
+    song = pinned_song()
+
+    results = by_name(setup.render(song))
+
+    assert same(statuses(list(results.values())), [StemStatus.RENDERED] * 2)
+    assert [request.performance for request in setup.instrument.renders] == [
+        perform(song, track) for track in song.tracks
+    ]

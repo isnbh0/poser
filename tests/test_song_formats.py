@@ -185,12 +185,12 @@ def test_numbers_write_in_one_spelling(tmp_path: Path) -> None:
     assert "beat: 0.5" in write(np.float64(0.5), 1, 120)
 
 
-class Pitch(int):
+class Velocity(int):
     pass
 
 
 def test_unrepresentable_value_is_a_song_error(tmp_path: Path) -> None:
-    note = (Note(beat=0.5, pitch=Pitch(60), length=1, velocity=100),)
+    note = (Note(beat=0.5, pitch=60, length=1, velocity=Velocity(100)),)
     song = Song(bpm=120, tracks=(Track("lead", "serum", note),))
     with pytest.raises(SongError, match="cannot write"):
         write_yaml_song(song, tmp_path / "song.yaml")
@@ -426,7 +426,7 @@ def build():
         load_song(ramp_path, SONG_FORMATS)
 
     assert pitch_error.value.problems == [
-        f"{pitch_path}: Note.pitch: must be an integer from 0 to 127, got 200"
+        f"{pitch_path}: Note.pitch: must be a number from 0 to 127, got 200"
     ]
     assert ramp_error.value.problems == [
         f"{ramp_path}: Track.cc[0].shape: linear needs a later change to control 1"

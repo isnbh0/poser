@@ -40,7 +40,9 @@ class SongError(Exception):
 @dataclass(frozen=True)
 class Note:
     beat: float
-    pitch: int
+    # A number on the MIDI scale: 69 is A4 at 440 Hz, and 1 is a twelve-tone equal-tempered
+    # semitone. An integral pitch is stored as an int, any other as a float.
+    pitch: float
     length: float
     velocity: int
 
@@ -53,6 +55,7 @@ class Note:
         }
         if problems := _note_problems(values, "Note"):
             raise SongError(problems)
+        object.__setattr__(self, "pitch", normal_pitch(self.pitch))
 
 
 @dataclass(frozen=True)
@@ -106,6 +109,18 @@ def is_number(value: object) -> TypeGuard[int | float]:
         return False
 
 
+def is_pitch(value: object) -> TypeGuard[int | float]:
+    """Return whether the value is a pitch: a number from 0 to 127, excluding bool."""
+    return is_number(value) and 0 <= value <= 127
+
+
+def normal_pitch(pitch: float) -> float:
+    """Return a pitch in its one representation: an integral pitch as an int, any other as a
+    float, so `60.0` and `60` are one value and `isinstance(pitch, int)` means a whole pitch.
+    """
+    return int(pitch) if float(pitch).is_integer() else float(pitch)
+
+
 def _is_int_in_range(value: object, low: int, high: int) -> bool:
     return is_int(value) and low <= value <= high
 
@@ -127,8 +142,8 @@ def _note_problems(values: Mapping[str, object], where: str) -> list[str]:
     problems: list[str] = []
     if "beat" in values and not (is_number(beat) and beat >= 0):
         problems.append(f"{where}.beat: must be a number that is not negative, got {beat!r}")
-    if "pitch" in values and not _is_int_in_range(pitch, 0, 127):
-        problems.append(f"{where}.pitch: must be an integer from 0 to 127, got {pitch!r}")
+    if "pitch" in values and not is_pitch(pitch):
+        problems.append(f"{where}.pitch: must be a number from 0 to 127, got {pitch!r}")
     if "length" in values and not (is_number(length) and length > 0):
         problems.append(f"{where}.length: must be a positive number, got {length!r}")
     if "velocity" in values and not _is_int_in_range(velocity, 1, 127):
@@ -158,8 +173,9 @@ def _control_change_problems(values: Mapping[str, object], where: str) -> list[s
 
 
 def _track_field_problems(values: Mapping[str, object], where: str) -> list[str]:
-    """Check a track's name, sound, and gain. `_track_problems` checks the rest."""
+    """Check a track's name, sound, gain, and `pitched`. `_track_problems` checks the rest."""
     name, sound, gain = values.get("name"), values.get("sound"), values.get("gain")
+    pitched = values.get("pitched")
     problems: list[str] = []
     if "name" in values and not (isinstance(name, str) and TRACK_NAME.fullmatch(name)):
         problems.append(
@@ -175,7 +191,23 @@ def _track_field_problems(values: Mapping[str, object], where: str) -> list[str]
             f"{where}.gain: must be a number of decibels from {GAIN_MIN_DB} to {GAIN_MAX_DB}, "
             f"got {gain!r}"
         )
+    if "pitched" in values and not isinstance(pitched, bool):
+        problems.append(f"{where}.pitched: must be true or false, got {pitched!r}")
     return problems
+
+
+def _unpitched_problems(notes: Sequence[tuple[int, Note]], where: str) -> list[str]:
+    """Check an unpitched track's notes, given with their indexes: each pitch selects a key of
+    the track's sound, such as a drum in a kit, and a key number has no fraction.
+    """
+    return [
+        (
+            f"{where}.notes[{index}].pitch: an unpitched track's pitches are key numbers and "
+            f"must be whole, got {note.pitch!r}"
+        )
+        for index, note in notes
+        if not isinstance(note.pitch, int)
+    ]
 
 
 def _is_sound_ref(value: object) -> bool:
@@ -236,11 +268,15 @@ def _track_problems(values: Mapping[str, object], where: str) -> list[str]:
     notes = values["notes"]
     problems += _notes_problems(notes, where)
     if isinstance(notes, list | tuple):
+        items = cast("Sequence[object]", notes)
         problems += [
             f"{where}.notes[{index}]: must be a Note, got {note!r}"
-            for index, note in enumerate(cast("Sequence[object]", notes))
+            for index, note in enumerate(items)
             if not isinstance(note, Note)
         ]
+        if values.get("pitched") is False:
+            valid = [(i, note) for i, note in enumerate(items) if isinstance(note, Note)]
+            problems += _unpitched_problems(valid, where)
     cc = values["cc"]
     problems += _cc_problems(cc, where)
     if isinstance(cc, list | tuple):
@@ -323,7 +359,7 @@ class NoteData(TypedDict):
     """A note's plain-data form, the song format's own shape for it."""
 
     beat: float
-    pitch: int
+    pitch: float
     length: float
     velocity: int
 

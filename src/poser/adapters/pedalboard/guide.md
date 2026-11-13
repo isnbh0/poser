@@ -11,6 +11,9 @@ A Pedalboard instrument plays a VST3 or Audio Unit plugin. A track names one of 
   `list-sounds` notes them.
 - Saved sounds are under `saved/`, such as `synth:saved/warm-pad`.
 
+A Pedalboard instrument plays whole MIDI pitches only; a fractional pitch fails as
+`unsupported_pitch`.
+
 Some presets load their samples in the background, and notes played before the samples arrive stay
 silent. When a track's sound begins late after its first note, poser renders it again, and this
 adapter waits 1 s, then 4 s, after restoring the sound before it plays. A `save-sound` preview

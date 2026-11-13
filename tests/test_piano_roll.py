@@ -218,3 +218,13 @@ assert not any(name.startswith("poser.adapters.pedalboard") for name in sys.modu
         env=env,
         timeout=30,
     )
+
+
+def test_a_fractional_pitch_draws_at_its_exact_height(tmp_path: Path) -> None:
+    source = Song(100, (Track("lead", "synth", (Note(0, 60.5, 1, 100), Note(1, 64, 1, 90))),))
+    roll = project_piano_roll(source)
+
+    assert [note.pitch for note in roll.panels[0].notes] == [60.5, 64]
+    path = tmp_path / "quarter.png"
+    piano_roll.write_png(roll, path)
+    assert image.imread(path).size > 0

@@ -70,6 +70,31 @@ def instrument(name, options, context):
     )
 
 
+class PitchlessInstrument:
+    # An instrument written before instruments declared `pitches`.
+
+    @property
+    def adapter_id(self):
+        return Identifier("fake")
+
+    @property
+    def adapter_version(self):
+        return "1"
+
+    def sounds(self):
+        raise AssertionError("never listed")
+
+    def resolve(self, ref):
+        raise AssertionError("never resolved")
+
+    def render(self, request, timeout_s):
+        raise AssertionError("never rendered")
+
+
+def pitchless_instrument(name, options, context):
+    return PitchlessInstrument()
+
+
 class MetaEffect:
     def __init__(self, name, adapter_id, adapter_version):
         self._id = adapter_id
@@ -635,7 +660,28 @@ def test_an_effect_factory_that_cannot_build_the_port_is_a_config_error(
 
     assert str(error.value) == (
         f"{tmp_path / 'poser.toml'}: effects.drive: "
-        f"'{module.__name__}:not_an_effect' made a object, which is not a Effect"
+        f"'{module.__name__}:not_an_effect' made a object, which is not an Effect: it lacks "
+        "adapter_id, adapter_version, render, resolve"
+    )
+
+
+def test_an_instrument_without_pitches_is_a_config_error_naming_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = adapters_module(tmp_path, monkeypatch)
+    composition = compose(
+        tmp_path,
+        '[instruments.old]\nadapter = "{module}:pitchless_instrument"\n',
+        module.__name__,
+    )
+
+    with pytest.raises(ConfigError) as error:
+        composition.instruments()
+
+    assert str(error.value) == (
+        f"{tmp_path / 'poser.toml'}: instruments.old: "
+        f"'{module.__name__}:pitchless_instrument' made a PitchlessInstrument, which is not an "
+        "Instrument: it lacks pitches"
     )
 
 

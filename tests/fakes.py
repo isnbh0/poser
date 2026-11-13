@@ -19,7 +19,7 @@ from poser.core.cache import Stamp, StampProblem
 from poser.core.graph import BUFFER_SIZE, Graph, instantaneous_order
 from poser.core.jsonvalue import Json, JsonValue, json_object
 from poser.core.names import Identifier, NodeName, SongId, Suffix
-from poser.core.performance import NoteOff
+from poser.core.performance import NoteOff, PitchSupport
 from poser.core.ports import (
     AudioFileError,
     Captured,
@@ -110,8 +110,10 @@ class FakeInstrument:
         adapter_version: str = "1",
         adapter_id: str = "fake",
         saved: SavedSounds | None = None,
+        pitches: PitchSupport = PitchSupport.SEMITONES,
     ) -> None:
         self.name = Identifier(name)
+        self._pitches = pitches
         self._sounds = dict(sounds)
         self._adapter_version = adapter_version
         self._adapter_id = Identifier(adapter_id)
@@ -137,6 +139,10 @@ class FakeInstrument:
     @property
     def adapter_version(self) -> str:
         return self._adapter_version
+
+    @property
+    def pitches(self) -> PitchSupport:
+        return self._pitches
 
     def _sound(self, name: str | None) -> FakeSound | None:
         if name in self._sounds:
@@ -244,6 +250,10 @@ class PlainInstrument:
     @property
     def adapter_version(self) -> str:
         return self._inner.adapter_version
+
+    @property
+    def pitches(self) -> PitchSupport:
+        return PitchSupport.SEMITONES
 
     def sounds(self) -> SoundListing:
         return self._inner.sounds()

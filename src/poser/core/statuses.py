@@ -25,12 +25,18 @@ class RenderFailureStatus(StrEnum):
     TIMED_OUT = "timed_out"
     # Every render attempt's sound began late after the first note, not all by the same amount.
     LATE_START = "late_start"
+    # The track has a fractional pitch, and its instrument plays only whole pitches.
+    UNSUPPORTED_PITCH = "unsupported_pitch"
     UPSTREAM_FAILED = "upstream_failed"
 
 
 # The render failures only the core decides; an adapter's `RenderFailure` cannot carry them.
 CORE_RENDER_FAILURES = frozenset(
-    {RenderFailureStatus.LATE_START, RenderFailureStatus.UPSTREAM_FAILED}
+    {
+        RenderFailureStatus.LATE_START,
+        RenderFailureStatus.UNSUPPORTED_PITCH,
+        RenderFailureStatus.UPSTREAM_FAILED,
+    }
 )
 
 

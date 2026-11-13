@@ -37,7 +37,9 @@ def node_key(
     `sound_key` digests it, or None while the sound does not resolve. `upstream_keys` carries
     each feeding wire's upstream node key, wire kind, and wire gain, in render order, so a
     changed input changes every key downstream of it; the list is empty while no node accepts
-    wires. Numbers are normalized so that `1` and `1.0` give the same key.
+    wires. Numbers are normalized so that `1` and `1.0` give the same key; a pitch is already
+    normalized, an integral one stored as an int, so whole pitches keep the keys they had when
+    pitch was always an int. `pitched` is left out, because it does not change the audio.
     """
     return digest(
         {
@@ -51,7 +53,7 @@ def node_key(
             "name": node.name,
             "sound": resolved_identity,
             "notes": [
-                [float(note.beat), int(note.pitch), float(note.length), int(note.velocity)]
+                [float(note.beat), note.pitch, float(note.length), int(note.velocity)]
                 for note in node.notes
             ],
             "cc": [

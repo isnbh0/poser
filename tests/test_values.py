@@ -484,6 +484,7 @@ CHECK_STATUS_TABLE = [
     (RenderFailureStatus.TIMED_OUT, CheckStatus.TIMED_OUT),
     # A check has no upstream and no retry, so these cannot occur there; they map to a crash.
     (RenderFailureStatus.LATE_START, CheckStatus.CRASHED),
+    (RenderFailureStatus.UNSUPPORTED_PITCH, CheckStatus.CRASHED),
     (RenderFailureStatus.UPSTREAM_FAILED, CheckStatus.CRASHED),
 ]
 

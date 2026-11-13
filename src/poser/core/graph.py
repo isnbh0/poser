@@ -75,6 +75,8 @@ class Node:
     cc: tuple[ControlChange, ...] = ()
     effect: str | None = None
     delay_samples: int | None = None
+    # A track node's `pitched`, compiled from its track; only a track node can be unpitched.
+    pitched: bool = True
 
     def __post_init__(self) -> None:
         if problems := _node_problems(self):
@@ -240,9 +242,12 @@ def _node_problems(node: Node) -> list[str]:
     if node.kind not in NODE_KINDS:
         problems.append(f"Node.kind: must be track, effect, or delay, got {node.kind!r}")
     problems += _gain_problems(node.gain_db, "Node.gain_db")
+    if node.kind != "track" and node.pitched is not True:
+        problems.append(f"Node.pitched: only a track node can be unpitched, got {node.pitched!r}")
     if node.kind == "track":
         problems += _track_problems(
-            {"sound": node.sound, "notes": node.notes, "cc": node.cc}, "Node"
+            {"sound": node.sound, "notes": node.notes, "cc": node.cc, "pitched": node.pitched},
+            "Node",
         )
     elif node.kind == "effect":
         # Recipes resolve at compose time, so an unknown reference cannot be checked here yet.
@@ -358,6 +363,8 @@ def _node_to_data(node: Node) -> "NodeData":
         data["notes"] = [_note_to_data(note) for note in node.notes]
         if node.cc:
             data["cc"] = [_control_to_data(change) for change in node.cc]
+        if not node.pitched:
+            data["pitched"] = False
     elif node.kind == "effect":
         data["effect"] = cast("str", node.effect)
     else:
@@ -374,6 +381,7 @@ class NodeData(TypedDict):
     sound: NotRequired[str]
     notes: NotRequired[list[NoteData]]
     cc: NotRequired[list[ControlData]]
+    pitched: NotRequired[bool]
     effect: NotRequired[str]
     delay_samples: NotRequired[int]
 

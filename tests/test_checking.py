@@ -85,3 +85,7 @@ def test_unusable_output_is_crashed(bad: BadOutput) -> None:
     assert result.status is CheckStatus.CRASHED
     assert result.detail is not None
     assert result.detail.startswith("instrument wrote unusable audio: ")
+
+
+def test_unsupported_pitch_is_a_crash_of_the_check() -> None:
+    assert check_status(RenderFailureStatus.UNSUPPORTED_PITCH) is CheckStatus.CRASHED

@@ -56,7 +56,7 @@ def command_file(bundles: Sequence[bytes]) -> bytes:
     return b"".join(_int32(len(bundle)) + bundle for bundle in bundles)
 
 
-def hz(pitch: int) -> float:
+def hz(pitch: float) -> float:
     """Twelve-tone equal temperament, MIDI 69 = 440 Hz."""
     return 440.0 * 2.0 ** ((pitch - 69) / 12.0)
 
@@ -80,7 +80,7 @@ def compile_score(recipe: SoundRecipe, performance: Performance, sample_rate: in
     bundles = [osc_bundle(0.0, [_message("/d_recv", [recipe.synthdef])])]
     mapping = dict(recipe.controls)
     current: dict[str, float] = {}
-    opened: dict[int, list[int]] = {}
+    opened: dict[float, list[int]] = {}
     next_id = FIRST_NODE_ID
     for event in performance.events:
         seconds = event.sample / sample_rate

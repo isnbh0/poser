@@ -187,7 +187,7 @@ def test_song_keys_match_the_code() -> None:
     assert set(names) == keys
 
 
-def with_key(key: str, value: int) -> dict[str, object]:
+def with_key(key: str, value: object) -> dict[str, object]:
     """Return a valid one-track song with `key` set to `value` wherever its key sets place it."""
     note: dict[str, object] = {"beat": 0, "pitch": 60, "length": 1, "velocity": 100}
     cc: dict[str, object] = {"beat": 0, "control": 1, "value": 0}
@@ -212,15 +212,35 @@ def with_key(key: str, value: int) -> dict[str, object]:
 def integer_ranges() -> list[tuple[str, int, int]]:
     ranges = []
     for name, row in zip(first_column("Songs"), table("Songs"), strict=True):
+        # A `number` row takes fractions inside its range, so its bounds are not integer bounds.
         match = INT_RANGE.match(row[-1])
-        if match:
+        if match and row[2] != "number":
             ranges.append((name, int(match.group(1)), int(match.group(2))))
     return ranges
 
 
 def test_song_key_table_has_integer_ranges() -> None:
     names = {name for name, _, _ in integer_ranges()}
-    assert names == {"pitch", "velocity", "gain", "control", "value"}
+    assert names == {"velocity", "gain", "control", "value"}
+
+
+def test_pitch_row_is_a_number_and_matches_validation() -> None:
+    (row,) = [row for row in table("Songs") if row[0] == "`pitch`"]
+    assert row[2:] == ["number", "0 to 127"]
+    for accepted in (0, 127, 60.5):
+        parse_song(with_key("pitch", accepted))
+    for rejected in (-0.5, 127.5):
+        with pytest.raises(SongError):
+            parse_song(with_key("pitch", rejected))
+
+
+def test_pitched_row_matches_validation() -> None:
+    (row,) = [row for row in table("Songs") if row[0] == "`pitched`"]
+    assert row[1:3] == ["track, optional", "true or false"]
+    parse_song(with_key("pitched", True))
+    parse_song(with_key("pitched", False))
+    with pytest.raises(SongError):
+        parse_song(with_key("pitched", "false"))
 
 
 @pytest.mark.parametrize(("key", "low", "high"), integer_ranges())

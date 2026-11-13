@@ -20,6 +20,8 @@ non-realtime. A track names one of its sounds as `<instrument>:<source>/<path>`,
 - `sources` in `poser.toml` names sound folders; `saved` reads artifact pairs directly under
   `<sounds_dir>/<instrument>/`. Case matters in `<source>/<path>`; `builtin` and `saved` are
   reserved source names.
+- A scsynth instrument plays whole MIDI pitches only; a fractional pitch fails as
+  `unsupported_pitch`.
 - This adapter provides no effect recipes and no `save-sound` capture.
 - The `scsynth` option names the engine binary, whose path varies by install. Without it, sounds
   still list and resolve, and renders fail with `load_failed`.

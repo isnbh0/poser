@@ -73,6 +73,18 @@ def _check_pitches(pitches: Iterable[object], what: str) -> tuple[int, ...]:
     return tuple(checked)
 
 
+def _check_pitch_numbers(pitches: Iterable[object], what: str) -> tuple[float, ...]:
+    """Check pitches that may be any number on the MIDI scale, such as 60.5 for a quarter tone."""
+    checked = []
+    for value in pitches:
+        if not is_number(value):
+            raise ValueError(f"{what} has pitch {value!r}, which must be a finite number")
+        if not 0 <= value <= 127:
+            raise ValueError(f"{what} reaches pitch {value}, outside 0 to 127")
+        checked.append(value)
+    return tuple(checked)
+
+
 def pitch(name: str) -> int:
     """Read a note name such as `C4`, `c#4`, `Db4`, or `Cbb4` as a MIDI pitch."""
     match = NOTE_NAME.fullmatch(name) if isinstance(name, str) else None
@@ -164,13 +176,16 @@ def humanize(
 
 
 def notes(
-    pitches: Iterable[int],
+    pitches: Iterable[float],
     beat: float,
     length: float,
     velocity: int,
     step: float | None = None,
 ) -> tuple[Note, ...]:
-    """Place pitches from `beat`: together as a chord, or `step` beats apart as a line."""
+    """Place pitches from `beat`: together as a chord, or `step` beats apart as a line.
+
+    A pitch is any number from 0 to 127, such as 60.5 for a quarter tone above middle C.
+    """
     if _require_number(beat, "beat") < 0:
         raise ValueError(f"beat {beat} must not be negative")
     if _require_number(length, "length") <= 0:
@@ -179,7 +194,7 @@ def notes(
         raise ValueError(f"velocity {velocity} must be from 1 to 127")
     if step is not None and _require_number(step, "step") < 0:
         raise ValueError(f"step {step} must not be negative")
-    placed = _check_pitches(list(pitches), "notes")
+    placed = _check_pitch_numbers(list(pitches), "notes")
     return tuple(
         Note(beat=beat + (step or 0) * index, pitch=value, length=length, velocity=velocity)
         for index, value in enumerate(placed)

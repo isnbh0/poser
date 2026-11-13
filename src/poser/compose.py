@@ -19,13 +19,14 @@ Deferred until adapters are published by other people: discovering adapters thro
 """
 
 import copy
+import inspect
 import re
 import tomllib
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import MappingProxyType
-from typing import cast
+from typing import cast, get_protocol_members
 
 from poser.adapters.loading import load_object
 from poser.core.analysis import AnalysisTools
@@ -64,6 +65,8 @@ def workspace_initializer(directory: Path) -> WorkspaceInitializer:
 
 INSTRUMENT = "instrument"
 EFFECT = "effect"
+# Marks a member an adapter does not have, which no real member value can be.
+_ABSENT = object()
 BUILTINS: Mapping[str, Mapping[str, str]] = MappingProxyType(
     {
         INSTRUMENT: MappingProxyType({"pedalboard": "poser.adapters.pedalboard.instrument:create"}),
@@ -371,8 +374,18 @@ class Composition:
                 problem = problem.removeprefix(f"{owner}: ")
             raise self._fail(where, problem) from error
         if not isinstance(made, port):
+            # `isinstance` looks members up statically, so this names exactly what it missed.
+            lacking = sorted(
+                member
+                for member in get_protocol_members(port)
+                if inspect.getattr_static(made, member, _ABSENT) is _ABSENT
+            )
+            reason = f": it lacks {', '.join(lacking)}" if lacking else ""
+            article = "an" if port.__name__[0] in "AEIOU" else "a"
             raise self._fail(
-                where, f"{spec.use!r} made a {type(made).__name__}, which is not a {port.__name__}"
+                where,
+                f"{spec.use!r} made a {type(made).__name__}, which is not {article} "
+                f"{port.__name__}{reason}",
             )
         return made
 

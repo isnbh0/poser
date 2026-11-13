@@ -29,6 +29,7 @@ from scipy.io import wavfile
 from poser.core.audio import NUM_CHANNELS, SAMPLE_RATE, write_raw_audio
 from poser.core.jsonvalue import Json, JsonValue
 from poser.core.names import Identifier
+from poser.core.performance import PitchSupport
 from poser.core.ports import (
     AdapterContext,
     RenderFailure,
@@ -190,6 +191,10 @@ class ScsynthInstrument:
     @property
     def adapter_version(self) -> str:
         return ADAPTER_VERSION
+
+    @property
+    def pitches(self) -> PitchSupport:
+        return PitchSupport.SEMITONES
 
     @property
     def guide(self) -> str:

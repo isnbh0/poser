@@ -24,7 +24,7 @@ from poser.core.audio import (
 from poser.core.cache import Stamp, StampProblem
 from poser.core.graph import Graph
 from poser.core.names import Identifier, NodeName, SongId, Suffix, TrackName
-from poser.core.performance import perform
+from poser.core.performance import PitchSupport, perform
 from poser.core.ports import (
     AudioFileError,
     AudioFiles,
@@ -116,6 +116,7 @@ def check_instrument_contract(
     assert isinstance(instrument.adapter_id, Identifier)
     assert isinstance(instrument.adapter_version, str)
     assert instrument.adapter_version
+    assert isinstance(instrument.pitches, PitchSupport)
     listing = instrument.sounds()
     assert isinstance(listing, SoundListing)
     for entry in listing.entries:

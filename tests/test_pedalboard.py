@@ -49,6 +49,7 @@ from poser.adapters.pedalboard.worker import (
     NotLoaded,
     capture_job,
     load_external,
+    midi_note,
     performance_messages,
     render_duration_s,
     render_effect,
@@ -60,7 +61,14 @@ from poser.core.audio import SAMPLE_RATE, Audio, read_raw_audio, write_raw_audio
 from poser.core.graph import Wire
 from poser.core.jsonvalue import Json, JsonValue
 from poser.core.names import Identifier, NodeName, Suffix
-from poser.core.performance import Control, NoteOff, NoteOn, Performance, performance_to_data
+from poser.core.performance import (
+    Control,
+    NoteOff,
+    NoteOn,
+    Performance,
+    PitchSupport,
+    performance_to_data,
+)
 from poser.core.ports import (
     AdapterContext,
     Captured,
@@ -2269,3 +2277,13 @@ def test_the_group_adapter_refuses_a_payload_that_is_not_its_own(tmp_path: Path)
 
     with pytest.raises(ValueError, match="not a Pedalboard effect payload"):
         make_effect(tmp_path).render_group(stranger, 60)
+
+
+def test_the_worker_sends_only_whole_pitches_as_midi_notes() -> None:
+    assert midi_note(60) == 60
+    with pytest.raises(ValueError, match="whole pitch"):
+        midi_note(60.5)
+
+
+def test_a_pedalboard_instrument_plays_semitones(tmp_path: Path) -> None:
+    assert make_instrument(tmp_path).pitches is PitchSupport.SEMITONES

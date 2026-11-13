@@ -65,6 +65,17 @@ DUCK_DEFAULTS: Mapping[str, float] = MappingProxyType(
 )
 
 
+def midi_note(pitch: float) -> int:
+    """Return a pitch as a MIDI note number, or raise ValueError for a fractional pitch.
+
+    The core sends this adapter only whole pitches, which are ints, so a fractional one here is a
+    poser bug.
+    """
+    if not isinstance(pitch, int):
+        raise ValueError(f"a MIDI note number must be a whole pitch, got {pitch!r}")  # noqa: TRY004
+    return pitch
+
+
 def performance_messages(performance: Performance) -> list[mido.Message]:
     """Return a performance as MIDI messages for Pedalboard, in the performance's order.
 
@@ -77,11 +88,11 @@ def performance_messages(performance: Performance) -> list[mido.Message]:
     for event in performance.events:
         match event:
             case NoteOff(sample, pitch):
-                message = mido.Message("note_off", note=pitch)
+                message = mido.Message("note_off", note=midi_note(pitch))
             case Control(sample, control, value):
                 message = mido.Message("control_change", control=control, value=value)
             case NoteOn(sample, pitch, velocity):
-                message = mido.Message("note_on", note=pitch, velocity=velocity)
+                message = mido.Message("note_on", note=midi_note(pitch), velocity=velocity)
         messages.append(message.copy(time=(sample + 0.5) / SAMPLE_RATE))
     return messages
 
