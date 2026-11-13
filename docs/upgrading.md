@@ -33,6 +33,9 @@ fix. A change listed here applies to every studio that pinned a poser commit fro
           return PitchSupport.SEMITONES  # CONTINUOUS if it plays any pitch, such as 60.5
   ```
 
+  An adapter that wraps another instrument can return the wrapped instrument's `pitches`.
+  Declaring the property changes no audio, so `adapter_version` stays the same.
+
 - **Symptom:** code outside poser that reads `Note.pitch` fails on a value such as `60.5`.
   **Cause:** a pitch is any number from 0 to 127; a whole pitch is still an `int`.
   **Fix:** accept floats in that code. Songs whose pitches are all whole are unaffected.
