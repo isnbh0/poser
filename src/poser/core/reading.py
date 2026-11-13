@@ -1,4 +1,5 @@
-"""Readings: what a framework finds in a song's score, as outcomes over contiguous spans of beats.
+"""Readings: what a framework finds in a song's score, as outcomes over contiguous spans of beats,
+and what a vocabulary makes of a song's authored marks.
 
 Every type is a frozen dataclass whose constructor raises ValueError on a broken law, so a
 malformed reading cannot be built. A framework owns its value type: a consumer narrows a value
@@ -14,8 +15,9 @@ from typing import ClassVar, Protocol, cast, runtime_checkable
 
 from poser.core.graph import Graph
 from poser.core.jsonvalue import JsonValue
+from poser.core.marks import LAYER_PATTERN, LayerName, Mark
 from poser.core.names import Identifier, NodeName
-from poser.core.rules import Note, _plain, _span_problems
+from poser.core.rules import Note, _line_problems, _plain, _span_problems
 from poser.core.song import Song, is_number, song_last_beat
 
 
@@ -76,6 +78,17 @@ class Unknowable:
             isinstance(reason, str) and reason.strip() and not any(c in reason for c in "\r\n")
         ):
             raise ValueError(f"Unknowable.reason must be one non-empty line, got {reason!r}")
+
+
+@dataclass(frozen=True)
+class Rejected:
+    """A vocabulary's answer that a label is not one of its values, for the stated reason."""
+
+    reason: str
+
+    def __post_init__(self) -> None:
+        if problems := _line_problems(self.reason, "Rejected.reason"):
+            raise ValueError("\n".join(problems))
 
 
 type Outcome[V: ReadingValue] = Known[V] | Ambiguous[V] | Unknowable
@@ -254,3 +267,164 @@ def readings_to_data(readings: SongReadings) -> JsonValue:
         "tracks": list(readings.tracks),
         "frameworks": frameworks,
     }
+
+
+# Authored marks, as the configured vocabularies read them
+
+
+def _sequence(owner: str, field: str, value: object) -> tuple[object, ...]:
+    if not isinstance(value, Sequence) or isinstance(value, str):
+        raise ValueError(f"{owner}.{field} must be a sequence, got {value!r}")
+    items = tuple(cast("Sequence[object]", value))
+    if not items:
+        raise ValueError(f"{owner}.{field} must not be empty")
+    return items
+
+
+def _ordered(owner: str, marks: Sequence[Mark]) -> None:
+    for previous, mark in itertools.pairwise(marks):
+        if mark.beat < previous.end:
+            raise ValueError(
+                f"{owner}'s marks must be in order without overlap: one ends at "
+                f"{previous.end!r} and the next starts at {mark.beat!r}"
+            )
+
+
+def _identifier(owner: str, value: object) -> None:
+    if not isinstance(value, Identifier):
+        raise ValueError(f"{owner}.vocabulary must be an Identifier, got {value!r}")
+
+
+@dataclass(frozen=True)
+class ParsedMark:
+    """An authored mark, after clipping to the song's end, and the value its label names."""
+
+    mark: Mark
+    value: ReadingValue
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.mark, Mark):
+            raise ValueError(f"ParsedMark.mark must be a Mark, got {self.mark!r}")
+        if not isinstance(self.value, ReadingValue):
+            raise ValueError(f"ParsedMark.value must be a ReadingValue, got {self.value!r}")
+
+
+@dataclass(frozen=True)
+class ParsedLayer:
+    """A layer that the vocabulary named `vocabulary` read: its marks, in order, with values."""
+
+    vocabulary: Identifier
+    marks: tuple[ParsedMark, ...]
+
+    def __post_init__(self) -> None:
+        _identifier("ParsedLayer", self.vocabulary)
+        items = _sequence("ParsedLayer", "marks", self.marks)
+        for item in items:
+            if not isinstance(item, ParsedMark):
+                raise ValueError(f"ParsedLayer.marks must hold only ParsedMark, got {item!r}")
+        marks = cast("tuple[ParsedMark, ...]", items)
+        _ordered("ParsedLayer", [parsed.mark for parsed in marks])
+        object.__setattr__(self, "marks", marks)
+
+
+@dataclass(frozen=True)
+class TextLayer:
+    """A layer no configured vocabulary reads: its marks, in order, as authored text."""
+
+    marks: tuple[Mark, ...]
+
+    def __post_init__(self) -> None:
+        items = _sequence("TextLayer", "marks", self.marks)
+        for item in items:
+            if not isinstance(item, Mark):
+                raise ValueError(f"TextLayer.marks must hold only Mark, got {item!r}")
+        marks = cast("tuple[Mark, ...]", items)
+        _ordered("TextLayer", marks)
+        object.__setattr__(self, "marks", marks)
+
+
+@dataclass(frozen=True)
+class LayerError:
+    """The vocabulary named `vocabulary` failed while reading a layer, other than by Rejected."""
+
+    vocabulary: Identifier
+    detail: str
+
+    def __post_init__(self) -> None:
+        _identifier("LayerError", self.vocabulary)
+        if not isinstance(self.detail, str):
+            raise ValueError(f"LayerError.detail must be text, got {self.detail!r}")
+
+
+type LayerOutcome = ParsedLayer | TextLayer | LayerError
+
+
+def _layer_marks(layer: LayerOutcome) -> tuple[Mark, ...]:
+    match layer:
+        case ParsedLayer(marks=marks):
+            return tuple(parsed.mark for parsed in marks)
+        case TextLayer(marks=marks):
+            return marks
+        case LayerError():
+            return ()
+
+
+@dataclass(frozen=True)
+class AuthoredMarks:
+    """A song's mark layers, in authored order, each parsed, kept as text, or failed.
+
+    Every mark ends at or before `end`, the song's last beat.
+    """
+
+    end: float
+    layers: Mapping[LayerName, LayerOutcome]
+
+    def __post_init__(self) -> None:
+        end = _finite("AuthoredMarks", "end", self.end)
+        if end <= 0:
+            raise ValueError(f"AuthoredMarks.end must be above 0, got {end!r}")
+        if not isinstance(self.layers, Mapping):
+            raise ValueError(f"AuthoredMarks.layers must be a mapping, got {self.layers!r}")
+        layers = dict(cast("Mapping[object, object]", self.layers))
+        for name, layer in layers.items():
+            if not (isinstance(name, str) and LAYER_PATTERN.fullmatch(name)):
+                raise ValueError(f"AuthoredMarks has a layer named {name!r}, not a layer name")
+            if not isinstance(layer, ParsedLayer | TextLayer | LayerError):
+                raise ValueError(
+                    f"AuthoredMarks.layers[{name!r}] must be a ParsedLayer, TextLayer, or "
+                    f"LayerError, got {layer!r}"
+                )
+            for mark in _layer_marks(layer):
+                if mark.end > end:
+                    raise ValueError(
+                        f"AuthoredMarks.layers[{name!r}] has a mark ending at beat {mark.end!r}, "
+                        f"after the end, beat {end!r}"
+                    )
+        object.__setattr__(self, "end", end)
+        object.__setattr__(
+            self, "layers", MappingProxyType(cast("dict[LayerName, LayerOutcome]", layers))
+        )
+
+
+def _mark_data(mark: Mark) -> dict[str, JsonValue]:
+    return {"beat": _plain(mark.beat), "end": _plain(mark.end), "text": mark.text}
+
+
+def marks_to_data(authored: AuthoredMarks) -> JsonValue:
+    """Return the layers' JSON form, in authored order; each value is written by its `to_data`."""
+    layers: dict[str, JsonValue] = {}
+    for name, layer in authored.layers.items():
+        match layer:
+            case ParsedLayer(vocabulary=vocabulary, marks=marks):
+                layers[name] = {
+                    "vocabulary": vocabulary,
+                    "marks": [
+                        _mark_data(parsed.mark) | {"value": parsed.value.to_data()}
+                        for parsed in marks
+                    ],
+                }
+            case TextLayer(marks=marks):
+                layers[name] = {"vocabulary": None, "marks": [_mark_data(mark) for mark in marks]}
+            case LayerError(vocabulary=vocabulary, detail=detail):
+                layers[name] = {"vocabulary": vocabulary, "error": detail}
+    return layers

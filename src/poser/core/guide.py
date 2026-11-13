@@ -37,9 +37,26 @@ class InstrumentNote:
 
 @dataclass(frozen=True)
 class FrameworkListing:
-    preset: str | None  # The preset poser.toml names, or None for an explicit list.
+    preset: str | None  # The frameworks preset poser.toml names, or None for an explicit list.
     names: tuple[Identifier, ...]  # The configured frameworks, in order.
-    default: bool = False  # Whether the preset is poser's default preset.
+    default: bool = False  # Whether the frameworks preset is poser's default preset.
+    # The vocabularies preset poser.toml names, or None for an explicit list.
+    vocabulary_preset: str | None = None
+    vocabularies: tuple[Identifier, ...] = ()  # The configured vocabularies, in order.
+    vocabulary_default: bool = False  # Whether the vocabularies preset is poser's default.
+
+
+def _vocabulary_sentence(listing: FrameworkListing) -> str:
+    names = ", ".join(f"`{name}`" for name in listing.vocabularies)
+    if not names:
+        return "No vocabularies are configured; every mark layer is text."
+    if listing.vocabulary_preset is None:
+        return f"Vocabularies: {names} (listed in poser.toml)."
+    default = " (the default)" if listing.vocabulary_default else ""
+    return (
+        f"Vocabularies: {names}, from the `{listing.vocabulary_preset}` preset{default}; to pin "
+        "them, list them in `[adapters] vocabularies`."
+    )
 
 
 def _framework_block(listing: FrameworkListing) -> str:
@@ -60,7 +77,7 @@ def _framework_block(listing: FrameworkListing) -> str:
             f"Preset: `{listing.preset}`{default}, poser's current recommendation. "
             f"Frameworks: {names}. To pin them, list them in `[adapters] frameworks`."
         )
-    return f"{FRAMEWORKS_HEADING}\n\n{text}"
+    return f"{FRAMEWORKS_HEADING}\n\n{text} {_vocabulary_sentence(listing)}"
 
 
 def _instrument_item(note: InstrumentNote) -> str:

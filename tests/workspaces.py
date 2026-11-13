@@ -106,6 +106,18 @@ class RaisingFramework:
 
 def raising_framework(options, context):
     return RaisingFramework()
+
+
+class RaisingVocabulary:
+    name = Identifier("chords")
+    guide = "## Broken vocabulary"
+
+    def parse(self, text):
+        raise RuntimeError("cannot parse")
+
+
+def raising_vocabulary(options, context):
+    return RaisingVocabulary()
 """
 
 INSTRUMENTS = """

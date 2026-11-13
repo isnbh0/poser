@@ -167,6 +167,7 @@ def test_framework_readings_name_every_outcome_and_preset() -> None:
     named = set(BACKTICKED.findall(text))
     assert set(PRESETS) <= named
     assert f"`{DEFAULT_PRESET}` preset" in " ".join(text.split())
+    assert set(PRESETS[DEFAULT_PRESET]["vocabularies"]) <= named
 
 
 def test_statuses_and_defects_are_named() -> None:

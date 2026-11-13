@@ -14,6 +14,8 @@ from typing import TYPE_CHECKING, NoReturn
 import pytest
 from helpers import SURGE_DIR
 
+from poser.adapters.chords import GUIDE as CHORDS_GUIDE
+from poser.adapters.chords import ChordsVocabulary
 from poser.adapters.filestore import FileRenderStore
 from poser.adapters.measuring import StandardMeasurer
 from poser.adapters.mixing import GainMixer
@@ -196,6 +198,30 @@ def not_an_effect(name, options, context):
 
 def raises(options, context):
     raise RuntimeError("the adapter has a bug")
+
+
+class Vocabulary:
+    def __init__(self, name):
+        self._name = name
+
+    @property
+    def name(self):
+        return self._name
+
+    @property
+    def guide(self):
+        return f"## {self._name} labels\\n"
+
+    def parse(self, text):
+        from poser.core.reading import Rejected
+
+        return Rejected("reads nothing")
+
+
+def vocabulary(options, context):
+    SEEN.append(("vocabulary", (options, context)))
+    name = options.get("name", "chords")
+    return Vocabulary(name if options.get("plain") else Identifier(name))
 """
 
 SERUM = """
@@ -778,6 +804,7 @@ def test_guide_parts_hold_each_guide_once_in_order(
         composition.visualizer().guide,  # ty: ignore[unresolved-attribute]
         "## probe\n\nA fake section.\n",
         TONAL_GUIDE,
+        CHORDS_GUIDE,
     )
     for item in composition.config.instruments:
         assert "guide" not in item.spec.options
@@ -804,7 +831,7 @@ def test_no_frameworks_key_selects_the_western_preset(tmp_path: Path) -> None:
     assert framework.name == "tonal"
     assert framework.window_beats == 16
     assert composition.config.preset == "western"
-    assert PRESETS["western"] == ("tonal",)
+    assert PRESETS["western"]["frameworks"] == ("tonal",)
 
 
 def test_the_neutral_preset_selects_no_framework(tmp_path: Path) -> None:
@@ -885,3 +912,122 @@ def test_frameworks_are_checked_when_built(
         ConfigError, match=re.escape(f"{tmp_path / 'poser.toml'}: {where}: {problem}")
     ):
         composition.frameworks()
+
+
+# Vocabularies
+
+
+def test_no_vocabularies_key_selects_the_western_preset(tmp_path: Path) -> None:
+    composition = compose(tmp_path, SERUM)
+
+    (vocabulary,) = composition.vocabularies()
+    assert isinstance(vocabulary, ChordsVocabulary)
+    assert vocabulary.name == "chords"
+    assert composition.config.vocabulary_preset == "western"
+    assert PRESETS["western"]["vocabularies"] == ("chords",)
+    assert CHORDS_GUIDE in composition.guide_parts()
+
+
+def test_the_neutral_preset_selects_no_vocabulary(tmp_path: Path) -> None:
+    composition = compose(tmp_path, SERUM + '[adapters]\nvocabularies = "neutral"\n')
+
+    assert composition.vocabularies() == ()
+    assert composition.config.vocabulary_preset == "neutral"
+    assert composition.config.preset == "western"
+    assert len(composition.frameworks()) == 1
+    assert CHORDS_GUIDE not in composition.guide_parts()
+
+
+def test_a_list_pins_vocabularies_and_records_no_preset(tmp_path: Path) -> None:
+    composition = compose(tmp_path, SERUM + '[adapters]\nvocabularies = ["chords"]\n')
+
+    (vocabulary,) = composition.vocabularies()
+    assert isinstance(vocabulary, ChordsVocabulary)
+    assert composition.config.vocabulary_preset is None
+    assert composition.config.preset == "western"
+
+
+def test_a_vocabulary_name_in_place_of_a_preset_suggests_the_list(tmp_path: Path) -> None:
+    path = write_config(tmp_path, SERUM + '[adapters]\nvocabularies = "chords"\n')
+
+    with pytest.raises(ConfigError) as error:
+        read_config(path)
+
+    assert str(error.value) == (
+        f"{path}: adapters.vocabularies: unknown preset 'chords'; presets are neutral, western; "
+        'to select the chords vocabulary alone, write ["chords"]'
+    )
+
+
+@pytest.mark.parametrize(
+    ("value", "where", "problem"),
+    [
+        (
+            '"modern"',
+            "adapters.vocabularies",
+            "unknown preset 'modern'; presets are neutral, western",
+        ),
+        ("3", "adapters.vocabularies", "must be a preset name or a list"),
+        ('["roman"]', "adapters.vocabularies[0]", "'roman' is not a built-in ('chords')"),
+    ],
+)
+def test_an_unusable_vocabularies_value_is_refused(
+    tmp_path: Path, value: str, where: str, problem: str
+) -> None:
+    path = write_config(tmp_path, SERUM + f"[adapters]\nvocabularies = {value}\n")
+
+    with pytest.raises(ConfigError, match=re.escape(f"{path}: {where}: {problem}")):
+        read_config(path)
+
+
+def test_an_import_path_supplies_a_vocabulary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = adapters_module(tmp_path, monkeypatch)
+    text = SERUM + '[adapters]\nvocabularies = [{{ use = "{module}:vocabulary" }}]\n'
+    composition = compose(tmp_path, text, module.__name__)
+
+    (vocabulary,) = composition.vocabularies()
+    assert type(vocabulary) is module.Vocabulary
+    assert vocabulary.name == "chords"
+    assert "## chords labels\n" in composition.guide_parts()
+
+
+@pytest.mark.parametrize(
+    ("value", "where", "problem"),
+    [
+        (
+            '["chords", {{ use = "{module}:vocabulary" }}]',
+            "adapters.vocabularies",
+            "two vocabularies are named 'chords'",
+        ),
+        (
+            '[{{ use = "{module}:vocabulary", name = "Chords" }}]',
+            "adapters.vocabularies[0]",
+            "name 'Chords' is not a layer name",
+        ),
+        (
+            '[{{ use = "chords", strict = true }}]',
+            "adapters.vocabularies[0]",
+            "unknown option 'strict'",
+        ),
+        (
+            '[{{ use = "{module}:vocabulary", plain = true }}]',
+            "adapters.vocabularies[0]",
+            "name 'chords' is not an Identifier",
+        ),
+    ],
+    ids=["duplicate-name", "uppercase-name", "unknown-option", "plain-str-name"],
+)
+def test_vocabularies_are_checked_when_built(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, value: str, where: str, problem: str
+) -> None:
+    module = adapters_module(tmp_path, monkeypatch)
+    composition = compose(
+        tmp_path, SERUM + f"[adapters]\nvocabularies = {value}\n", module.__name__
+    )
+
+    with pytest.raises(
+        ConfigError, match=re.escape(f"{tmp_path / 'poser.toml'}: {where}: {problem}")
+    ):
+        composition.vocabularies()

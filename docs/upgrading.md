@@ -26,6 +26,12 @@ fix. A change listed here applies to every studio that pinned a poser commit fro
 - **New:** a song may carry an optional `marks` key: layers of the author's labels over spans of
   beats, such as `chords` or `parts`. Marks never change audio or readings.
 
+- **New:** a song may carry a `chords` layer, such as `{beat: 0, end: 4, text: Am7}`, and
+  `read-song` shows the parsed chords above the framework readings; other layers show as text.
+  `[adapters] vocabularies` selects what reads layers, by preset or list, as `[adapters]
+  frameworks` does; the default `western` preset reads `chords`. A studio that sets
+  `frameworks = "neutral"` may also want `vocabularies = "neutral"`.
+
 ## Framework-neutral pitch and readings
 
 - **Symptom:** `update-guide`, `check-instruments`, and other commands that build instruments

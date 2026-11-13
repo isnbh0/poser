@@ -407,3 +407,30 @@ def test_importing_poser_loads_no_adapter_library() -> None:
         for name in loaded
         if any(name == lib or name.startswith(f"{lib}.") for lib in ADAPTER_LIBRARIES)
     ]
+
+
+def test_the_showcase_states_its_chords() -> None:
+    from poser.adapters.chords import Chord, create_chords
+    from poser.core.interpreting import interpret_marks
+    from poser.core.ports import AdapterContext
+    from poser.core.reading import ParsedLayer
+    from poser.reference_setups.surge.showcase import build
+
+    song = build()
+    chords = song.marks.layers["chords"]
+    assert len(chords) == 16
+    assert (chords[0].beat, chords[-1].end) == (0, 64)
+    root = Path()
+    layer = interpret_marks(song, [create_chords({}, AdapterContext(root, root, root))]).layers[
+        "chords"
+    ]
+    assert isinstance(layer, ParsedLayer)
+    values = [parsed.value for parsed in layer.marks]
+    assert len(values) == 16
+    assert values[:4] == [
+        Chord(9, "min", 9),
+        Chord(5, "maj", 5),
+        Chord(0, "maj", 0),
+        Chord(7, "maj", 7),
+    ]
+    assert layer.marks[-1].mark.end == 63.5

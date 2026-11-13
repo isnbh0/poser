@@ -19,7 +19,7 @@ from poser.core.jsonvalue import Json
 from poser.core.names import Identifier, NodeName, SongId, Suffix
 from poser.core.performance import Performance, PitchSupport
 from poser.core.piano_roll import PianoRoll
-from poser.core.reading import Reading, ReadingValue, ScoreRequest
+from poser.core.reading import Reading, ReadingValue, Rejected, ScoreRequest
 from poser.core.report import Levels, Measurements
 from poser.core.song import Song, is_int, is_number
 from poser.core.sounds import SoundEntry, SoundRef
@@ -722,6 +722,28 @@ class Framework(Protocol):
 
         Decides from the request alone, writes nothing, and starts nothing. "I cannot tell" is an
         Unknowable span, never an exception.
+        """
+        ...
+
+
+@runtime_checkable
+class Vocabulary(Protocol):
+    """Translates the labels of the marks layer named `name` into values the vocabulary owns."""
+
+    @property
+    def name(self) -> Identifier:
+        """The layer this vocabulary reads; a lowercase layer name."""
+        ...
+
+    @property
+    def guide(self) -> str:
+        """A `## ` block for POSER.md describing the labels it reads, from package data only."""
+        ...
+
+    def parse(self, text: str) -> ReadingValue | Rejected:
+        """Return the value a label names, or Rejected with a one-line reason.
+
+        Reads only its argument, writes nothing, and starts nothing.
         """
         ...
 

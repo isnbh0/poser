@@ -32,6 +32,7 @@ from poser.adapters.loading import load_object
 from poser.core.analysis import AnalysisTools
 from poser.core.guide import FrameworkListing, GuideBlock, InstrumentNote
 from poser.core.jsonvalue import JsonValue, is_json_value
+from poser.core.marks import LAYER_PATTERN
 from poser.core.names import Identifier, Suffix
 from poser.core.ports import (
     AdapterContext,
@@ -51,6 +52,7 @@ from poser.core.ports import (
     ReportSection,
     SongFormat,
     Visualizer,
+    Vocabulary,
     WorkspaceInitializer,
 )
 
@@ -88,6 +90,7 @@ BUILTINS: Mapping[str, Mapping[str, str]] = MappingProxyType(
         "visualizer": MappingProxyType({"spectrogram": "poser.adapters.spectrogram:create"}),
         "sections": MappingProxyType[str, str]({}),
         "frameworks": MappingProxyType({"tonal": "poser.adapters.tonal:create_tonal"}),
+        "vocabularies": MappingProxyType({"chords": "poser.adapters.chords:create_chords"}),
         "piano_roll_drawer": MappingProxyType[str, str]({}),
     }
 )
@@ -105,10 +108,21 @@ DEFAULTS: Mapping[str, str | tuple[str, ...]] = MappingProxyType(
     }
 )
 FRAMEWORKS = "frameworks"
-# Named sets of frameworks. A preset is poser's current recommendation and may gain frameworks in
-# later versions; readings are never stored, so a changed preset stales no data. A studio pins its
-# frameworks by listing them.
-PRESETS: Mapping[str, tuple[str, ...]] = MappingProxyType({"western": ("tonal",), "neutral": ()})
+VOCABULARIES = "vocabularies"
+# The list keys a preset fills, each with the singular its messages use.
+PRESET_KEYS: Mapping[str, str] = MappingProxyType(
+    {FRAMEWORKS: "framework", VOCABULARIES: "vocabulary"}
+)
+# Named sets of frameworks and vocabularies, by list key. A preset is poser's current
+# recommendation and may gain members in later versions; readings and parsed marks are never
+# stored, so a changed preset stales no data. A studio pins its frameworks or vocabularies by
+# listing them.
+PRESETS: Mapping[str, Mapping[str, tuple[str, ...]]] = MappingProxyType(
+    {
+        "western": MappingProxyType({FRAMEWORKS: ("tonal",), VOCABULARIES: ("chords",)}),
+        "neutral": MappingProxyType({FRAMEWORKS: (), VOCABULARIES: ()}),
+    }
+)
 DEFAULT_PRESET = "western"
 # List keys that cannot be empty: a workspace with no song format can load no song.
 NON_EMPTY_LISTS = frozenset({"song_formats"})
@@ -164,6 +178,8 @@ class WorkspaceConfig:
     guidance: GuidanceConfig = field(default_factory=GuidanceConfig)
     # The preset `[adapters] frameworks` names, or None for an explicit list.
     preset: str | None = None
+    # The preset `[adapters] vocabularies` names, or None for an explicit list.
+    vocabulary_preset: str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "adapters", MappingProxyType(dict(self.adapters)))
@@ -262,34 +278,34 @@ def _effects(path: Path, value: object) -> tuple[EffectSpec, ...]:
     )
 
 
-def _frameworks(path: Path, raw: object) -> tuple[tuple[AdapterSpec, ...], str | None]:
-    """Read `[adapters] frameworks`: a preset name, or a list of specs like `sections`."""
-    where = f"adapters.{FRAMEWORKS}"
+def _preset_list(path: Path, key: str, raw: object) -> tuple[tuple[AdapterSpec, ...], str | None]:
+    """Read `[adapters] frameworks` or `vocabularies`: a preset name, or a list of specs like
+    `sections`."""
+    where = f"adapters.{key}"
     if isinstance(raw, str):
         if raw not in PRESETS:
             presets = ", ".join(sorted(PRESETS))
             problem = f"unknown preset {raw!r}; presets are {presets}"
-            if raw in BUILTINS[FRAMEWORKS]:
-                problem += f'; to select the {raw} framework alone, write ["{raw}"]'
+            if raw in BUILTINS[key]:
+                problem += f'; to select the {raw} {PRESET_KEYS[key]} alone, write ["{raw}"]'
             raise ConfigError(f"{path}: {where}: {problem}")
-        return tuple(AdapterSpec(use) for use in PRESETS[raw]), raw
+        return tuple(AdapterSpec(use) for use in PRESETS[raw][key]), raw
     if not isinstance(raw, list):
         raise ConfigError(f"{path}: {where}: must be a preset name or a list")
     items = cast("list[object]", raw)
-    specs = tuple(
-        _spec(path, f"{where}[{index}]", FRAMEWORKS, item) for index, item in enumerate(items)
-    )
+    specs = tuple(_spec(path, f"{where}[{index}]", key, item) for index, item in enumerate(items))
     return specs, None
 
 
 def _adapters(
     path: Path, value: object
-) -> tuple[dict[str, AdapterSpec | tuple[AdapterSpec, ...]], str | None]:
+) -> tuple[dict[str, AdapterSpec | tuple[AdapterSpec, ...]], dict[str, str | None]]:
+    """Read `[adapters]`: every key's specs, and the preset each preset key names, if any."""
     table = _table(value)
     if table is None:
         raise ConfigError(f"{path}: adapters: must be a table")
     for key in table:
-        if key not in DEFAULTS and key != FRAMEWORKS:
+        if key not in DEFAULTS and key not in PRESET_KEYS:
             raise ConfigError(f"{path}: adapters.{key}: unknown key")
     adapters: dict[str, AdapterSpec | tuple[AdapterSpec, ...]] = {}
     for key, default in DEFAULTS.items():
@@ -306,8 +322,10 @@ def _adapters(
             )
         else:
             adapters[key] = _spec(path, where, key, raw)
-    adapters[FRAMEWORKS], preset = _frameworks(path, table.get(FRAMEWORKS, DEFAULT_PRESET))
-    return adapters, preset
+    presets: dict[str, str | None] = {}
+    for key in PRESET_KEYS:
+        adapters[key], presets[key] = _preset_list(path, key, table.get(key, DEFAULT_PRESET))
+    return adapters, presets
 
 
 def _guidance(path: Path, value: object) -> GuidanceConfig:
@@ -351,9 +369,15 @@ def parse_config(text: str, path: Path) -> WorkspaceConfig:
         raise ConfigError(f"{path}: instruments: missing; name at least one instrument")
     instruments = _instruments(path, data["instruments"])
     effects = _effects(path, data.get("effects", {}))
-    adapters, preset = _adapters(path, data.get("adapters", {}))
+    adapters, presets = _adapters(path, data.get("adapters", {}))
     return WorkspaceConfig(
-        path, instruments, effects, adapters, _guidance(path, data.get("guidance", {})), preset
+        path,
+        instruments,
+        effects,
+        adapters,
+        _guidance(path, data.get("guidance", {})),
+        preset=presets[FRAMEWORKS],
+        vocabulary_preset=presets[VOCABULARIES],
     )
 
 
@@ -646,11 +670,50 @@ class Composition:
 
         return self._cached(FRAMEWORKS, build)
 
+    def vocabularies(self) -> tuple[Vocabulary, ...]:
+        """Every configured vocabulary, in configured order."""
+
+        def build() -> tuple[Vocabulary, ...]:
+            built: list[Vocabulary] = []
+            names: set[str] = set()
+            for index, spec in enumerate(self._listed(VOCABULARIES)):
+                where = f"adapters.{VOCABULARIES}[{index}]"
+                vocabulary = self._make(
+                    where, VOCABULARIES, spec, Vocabulary, self._options(spec), self._context
+                )
+                name = vocabulary.name
+                if not isinstance(name, Identifier):
+                    raise self._fail(where, f"name {name!r} is not an Identifier")
+                if not LAYER_PATTERN.fullmatch(name):
+                    raise self._fail(
+                        where,
+                        f"name {name!r} is not a layer name: lowercase letters, digits, _ and -, "
+                        "starting with a letter or digit",
+                    )
+                if name in names:
+                    raise self._fail(
+                        f"adapters.{VOCABULARIES}", f"two vocabularies are named {name!r}"
+                    )
+                names.add(name)
+                built.append(vocabulary)
+            return tuple(built)
+
+        return self._cached(VOCABULARIES, build)
+
     def framework_listing(self) -> FrameworkListing:
-        """The preset and the configured frameworks' names, for the generated guide."""
+        """The presets and the configured frameworks' and vocabularies' names, for the generated
+        guide."""
         preset = self._config.preset
         names = tuple(framework.name for framework in self.frameworks())
-        return FrameworkListing(preset, names, default=preset == DEFAULT_PRESET)
+        vocabulary_preset = self._config.vocabulary_preset
+        return FrameworkListing(
+            preset,
+            names,
+            default=preset == DEFAULT_PRESET,
+            vocabulary_preset=vocabulary_preset,
+            vocabularies=tuple(vocabulary.name for vocabulary in self.vocabularies()),
+            vocabulary_default=vocabulary_preset == DEFAULT_PRESET,
+        )
 
     def analysis_tools(self) -> AnalysisTools:
         return self._cached(
@@ -688,6 +751,9 @@ class Composition:
         ]
         adapters += [(f"adapters.sections[{i}]", s) for i, s in enumerate(self.sections())]
         adapters += [(f"adapters.{FRAMEWORKS}[{i}]", f) for i, f in enumerate(self.frameworks())]
+        adapters += [
+            (f"adapters.{VOCABULARIES}[{i}]", v) for i, v in enumerate(self.vocabularies())
+        ]
         parts: list[GuideBlock] = []
         for where, adapter in adapters:
             for attribute, supported in (

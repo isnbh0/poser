@@ -93,6 +93,7 @@ a built-in name, an import path, or a table with `use` and options:
 | `visualizer` | `"spectrogram"` |
 | `sections` | `[]` |
 | `frameworks` | `"western"`, a preset name; a list pins the frameworks |
+| `vocabularies` | `"western"`, a preset name; a list pins the vocabularies |
 
 Edit `AGENTS.md` for studio preferences and each instrument's `guide` in `poser.toml` for
 instrument notes. The guide, `POSER.md`, is generated; run `uv run update-guide` after changing
@@ -112,8 +113,9 @@ instrument notes. The guide, `POSER.md`, is generated; run `uv run update-guide`
   `--instrument` and `--match`, and add `--json` for JSON.
 - `uv run piano-roll <song> --output <path.png>`: draw authored notes without plugins or audio;
   `--replace` replaces an existing PNG.
-- `uv run read-song <song>`: read the song's authored notes through the configured frameworks,
-  such as key reading, without plugins or audio; add `--json` for JSON.
+- `uv run read-song <song>`: show the song's authored marks, such as its chords, and read its
+  authored notes through the configured frameworks, such as key reading, without plugins or
+  audio; add `--json` for JSON.
 - `uv run render-song <song>`: render one aligned stem per track, rendering again only tracks
   whose inputs changed.
 - `uv run analyze-song <song>`: mix the stems and write the report, spectrograms, and a numbered

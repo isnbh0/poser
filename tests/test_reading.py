@@ -1,28 +1,42 @@
-"""The reading types' laws, the score request, and `read_song`'s error handling."""
+"""The reading types' laws, the score request, `read_song`'s error handling, and
+`interpret_marks`."""
 
 import math
 import re
-from dataclasses import dataclass
+from collections.abc import Callable
+from dataclasses import dataclass, replace
+from pathlib import Path
 from typing import cast
 
 import pytest
+from generated_songs import random_song
 
+from poser.adapters.tonal import create_tonal
 from poser.core.graph import Graph, Node, Wire
-from poser.core.interpreting import read_song
+from poser.core.interpreting import interpret_marks, read_song
 from poser.core.jsonvalue import JsonValue
+from poser.core.marks import Mark, Marks
 from poser.core.names import Identifier, NodeName
+from poser.core.ports import AdapterContext, Framework, Vocabulary
 from poser.core.reading import (
     Ambiguous,
+    AuthoredMarks,
     FrameworkError,
     Known,
+    LayerError,
+    ParsedLayer,
+    ParsedMark,
     Reading,
     ReadingSpan,
     ReadingValue,
+    Rejected,
     ScoreRequest,
+    TextLayer,
     Unknowable,
+    marks_to_data,
     readings_to_data,
 )
-from poser.core.rules import ControlChange, Note
+from poser.core.rules import ControlChange, Note, SongError
 from poser.core.song import Song, Track
 
 
@@ -282,4 +296,243 @@ def test_readings_have_a_json_form() -> None:
             },
             "broken": {"error": "RuntimeError: no luck"},
         },
+    }
+
+
+def test_frameworks_never_see_marks() -> None:
+    seen: list[ScoreRequest] = []
+
+    def record(request: ScoreRequest) -> Reading[ReadingValue]:
+        seen.append(request)
+        return good(request)
+
+    marked = Song(120, (KEYS, BASS), marks=Marks({"parts": [Mark(0, 4, "intro")]}))
+    request = ScoreRequest(marked, (NodeName("bass"),))
+
+    read_song(request, [Fake("recording", record)])
+
+    (received,) = seen
+    assert received.song.marks == Marks()
+    assert received.tracks == ("bass",)
+    assert received.song == replace(marked, marks=Marks())
+
+
+MARKS = Marks(
+    {
+        "chords": [Mark(0, 4, "Am"), Mark(4, 8, "F"), Mark(8, 64, "C")],
+        "parts": [Mark(0.5, 100, "all of it")],
+    }
+)
+
+
+def test_marks_never_change_a_reading_of_a_generated_song() -> None:
+    """A smoke test over real songs; `test_frameworks_never_see_marks` is the guard."""
+    root = Path()
+    tonal = cast("Framework", create_tonal({}, AdapterContext(root, root, root)))
+    for seed in range(300):
+        song = random_song(seed)
+        marked = replace(song, marks=MARKS)
+        assert read_song(ScoreRequest.default(marked), [tonal]) == read_song(
+            ScoreRequest.default(song), [tonal]
+        ), seed
+
+
+# Authored marks
+
+
+@pytest.mark.parametrize("reason", ["", " a", "a ", "a\nb", "a\rb", 3])
+def test_a_rejection_needs_one_line_of_reason(reason: object) -> None:
+    with pytest.raises(ValueError, match=r"Rejected\.reason"):
+        Rejected(cast("str", reason))
+
+
+def test_a_rejection_keeps_its_reason() -> None:
+    assert Rejected("not x or y").reason == "not x or y"
+
+
+X, Y = Label("x"), Label("y")
+
+
+def test_authored_marks_hold_every_mark_within_their_end() -> None:
+    layers = {
+        "fake": ParsedLayer(Identifier("fake"), (ParsedMark(Mark(0, 4, "x"), X),)),
+        "parts": TextLayer((Mark(1, 2, "a"),)),
+        "broken": LayerError(Identifier("fake2"), "RuntimeError: boom"),
+    }
+    authored = AuthoredMarks(4, layers)
+
+    assert list(authored.layers) == ["fake", "parts", "broken"]
+    with pytest.raises(TypeError):
+        authored.layers["more"] = TextLayer((Mark(0, 1, "a"),))  # ty: ignore[invalid-assignment]
+
+
+@pytest.mark.parametrize(
+    "layer",
+    [
+        ParsedLayer(Identifier("fake"), (ParsedMark(Mark(0, 4.5, "x"), X),)),
+        TextLayer((Mark(0, 1, "a"), Mark(3, 5, "b"))),
+    ],
+    ids=["parsed", "text"],
+)
+def test_authored_marks_reject_a_mark_ending_after_their_end(
+    layer: ParsedLayer | TextLayer,
+) -> None:
+    with pytest.raises(ValueError, match="after the end"):
+        AuthoredMarks(4, {"fake": layer})
+
+
+@pytest.mark.parametrize(
+    ("build", "problem"),
+    [
+        (lambda: AuthoredMarks(0, {}), "above 0"),
+        (lambda: AuthoredMarks(math.inf, {}), "finite"),
+        (lambda: AuthoredMarks(4, {"Fake": TextLayer((Mark(0, 1, "a"),))}), "layer name"),
+        (lambda: AuthoredMarks(4, {"fake": cast("TextLayer", "a")}), "ParsedLayer"),
+        (lambda: TextLayer(()), "not be empty"),
+        (lambda: TextLayer((Mark(2, 3, "a"), Mark(0, 1, "b"))), "in order"),
+        (lambda: ParsedLayer(Identifier("fake"), ()), "not be empty"),
+        (lambda: ParsedLayer(cast("Identifier", "a b"), (ParsedMark(Mark(0, 1, "x"), X),)), "Id"),
+        (lambda: ParsedMark(Mark(0, 1, "x"), NOT_A_VALUE), "ReadingValue"),
+        (lambda: LayerError(cast("Identifier", ""), "boom"), "Identifier"),
+    ],
+    ids=[
+        "zero-end",
+        "infinite-end",
+        "uppercase-layer",
+        "not-a-layer",
+        "empty-text",
+        "disorder",
+        "empty-parsed",
+        "bad-vocabulary",
+        "not-a-value",
+        "bad-error-vocabulary",
+    ],
+)
+def test_authored_mark_values_reject_broken_laws(build: Callable[[], object], problem: str) -> None:
+    with pytest.raises(ValueError, match=problem):
+        build()
+
+
+class FakeVocabulary:
+    """Reads `x` and `y`, rejects other labels, and raises for `boom`."""
+
+    def __init__(self, name: str = "fake", parse: Callable[[str], object] | None = None) -> None:
+        self._name = Identifier(name)
+        self._parse = parse
+
+    @property
+    def name(self) -> Identifier:
+        return self._name
+
+    @property
+    def guide(self) -> str:
+        return f"## {self._name}\n"
+
+    def parse(self, text: str) -> ReadingValue | Rejected:
+        if self._parse is not None:
+            return cast("ReadingValue | Rejected", self._parse(text))
+        if text == "boom":
+            raise RuntimeError("boom")
+        if text in ("x", "y"):
+            return Label(text)
+        return Rejected("not x or y")
+
+
+def test_the_fake_vocabulary_is_a_vocabulary() -> None:
+    assert isinstance(FakeVocabulary(), Vocabulary)
+
+
+def marked(layers: dict[str, list[Mark]]) -> Song:
+    """A song ending at beat 4, with the given marks."""
+    return Song(120, (KEYS,), marks=Marks(layers))
+
+
+def test_interpreting_clips_marks_to_the_song_s_end() -> None:
+    song = marked({"fake": [Mark(0, 2, "x"), Mark(2, 8, "y"), Mark(9, 10, "x")]})
+
+    authored = interpret_marks(song, [FakeVocabulary()])
+
+    assert authored.end == 4
+    assert authored.layers == {
+        "fake": ParsedLayer(
+            Identifier("fake"),
+            (ParsedMark(Mark(0, 2, "x"), X), ParsedMark(Mark(2, 4, "y"), Y)),
+        )
+    }
+
+
+def test_a_layer_no_vocabulary_reads_is_text() -> None:
+    song = marked({"parts": [Mark(0, 2, "boom")], "fake": [Mark(0, 1, "x")]})
+
+    authored = interpret_marks(song, [FakeVocabulary()])
+
+    assert authored.layers["parts"] == TextLayer((Mark(0, 2, "boom"),))
+    assert isinstance(authored.layers["fake"], ParsedLayer)
+    assert list(authored.layers) == ["parts", "fake"]
+
+
+def test_interpreting_without_marks_gives_no_layers() -> None:
+    assert interpret_marks(song(KEYS), [FakeVocabulary()]) == AuthoredMarks(4, {})
+
+
+def test_every_rejected_label_is_named_in_one_song_error() -> None:
+    song = marked(
+        {"fake": [Mark(0, 1, "x"), Mark(1, 2, "z")], "other": [Mark(0, 1, "w")]},
+    )
+
+    with pytest.raises(SongError) as error:
+        interpret_marks(song, [FakeVocabulary(), FakeVocabulary("other")])
+
+    assert error.value.problems == [
+        "marks.fake[1]: 'z' is not a fake label: not x or y",
+        "marks.other[0]: 'w' is not a other label: not x or y",
+    ]
+
+
+def test_a_vocabulary_that_raises_fails_only_its_layer() -> None:
+    song = marked({"fake": [Mark(0, 1, "x"), Mark(1, 2, "boom")], "other": [Mark(0, 1, "y")]})
+
+    authored = interpret_marks(song, [FakeVocabulary(), FakeVocabulary("other")])
+
+    assert authored.layers["fake"] == LayerError(Identifier("fake"), "RuntimeError: boom")
+    assert authored.layers["other"] == ParsedLayer(
+        Identifier("other"), (ParsedMark(Mark(0, 1, "y"), Y),)
+    )
+
+
+@pytest.mark.parametrize("result", [None, "x", NotAValue("x")], ids=["none", "str", "object"])
+def test_a_vocabulary_returning_neither_value_nor_rejection_fails_its_layer(
+    result: object,
+) -> None:
+    song = marked({"fake": [Mark(0, 1, "x")]})
+
+    authored = interpret_marks(song, [FakeVocabulary(parse=lambda _: result)])
+
+    layer = authored.layers["fake"]
+    assert isinstance(layer, LayerError)
+    assert layer.vocabulary == "fake"
+    assert "neither a ReadingValue nor Rejected" in layer.detail
+
+
+def test_authored_marks_have_a_json_form() -> None:
+    song = marked(
+        {
+            "fake": [Mark(0, 1, "x"), Mark(1.5, 6, "y")],
+            "parts": [Mark(0, 2, "intro")],
+            "other": [Mark(0, 1, "boom")],
+        }
+    )
+
+    authored = interpret_marks(song, [FakeVocabulary(), FakeVocabulary("other")])
+
+    assert marks_to_data(authored) == {
+        "fake": {
+            "vocabulary": "fake",
+            "marks": [
+                {"beat": 0, "end": 1, "text": "x", "value": {"label": "x"}},
+                {"beat": 1.5, "end": 4, "text": "y", "value": {"label": "y"}},
+            ],
+        },
+        "parts": {"vocabulary": None, "marks": [{"beat": 0, "end": 2, "text": "intro"}]},
+        "other": {"vocabulary": "other", "error": "RuntimeError: boom"},
     }

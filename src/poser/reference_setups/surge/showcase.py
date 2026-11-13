@@ -4,12 +4,13 @@ See docs/showcase.md for rendering evidence and listening limitations.
 This is not an initialization resource or an advice-free syntax example.
 """
 
-from poser import Note, Song, Track
+from poser import Mark, Marks, Note, Song, Track
 
 
 def build() -> Song:
     """A sparse opening, layered middle, and closing return in A minor."""
-    roots = (45, 41, 48, 43) * 4
+    progression = (("Am", 45), ("F", 41), ("C", 48), ("G", 43)) * 4
+    roots = tuple(root for _, root in progression)
     bass = tuple(
         Note(bar * 4 + offset, root, 1.5, 76 if offset == 0 else 65)
         for bar, root in enumerate(roots)
@@ -37,5 +38,12 @@ def build() -> Song:
             Track("bass", "surge:presets/Basses/Digibass", bass, gain=-15),
             Track("pulse", "surge:presets/Polysynths/Past Tense", harmony, gain=-21),
             Track("melody", "surge:presets/Winds/Flute 1", melody, gain=-12),
+        ),
+        marks=Marks(
+            {
+                "chords": [
+                    Mark(bar * 4, bar * 4 + 4, name) for bar, (name, _) in enumerate(progression)
+                ]
+            }
         ),
     )

@@ -68,7 +68,8 @@ Marks are the author's labels over spans of beats, in layers named for what they
 `chords`, `key`, or `parts`. Marks in a layer are in order and do not overlap, and a gap means
 nothing was said there. Marks may extend past the last note; anything reading them stops at the
 song's end. Marks never change audio or readings. In Python, write
-`marks=Marks({"chords": [Mark(0, 4, "Am"), Mark(4, 8, "F")]})`.
+`marks=Marks({"chords": [Mark(0, 4, "Am"), Mark(4, 8, "F")]})`. A configured vocabulary reads the
+layer with its name; see Framework readings.
 
 Track `effects` form a recipe chain: the first hears the track, each next hears its predecessor.
 Nodes are named `<track>.<effect>`, with repeats numbered (`bass.drive.2`). Track `gain` fades
@@ -236,24 +237,34 @@ covering it from 0 to its last beat, and gives every span one of three outcomes:
 Tracks marked `pitched: false` are never read. "Frameworks here" lists this workspace's
 frameworks, and each framework's own section says what it reads.
 
-`uv run read-song <song>` prints each framework's reading, without loading plugins or touching
-renders. Repeat `--track <name>` to read only those pitched tracks (the default is every pitched
-track), and `--framework <name>` to use only those configured frameworks (the default is all);
-`--json` prints the readings as JSON and `--config` selects a workspace explicitly. Exit codes:
-0 when every framework returned a reading, whatever its outcomes; 1 when a framework failed,
-printed as `<name>: error: <detail>`; 2 when the song or `poser.toml` cannot be read, or a
-`--track` or `--framework` name is unknown or the track is unpitched.
+`uv run read-song <song>` first prints each of the song's mark layers, up to the song's end, with
+each mark's text as written. A layer named like a configured vocabulary shows that vocabulary's
+reading of its labels, and other layers show as text; "Frameworks here" lists this workspace's
+vocabularies. Frameworks never see marks, so the authored and the inferred appear side by side.
+
+It then prints each framework's reading, without loading plugins or touching renders. Repeat
+`--track <name>` to read only those pitched tracks (the default is every pitched track), and
+`--framework <name>` to use only those configured frameworks (the default is all); neither
+filters marks. `--json` prints the readings as JSON, with a `marks` object when the song has
+marks, and `--config` selects a workspace explicitly. Exit codes: 0 when every framework returned
+a reading, whatever its outcomes; 1 when a framework failed, printed as `<name>: error: <detail>`,
+or a vocabulary failed, printed as `<layer> marks: error: <detail>`; 2 when the song or
+`poser.toml` cannot be read, a `--track` or `--framework` name is unknown or the track is
+unpitched, or a vocabulary rejects a label, naming the mark, such as `marks.chords[0]`.
 
 `[adapters] frameworks` in `poser.toml` takes a preset name or a list of frameworks. The
 `western` preset, Western tonal harmony, is the default; `neutral` turns readings off. A preset
 is poser's current recommendation and may gain frameworks as poser evolves; a list, such as
-`frameworks = ["tonal"]`, pins them.
+`frameworks = ["tonal"]`, pins them. `[adapters] vocabularies` takes a preset name or a list of
+vocabularies the same way: the `western` preset, the default, reads `chords` layers; `neutral`
+reads none, so every layer is text; and a list, such as `vocabularies = ["chords"]`, pins them.
 
 ## Commands
 
 - `uv run render-song` and `uv run analyze-song`: render and analyze a song, as above.
 - `uv run piano-roll`: create an authored-note PNG with required `--output`, as above.
-- `uv run read-song`: read a song's score through the configured frameworks, as above.
+- `uv run read-song`: show a song's marks and read its score through the configured frameworks,
+  as above.
 - `uv run list-sounds`: every sound a song can name, with a description.
 - `uv run check-instruments`: checks that each instrument loads and plays notes. Its
   repeatability and clipping results are informational.

@@ -1,4 +1,5 @@
-"""`read-song`: read a song's score through the configured frameworks, without loading plugins."""
+"""`read-song`: show a song's authored marks, through the configured vocabularies, and read its
+score through the configured frameworks, without loading plugins."""
 
 import argparse
 import json
@@ -12,19 +13,24 @@ from poser.cli.common import (
     load_composition,
 )
 from poser.cli.workspace import WorkspaceError, fill_path_options
-from poser.core.interpreting import read_song
+from poser.core.interpreting import interpret_marks, read_song
 from poser.core.loading import load_song
 from poser.core.names import NodeName
-from poser.core.ports import ConfigError, Framework
+from poser.core.ports import ConfigError, Framework, Vocabulary
 from poser.core.reading import (
     Ambiguous,
+    AuthoredMarks,
     FrameworkError,
     Known,
+    LayerError,
     Outcome,
+    ParsedLayer,
     ReadingValue,
     ScoreRequest,
     SongReadings,
+    TextLayer,
     Unknowable,
+    marks_to_data,
     readings_to_data,
 )
 from poser.core.song import SongError
@@ -59,6 +65,25 @@ def format_readings(readings: SongReadings) -> str:
             f"  beats {_beat(span.start)}-{_beat(span.end)}: {_describe(span.outcome)}"
             for span in reading.spans
         ]
+        blocks.append("\n".join(lines))
+    return "\n".join(blocks)
+
+
+def format_marks(authored: AuthoredMarks) -> str:
+    """One block per mark layer: a header naming what read it, then each mark's authored text."""
+    blocks: list[str] = []
+    for name, layer in authored.layers.items():
+        match layer:
+            case LayerError(detail=detail):
+                blocks.append(f"{name} marks: error: {detail}")
+                continue
+            case ParsedLayer(vocabulary=vocabulary, marks=parsed):
+                header = f"{name} marks ({vocabulary} vocabulary)"
+                marks = tuple(item.mark for item in parsed)
+            case TextLayer(marks=marks):
+                header = f"{name} marks (text)"
+        lines = [header]
+        lines += [f"  beats {_beat(mark.beat)}-{_beat(mark.end)}: {mark.text}" for mark in marks]
         blocks.append("\n".join(lines))
     return "\n".join(blocks)
 
@@ -101,6 +126,7 @@ def main(argv: list[str] | None = None) -> int:
         composition = load_composition(args)
         formats = composition.song_formats()
         frameworks = _selected(composition.frameworks(), args.framework)
+        vocabularies: tuple[Vocabulary, ...] = composition.vocabularies()
     except (WorkspaceError, ConfigError, ValueError) as error:
         fail(PROG, error)
         return EXIT_BAD_CONFIG
@@ -113,14 +139,26 @@ def main(argv: list[str] | None = None) -> int:
     except (SongError, ValueError, OSError) as error:
         fail(PROG, error)
         return EXIT_BAD_CONFIG
+    try:
+        authored = interpret_marks(song, vocabularies)
+    except SongError as error:
+        fail(PROG, error)
+        return EXIT_BAD_CONFIG
 
     readings = read_song(request, frameworks)
     if args.json:
-        print(json.dumps(readings_to_data(readings), indent=2))
-    elif not frameworks:
-        preset = composition.config.preset
-        print("no frameworks are configured" + (f" (preset {preset})" if preset else ""))
+        data = readings_to_data(readings)
+        if authored.layers and isinstance(data, dict):
+            data["marks"] = marks_to_data(authored)
+        print(json.dumps(data, indent=2))
     else:
-        print(format_readings(readings))
+        if authored.layers:
+            print(format_marks(authored))
+        if not frameworks:
+            preset = composition.config.preset
+            print("no frameworks are configured" + (f" (preset {preset})" if preset else ""))
+        else:
+            print(format_readings(readings))
     failed = any(isinstance(item, FrameworkError) for item in readings.frameworks.values())
+    failed = failed or any(isinstance(layer, LayerError) for layer in authored.layers.values())
     return EXIT_SOME_FAILED if failed else EXIT_ALL_PASS

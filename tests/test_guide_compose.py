@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 from workspaces import make_workspace
 
+from poser.adapters.chords import GUIDE as CHORDS_GUIDE
 from poser.adapters.tonal import GUIDE as TONAL_GUIDE
 from poser.compose import load
 from poser.core.guide import (
@@ -92,25 +93,49 @@ def test_a_part_without_a_section_heading_is_refused(part: str) -> None:
 
 
 TONAL = (Identifier("tonal"),)
+CHORDS = (Identifier("chords"),)
+NO_VOCABULARIES = "No vocabularies are configured; every mark layer is text."
 
 
 @pytest.mark.parametrize(
     ("listing", "text"),
     [
         (
-            FrameworkListing("western", TONAL, default=True),
+            FrameworkListing(
+                "western",
+                TONAL,
+                default=True,
+                vocabulary_preset="western",
+                vocabularies=CHORDS,
+                vocabulary_default=True,
+            ),
             (
                 "Preset: `western` (the default), poser's current recommendation. "
-                "Frameworks: `tonal`. To pin them, list them in `[adapters] frameworks`."
+                "Frameworks: `tonal`. To pin them, list them in `[adapters] frameworks`. "
+                "Vocabularies: `chords`, from the `western` preset (the default); to pin them, "
+                "list them in `[adapters] vocabularies`."
             ),
         ),
         (
-            FrameworkListing("neutral", ()),
-            "Preset: `neutral`. No frameworks are configured; `read-song` reads nothing.",
+            FrameworkListing("neutral", (), vocabulary_preset="neutral"),
+            (
+                "Preset: `neutral`. No frameworks are configured; `read-song` reads nothing. "
+                + NO_VOCABULARIES
+            ),
         ),
-        (FrameworkListing(None, TONAL), "Frameworks: `tonal` (listed in poser.toml)."),
+        (
+            FrameworkListing(None, TONAL, vocabularies=CHORDS),
+            (
+                "Frameworks: `tonal` (listed in poser.toml). Vocabularies: `chords` (listed in "
+                "poser.toml)."
+            ),
+        ),
+        (
+            FrameworkListing(None, TONAL, vocabulary_preset="neutral"),
+            "Frameworks: `tonal` (listed in poser.toml). " + NO_VOCABULARIES,
+        ),
     ],
-    ids=["default-preset", "neutral", "listed"],
+    ids=["default-preset", "neutral", "listed", "listed-frameworks-neutral-vocabularies"],
 )
 def test_the_frameworks_block_follows_the_instruments(listing: FrameworkListing, text: str) -> None:
     guide = compose_guide(CORE, [SERUM], ["## Store\n"], frameworks=listing)
@@ -137,3 +162,21 @@ def test_the_tonal_guide_comes_with_the_tonal_framework(
     composition = load(workspace.config, workspace.root / "sounds", workspace.renders)
 
     assert (TONAL_GUIDE in composition.guide_parts()) is has_tonal
+
+
+@pytest.mark.parametrize(
+    ("setting", "has_chords"),
+    [("", True), ('vocabularies = "neutral"\n', False), ('vocabularies = ["chords"]\n', True)],
+    ids=["default", "neutral", "listed"],
+)
+def test_the_chords_guide_comes_with_the_chords_vocabulary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, setting: str, has_chords: bool
+) -> None:
+    workspace = make_workspace(tmp_path / "studio", monkeypatch)
+    if setting:
+        workspace.write_config(workspace.config.read_text() + "[adapters]\n" + setting)
+    composition = load(workspace.config, workspace.root / "sounds", workspace.renders)
+
+    assert (CHORDS_GUIDE in composition.guide_parts()) is has_chords
+    listing = composition.framework_listing()
+    assert listing.vocabularies == (CHORDS if has_chords else ())
