@@ -1,6 +1,8 @@
 """The `tonal` framework: fixtures with known keys, the outcomes' order, and its calibration."""
 
+import hashlib
 from collections.abc import Sequence
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -10,6 +12,8 @@ from helpers import SURGE_DIR
 from poser.adapters.song_formats import SONG_FORMATS
 from poser.adapters.tonal import (
     BETWEEN,
+    DEFAULT_WINDOW_BARS,
+    DEFAULT_WINDOW_BEATS,
     EVEN,
     GUIDE,
     KEY_GUIDE,
@@ -29,6 +33,7 @@ from poser.adapters.tonal import (
 from poser.core.evidence import BETWEEN_SHARE, TOO_LITTLE_BEATS
 from poser.core.graph import Graph
 from poser.core.loading import load_song
+from poser.core.meter import Meter, MeterSpan
 from poser.core.music import MODES as SCALES
 from poser.core.names import NodeName
 from poser.core.ports import AdapterContext, ConfigError, Vocabulary
@@ -217,6 +222,73 @@ def test_window_boundaries_are_multiples_of_the_window() -> None:
     assert [span.end for span in reading.spans] == [7.5, 15, 22.5, 30]
 
 
+def bounds(
+    length: float,
+    spans: Sequence[MeterSpan] = (),
+    window_beats: float = DEFAULT_WINDOW_BEATS,
+    window_bars: int = DEFAULT_WINDOW_BARS,
+) -> list[tuple[float, float]]:
+    """The windows read over one held note of `length` beats under a meter of `spans`."""
+    song = replace(one_track([(0, 60, length)]), meter=Meter(spans))
+    reading = read_keys(ScoreRequest.default(song.graph()), window_beats, window_bars)
+    return [(span.start, span.end) for span in reading.spans]
+
+
+def test_metered_windows_are_four_declared_bars() -> None:
+    assert bounds(84, [MeterSpan(0, 7)]) == [(0, 28), (28, 56), (56, 84)]
+
+
+def test_window_bars_sets_the_bars_in_a_window() -> None:
+    windows = bounds(84, [MeterSpan(0, 7)], window_bars=2)
+    assert windows == [(14 * index, 14 * index + 14) for index in range(6)]
+
+
+def test_window_beats_does_not_move_metered_windows() -> None:
+    assert bounds(84, [MeterSpan(0, 7)], window_beats=5) == bounds(84, [MeterSpan(0, 7)])
+
+
+def test_metered_windows_start_where_the_meter_starts() -> None:
+    assert bounds(44, [MeterSpan(8, 3)]) == [(0, 8), (8, 20), (20, 32), (32, 44)]
+
+
+def test_a_meter_change_splits_a_window() -> None:
+    windows = bounds(40, [MeterSpan(0, 4), MeterSpan(8, 3)])
+    assert windows == [(0, 8), (8, 20), (20, 32), (32, 40)]
+
+
+def test_an_unmetered_stretch_after_a_meter_counts_from_its_own_start() -> None:
+    windows = bounds(54, [MeterSpan(0, 3, 12)])
+    assert windows == [(0, 12), (12, 28), (28, 44), (44, 54)]
+
+
+def test_a_sliver_after_the_last_window_joins_it() -> None:
+    windows = bounds(176.0036)
+    assert windows[-1] == (160, 176.0036)
+    assert len(windows) == 11
+    assert min(end - start for start, end in windows) >= 8
+
+
+def test_a_metered_sliver_joins_the_window_before_it() -> None:
+    assert bounds(56.0036, [MeterSpan(0, 7)]) == [(0, 28), (28, 56.0036)]
+    assert bounds(35, [MeterSpan(0, 7)]) == [(0, 35)]
+    assert bounds(42, [MeterSpan(0, 7)]) == [(0, 28), (28, 42)]
+
+
+def test_a_remainder_of_exactly_half_a_window_stays_its_own_window() -> None:
+    assert bounds(40) == [(0, 16), (16, 32), (32, 40)]
+    assert bounds(39) == [(0, 16), (16, 39)]
+
+
+def test_a_song_shorter_than_half_a_window_is_one_window() -> None:
+    assert bounds(5) == [(0, 5)]
+
+
+def test_a_short_stretch_is_one_short_window() -> None:
+    """A pickup bar given its own meter span never joins the window after or before it."""
+    windows = bounds(33, [MeterSpan(0, 1, 1), MeterSpan(1, 4)])
+    assert windows == [(0, 1), (1, 17), (17, 33)]
+
+
 def test_unpitched_tracks_are_not_read() -> None:
     drums = Track("drums", "kit", notes([(0, 36, 1), (1, 38, 1), (2, 42, 1)]), pitched=False)
     melody = Track("melody", "synth", notes(CADENCE))
@@ -226,6 +298,49 @@ def test_unpitched_tracks_are_not_read() -> None:
 
     assert request.tracks == (NodeName("melody"),)
     assert read_keys(request, 16) == read_keys(ScoreRequest.default(one_track(CADENCE).graph()), 16)
+
+
+CONTEXT = AdapterContext(Path("/studio"), Path("/studio"), Path("/studio"))
+
+
+def test_the_adapter_reads_metered_stretches_with_its_window_bars() -> None:
+    framework = create_tonal({"window_bars": 2, "window_beats": 8}, CONTEXT)
+    song = replace(one_track([(0, 60, 26)]), meter=Meter([MeterSpan(8, 3)]))
+    request = ScoreRequest.default(song.graph())
+    assert (framework.window_bars, framework.window_beats) == (2, 8)
+    assert framework.read(request) == read_keys(request, 8, 2)
+    assert [span.end for span in framework.read(request).spans] == [8, 14, 20, 26]
+    default = create_tonal({}, CONTEXT)
+    assert (default.window_bars, default.window_beats) == (4, 16)
+
+
+@pytest.mark.parametrize("bars", [0, -1, 2.5, 4.0, "4", True, None])
+def test_the_factory_rejects_window_bars_that_are_not_a_whole_number(bars: object) -> None:
+    message = "window_bars: must be a whole number of at least 1, got"
+    with pytest.raises(ConfigError, match=message):
+        create_tonal({"window_bars": bars}, CONTEXT)  # ty: ignore[invalid-argument-type]
+
+
+def test_the_factory_names_both_options_for_an_unknown_one() -> None:
+    with pytest.raises(ConfigError, match="tonal takes only 'window_bars' and 'window_beats'"):
+        create_tonal({"window": 8}, CONTEXT)
+
+
+@pytest.mark.parametrize("bars", [0, -1, 2.5, "4", True])
+def test_read_keys_refuses_window_bars_that_are_not_a_whole_number(bars: object) -> None:
+    song, _ = tonal_song(0)
+    with pytest.raises(ValueError, match="window_bars must be a whole number of at least 1"):
+        read_keys(ScoreRequest.default(song.graph()), 16, bars)  # ty: ignore[invalid-argument-type]
+
+
+def test_the_guide_names_both_options_and_their_defaults() -> None:
+    text = " ".join(GUIDE.split())
+    assert (DEFAULT_WINDOW_BARS, DEFAULT_WINDOW_BEATS) == (4, 16)
+    assert f"`window_bars` bars ({DEFAULT_WINDOW_BARS} unless configured" in text
+    assert f"`window_beats` beats ({DEFAULT_WINDOW_BEATS:g} unless configured" in text
+    assert "shorter than half a window is read together with the one before it" in text
+    assert "reason to raise `window_bars`" in text
+    assert "four beats" not in text
 
 
 def test_the_adapter_reads_with_its_window() -> None:
@@ -404,7 +519,10 @@ def known_share(songs: list[Song], window_beats: float | None) -> float:
     return known / windows
 
 
-@pytest.mark.parametrize(("window_beats", "bound"), [(16, 0.02), (7.5, 0.03)])
+@pytest.mark.parametrize(
+    ("window_beats", "bound"),
+    [(16, 0.02), (7.5, 0.03), *((length, 0.03) for length in (4, 8, 12, 20, 28, 32, 64))],
+)
 def test_random_notes_are_rarely_known(window_beats: float, bound: float) -> None:
     assert known_share([random_song(seed) for seed in SEEDS], window_beats) <= bound
 
@@ -413,17 +531,48 @@ def test_noise_clusters_are_rarely_known() -> None:
     assert known_share([noise_cluster(seed) for seed in SEEDS], None) <= 0.02
 
 
-def test_tonal_songs_are_mostly_known_in_their_key() -> None:
+def right_share(bar: int, metered: bool) -> float:
+    """The share of windows of `tonal_song` songs in `bar`-beat bars read as known in the song's
+    key at the default options, with the meter declared or not."""
     windows = right = 0
     for seed in SEEDS:
-        song, (tonic, mode) = tonal_song(seed)
-        for span in read_keys(ScoreRequest.default(song.graph()), 16).spans:
+        song, (tonic, mode) = tonal_song(seed, bar)
+        if metered:
+            song = replace(song, meter=Meter([MeterSpan(0, bar)]))
+        for span in read_keys(ScoreRequest.default(song.graph()), DEFAULT_WINDOW_BEATS).spans:
             windows += 1
             outcome = span.outcome
             right += isinstance(outcome, Known) and (
                 (outcome.value.tonic, outcome.value.mode) == (tonic, mode)
             )
-    assert right / windows >= 0.9
+    return right / windows
+
+
+def test_tonal_songs_are_mostly_known_in_their_key() -> None:
+    assert right_share(4, metered=False) >= 0.9
+
+
+def test_tonal_songs_with_a_meter_are_mostly_known_in_their_key() -> None:
+    assert right_share(4, metered=True) >= 0.9
+    assert right_share(4, metered=True) == right_share(4, metered=False)
+
+
+def test_tonal_songs_in_seven_beat_bars_read_better_with_their_meter() -> None:
+    with_meter = right_share(7, metered=True)
+    assert with_meter >= 0.9
+    assert right_share(7, metered=False) < with_meter
+
+
+def test_the_default_tonal_songs_are_pinned() -> None:
+    digest = hashlib.sha256()
+    for seed in SEEDS:
+        digest.update(repr(tonal_song(seed)).encode())
+    assert digest.hexdigest() == "10208a797778f839a6fe805d07f7f49091a20bc2f04306a83ef12ff2b2f42ed9"
+    assert tonal_song(5, 4) == tonal_song(5)
+    song, _ = tonal_song(5, 7)
+    assert ScoreRequest.default(song.graph()).end == 4 * 4 * 7
+    melody = song.tracks[1].notes
+    assert [note.beat for note in melody[:8]] == list(range(8))
 
 
 @pytest.mark.parametrize("window", [0, -1, float("nan"), float("inf")])

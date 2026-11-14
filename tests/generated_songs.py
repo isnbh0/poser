@@ -61,12 +61,12 @@ def _scale_pitch(base: int, mode: Mode, index: int) -> int:
     return base + 12 * (index // 7) + SCALES[mode][index % 7]
 
 
-def tonal_song(seed: int) -> tuple[Song, tuple[int, Mode]]:
-    """A song in a random key, and that key as `(tonic, mode)`.
+def tonal_song(seed: int, bar: int = 4) -> tuple[Song, tuple[int, Mode]]:
+    """A song in a random key, in bars of `bar` beats, and that key as `(tonic, mode)`.
 
-    Four repeats of a progression, each chord a 4-beat triad under four quarter-note melody notes,
-    every note on the mode's scale. Each melody note is the chord's root, third, or fifth, or a
-    random scale degree.
+    Four repeats of a progression, each chord a one-bar triad under one quarter-note melody note
+    per beat of the bar, every note on the mode's scale. Each melody note is the chord's root,
+    third, or fifth, or a random scale degree. The song declares no meter.
     """
     rng = random.Random(seed)
     tonic = rng.randrange(12)
@@ -79,14 +79,14 @@ def tonal_song(seed: int) -> tuple[Song, tuple[int, Mode]]:
         for degree in progression:
             root = degree - 1
             chords.extend(
-                Note(beat, _scale_pitch(48 + tonic, mode, step), 4, 90)
+                Note(beat, _scale_pitch(48 + tonic, mode, step), bar, 90)
                 for step in (root, root + 2, root + 4)
             )
-            for quarter in range(4):
+            for quarter in range(bar):
                 choice = rng.randrange(4)
                 step = rng.randrange(7) if choice == 3 else root + 2 * choice
                 melody.append(Note(beat + quarter, _scale_pitch(72 + tonic, mode, step), 1, 100))
-            beat += 4
+            beat += bar
     tracks = (Track("chords", SOUND, tuple(chords)), Track("melody", SOUND, tuple(melody)))
     return Song(BPM, tracks), (tonic, mode)
 

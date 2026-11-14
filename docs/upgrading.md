@@ -152,6 +152,13 @@ fix. A change listed here applies to every studio that last ran a poser from bef
   `Meter.beat_of` gives the beat a bar starts on. Meter never changes audio, and a song without
   one loads, renders, and prints as before.
 
+- **New:** `tonal` reads windows of whole declared bars: where a song declares a meter, a window
+  is `window_bars` bars, four unless set beside `window_beats` under `[adapters] frameworks`,
+  and a change of meter starts a new window. Where a song declares none, a window is still
+  `window_beats` beats. A last window shorter than half a window is read together with the one
+  before it, so a song without a meter reads as before unless its length leaves such a
+  remainder.
+
 ## Framework-neutral pitch and readings
 
 - **Symptom:** `update-guide`, `check-instruments`, and other commands that build instruments

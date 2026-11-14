@@ -25,6 +25,7 @@ from poser.core.evidence import (
     twelve_tone_obstacle,
 )
 from poser.core.jsonvalue import JsonValue
+from poser.core.meter import Stretch
 from poser.core.music import LETTER_SEMITONES
 from poser.core.music import MODES as SCALES
 from poser.core.names import Identifier
@@ -59,6 +60,8 @@ MIN_FIT = 0.75  # A best correlation below this fits no key.
 STRONG_FIT = 0.85  # A lone best key at or above this is known.
 LEAD = 0.05  # Keys within this of the best correlation are candidates.
 
+DEFAULT_WINDOW_BARS = 4
+MIN_WINDOW_BARS = 1
 DEFAULT_WINDOW_BEATS = 16.0
 MIN_WINDOW_BEATS = 1.0
 
@@ -67,14 +70,24 @@ TOO_FEW = "too few pitch classes to imply a key"
 EVEN = "pitch classes are close to evenly weighted"
 NO_FIT = "no key fits"
 
-GUIDE = """\
+GUIDE = f"""\
 ## Tonal reading
 
 The `tonal` framework reads the major or minor key of each window of the song, by correlating
-how long each pitch class sounds with the Krumhansl-Kessler key profiles. Windows are
-`window_beats` long (default 16, at least 1); the last window ends at the song's end. The
-default assumes four bars of four beats. Set it with
-`frameworks = [{ use = "tonal", window_beats = 8 }]` in `[adapters]`.
+how long each pitch class sounds with the Krumhansl-Kessler key profiles. Where the song
+declares a meter, a window is `window_bars` bars ({DEFAULT_WINDOW_BARS} unless configured, at
+least 1), counted from the first bar of each meter span, so a change of meter starts a new
+window. Where it declares none, a window is `window_beats` beats ({DEFAULT_WINDOW_BEATS:g}
+unless configured, at least 1), counted from the start of the unmetered stretch. A last window
+shorter than half a window is read together with the one before it. A stretch shorter than half
+a window, such as a pickup bar given its own meter span, is read alone as one short window and
+usually reads
+`unknowable`. The printed beats of each span are the window that was read. Set the options
+with `frameworks = [{{ use = "tonal", window_bars = 8, window_beats = 32 }}]` in `[adapters]`.
+
+A window shorter than the song's chord cycle can catch only part of the cycle and read
+`ambiguous` or `unknowable` where a longer window reads the key. An unclear span in a song with
+a long cycle is a reason to raise `window_bars` before concluding the passage has no key.
 
 Each note counts for the beats it sounds in the window, whatever its velocity, under its
 nearest twelve-tone pitch class, so a long held note can outweigh a melody: a scale over a held
@@ -207,28 +220,61 @@ def _window_outcome(request: ScoreRequest, start: float, end: float) -> Outcome[
     return Ambiguous(tuple(candidates))
 
 
-def read_keys(request: ScoreRequest, window_beats: float) -> Reading[TonalKey]:
-    """Read the key of each `window_beats`-long window of the request's song.
+def _joined(windows: list[tuple[float, float]], full: float) -> list[tuple[float, float]]:
+    """Join a last window shorter than half of `full` beats to the window before it."""
+    if len(windows) > 1 and windows[-1][1] - windows[-1][0] < full / 2:
+        windows[-2:] = [(windows[-2][0], windows[-1][1])]
+    return windows
+
+
+def _windows(stretch: Stretch, window_beats: float, window_bars: int) -> list[tuple[float, float]]:
+    """The `(start, end)` beats of each window of one stretch, the last ending at its end."""
+    if stretch.bar is None:
+        windows: list[tuple[float, float]] = []
+        index = 0
+        while (start := stretch.start + index * window_beats) < stretch.end:
+            stop = min(stretch.start + (index + 1) * window_beats, stretch.end)
+            windows.append((start, stop))
+            index += 1
+        return _joined(windows, window_beats)
+    bars = stretch.bars()
+    windows = [
+        (bars[first][0], bars[min(first + window_bars, len(bars)) - 1][1])
+        for first in range(0, len(bars), window_bars)
+    ]
+    return _joined(windows, window_bars * stretch.bar)
+
+
+def read_keys(
+    request: ScoreRequest, window_beats: float, window_bars: int = DEFAULT_WINDOW_BARS
+) -> Reading[TonalKey]:
+    """Read the key of each window of the request's song.
+
+    Each stretch of the song's meter is cut on its own: a metered stretch into windows of
+    `window_bars` bars, an unmetered one into windows of `window_beats` beats. A last window
+    shorter than half a window joins the one before it.
 
     Deterministic, and independent of the order notes are visited in: every sum is exact.
     """
     if not (is_number(window_beats) and math.isfinite(window_beats) and window_beats > 0):
         raise ValueError(f"window_beats must be a finite positive number, got {window_beats!r}")
+    if not (is_int(window_bars) and window_bars >= MIN_WINDOW_BARS):
+        raise ValueError(f"window_bars must be a whole number of at least 1, got {window_bars!r}")
     end = request.end
-    spans: list[ReadingSpan[TonalKey]] = []
-    index = 0
-    while (start := index * window_beats) < end:
-        stop = min((index + 1) * window_beats, end)
-        spans.append(ReadingSpan(start, stop, _window_outcome(request, start, stop)))
-        index += 1
+    spans = [
+        ReadingSpan(start, stop, _window_outcome(request, start, stop))
+        for stretch in request.song.meter.stretches(end)
+        for start, stop in _windows(stretch, window_beats, window_bars)
+    ]
     return Reading(end, tuple(spans))
 
 
 class TonalFramework:
     """The `tonal` framework adapter."""
 
-    def __init__(self, window_beats: float) -> None:
+    def __init__(self, window_beats: float, window_bars: int = DEFAULT_WINDOW_BARS) -> None:
         self._window_beats = window_beats
+        self._window_bars = window_bars
 
     @property
     def name(self) -> Identifier:
@@ -242,19 +288,32 @@ class TonalFramework:
     def window_beats(self) -> float:
         return self._window_beats
 
+    @property
+    def window_bars(self) -> int:
+        return self._window_bars
+
     def read(self, request: ScoreRequest) -> Reading[TonalKey]:
-        return read_keys(request, self._window_beats)
+        return read_keys(request, self._window_beats, self._window_bars)
 
 
 def create_tonal(options: Mapping[str, JsonValue], _context: AdapterContext) -> TonalFramework:
-    """The factory for `tonal`. Its one option is `window_beats`, a finite number of at least 1."""
+    """The factory for `tonal`.
+
+    Its options are `window_bars`, a whole number of at least 1, and `window_beats`, a finite
+    number of at least 1.
+    """
     for key in options:
-        if key != "window_beats":
-            raise ConfigError(f"unknown option {key!r}; tonal takes only 'window_beats'")
+        if key not in ("window_bars", "window_beats"):
+            raise ConfigError(
+                f"unknown option {key!r}; tonal takes only 'window_bars' and 'window_beats'"
+            )
+    bars = options.get("window_bars", DEFAULT_WINDOW_BARS)
+    if not (is_int(bars) and bars >= MIN_WINDOW_BARS):
+        raise ConfigError(f"window_bars: must be a whole number of at least 1, got {bars!r}")
     window = options.get("window_beats", DEFAULT_WINDOW_BEATS)
     if not (is_number(window) and math.isfinite(window) and window >= MIN_WINDOW_BEATS):
         raise ConfigError(f"window_beats: must be a finite number of at least 1, got {window!r}")
-    return TonalFramework(float(window))
+    return TonalFramework(float(window), bars)
 
 
 type KeyMode = Literal["major", "minor", "dorian", "phrygian", "lydian", "mixolydian", "locrian"]

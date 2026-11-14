@@ -642,7 +642,9 @@ def test_changing_and_fractional_meters_number_bars_across_gaps(
         "  beats 16-21 (bar 3): five\n"
         "  beats 21-27 (bars 4-5): rest\n"
         "tonal (tracks: keys, bass)\n"
-        "  beats 0-16: C major (r 0.90)\n"
+        "  beats 0-2: unknowable: too few pitch classes to imply a key\n"
+        "  beats 2-9 (bars 1-2): C major (r 0.85)\n"
+        "  beats 9-16: unknowable: too few pitch classes to imply a key\n"
         "  beats 16-27 (bars 3-5): F# major (r 0.90)\n"
     )
 
@@ -662,11 +664,26 @@ def test_json_adds_the_meter_after_the_end(
         {"beat": 2, "end": 9, "bar": 3.5},
         {"beat": 16, "end": 27, "bar": 5},
     ]
-    # Apart from the meter, the JSON is what the song gives without one: no bar numbers.
+    # The JSON carries no bar numbers, and `tonal` reads one window per stretch of the meter.
     assert read.main([str(marked(workspace, CHORDS)), "--json"]) == 0
     plain = json_object(json.loads(capsys.readouterr().out))
     assert plain is not None
-    assert {key: data[key] for key in ("end", "tracks", "frameworks")} == TONAL_JSON
+    assert {key: data[key] for key in ("end", "tracks")} == {
+        key: TONAL_JSON[key] for key in ("end", "tracks")
+    }
+    frameworks = json_object(data["frameworks"])
+    assert frameworks is not None
+    tonal = json_object(frameworks["tonal"])
+    assert tonal is not None
+    spans = tonal["spans"]
+    assert isinstance(spans, list)
+    windows = [json_object(span) for span in spans]
+    assert [(w["start"], w["end"]) for w in windows if w is not None] == [
+        (0, 2),
+        (2, 9),
+        (9, 16),
+        (16, 27),
+    ]
     plain_marks = json_object(plain["marks"])
     assert plain_marks is not None
     assert data["marks"] == {"parts": plain_marks["parts"]}
