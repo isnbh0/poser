@@ -53,8 +53,8 @@ def song_of(bpm: float, notes: tuple[Note, ...], cc: tuple[ControlChange, ...] =
     ],
 )
 def test_stem_samples_cover_the_last_beat_and_the_tail(song: Song) -> None:
-    expected = int((song.seconds(song_last_beat(song)) + TAIL_S) * SAMPLE_RATE)
-    assert stem_samples(song) == expected
+    expected = int((song.seconds(song_last_beat(song.graph())) + TAIL_S) * SAMPLE_RATE)
+    assert stem_samples(song.graph()) == expected
 
 
 def test_peak_of_half_scale_is_minus_six_dbfs() -> None:

@@ -123,7 +123,7 @@ MEASURED_SONG = Song(bpm=120, tracks=(Track("lead", "Serum", (Note(0, 60, 8, 100
 
 def rising_chord() -> np.ndarray:
     """Return 100 Hz and 1 kHz on the left and 1 kHz and 5 kHz on the right, rising over 4 s."""
-    t = np.arange(stem_samples(MEASURED_SONG)) / SAMPLE_RATE
+    t = np.arange(stem_samples(MEASURED_SONG.graph())) / SAMPLE_RATE
     rise = np.minimum(t / 4.0, 1.0)
     left = rise * (0.3 * np.sin(2 * np.pi * 100 * t) + 0.2 * np.sin(2 * np.pi * 1000 * t))
     right = rise * (0.2 * np.sin(2 * np.pi * 1000 * t) + 0.1 * np.sin(2 * np.pi * 5000 * t))
@@ -131,7 +131,7 @@ def rising_chord() -> np.ndarray:
 
 
 def test_measure_with_the_standard_measurer_gives_the_old_measurements() -> None:
-    measured = measure(Audio(rising_chord()), MEASURED_SONG, StandardMeasurer())
+    measured = measure(Audio(rising_chord()), MEASURED_SONG.graph(), StandardMeasurer())
     assert measured.peak_dbfs == pytest.approx(-6.08500058477018, abs=1e-6)
     assert measured.integrated_lufs == pytest.approx(-12.88901437814406, abs=1e-6)
     assert measured.clipped_samples == 0
@@ -160,9 +160,9 @@ def test_standard_measurer_gives_no_loudness_for_silence() -> None:
 def test_bar_count_ends_at_the_last_beat(bpm: float, bars: int) -> None:
     note = Note(beat=0, pitch=60, length=4 * bars, velocity=100)
     song = Song(bpm=bpm, tracks=(Track("lead", "Serum", (note,)),))
-    audio = Audio(np.full((2, stem_samples(song)), 0.5, dtype=np.float32))
+    audio = Audio(np.full((2, stem_samples(song.graph())), 0.5, dtype=np.float32))
 
-    assert len(measure(audio, song, StandardMeasurer()).bar_dbfs) == bars
+    assert len(measure(audio, song.graph(), StandardMeasurer()).bar_dbfs) == bars
 
 
 def test_spectrogram_has_a_log_axis_from_20_hz_to_20_khz_and_a_db_scale() -> None:

@@ -15,11 +15,11 @@ from typing import TypedDict, cast
 
 from poser.core.rules import (
     SongError,
-    _at,
-    _line_problems,
-    _plain,
-    _span_problems,
+    field_path,
     is_number,
+    line_problems,
+    plain_number,
+    span_problems,
 )
 
 LAYER_PATTERN = re.compile(r"[a-z0-9][a-z0-9_-]*")
@@ -37,7 +37,7 @@ class Mark:
 
     def __post_init__(self) -> None:
         values = {"beat": self.beat, "end": self.end, "text": self.text}
-        if problems := _mark_problems(values, "Mark"):
+        if problems := mark_problems(values, "Mark"):
             raise SongError(problems)
         object.__setattr__(self, "beat", float(self.beat))
         object.__setattr__(self, "end", float(self.end))
@@ -97,26 +97,26 @@ class Marks:
 # `Mark.beat` and `Marks.chords[1]`) and by `parse_song` (locations such as `marks.chords[1].beat`).
 
 
-def _mark_problems(values: Mapping[str, object], where: str) -> list[str]:
+def mark_problems(values: Mapping[str, object], where: str) -> list[str]:
     """Check a mark's fields that are present in `values`."""
     problems: list[str] = []
     if "beat" in values and "end" in values:
-        problems += _span_problems(values["beat"], values["end"], where, "beat")
+        problems += span_problems(values["beat"], values["end"], where, "beat")
     else:
         problems += [
-            f"{_at(where, field)}: must be a finite number, got {values[field]!r}"
+            f"{field_path(where, field)}: must be a finite number, got {values[field]!r}"
             for field in ("beat", "end")
             if field in values and not is_number(values[field])
         ]
         beat = values.get("beat")
         if is_number(beat) and beat < 0:
-            problems.append(f"{_at(where, 'beat')}: must not be negative, got {beat!r}")
+            problems.append(f"{field_path(where, 'beat')}: must not be negative, got {beat!r}")
     if "text" in values:
-        problems += _line_problems(values["text"], _at(where, "text"))
+        problems += line_problems(values["text"], field_path(where, "text"))
     return problems
 
 
-def _layer_name_problems(name: object, where: str) -> list[str]:
+def layer_name_problems(name: object, where: str) -> list[str]:
     """Check a layer's name, at `<where>.<name>`."""
     if isinstance(name, str) and LAYER_PATTERN.fullmatch(name):
         return []
@@ -131,7 +131,7 @@ def _layer_name_problems(name: object, where: str) -> list[str]:
     ]
 
 
-def _layer_list_problems(marks: object, where: str) -> list[str]:
+def layer_list_problems(marks: object, where: str) -> list[str]:
     """Check that a layer is a non-empty list, not the marks themselves."""
     if not isinstance(marks, list | tuple) or isinstance(marks, str):
         return [f"{where}: must be a list of marks"]
@@ -140,7 +140,7 @@ def _layer_list_problems(marks: object, where: str) -> list[str]:
     return []
 
 
-def _layer_order_problems(marks: Sequence[tuple[int, Mark]], where: str) -> list[str]:
+def layer_order_problems(marks: Sequence[tuple[int, Mark]], where: str) -> list[str]:
     """Check that a layer's valid marks, given with their indexes, are in order without overlap.
 
     Touching is allowed: a mark may start where the previous one ends.
@@ -148,7 +148,7 @@ def _layer_order_problems(marks: Sequence[tuple[int, Mark]], where: str) -> list
     return [
         (
             f"{where}[{index}]: must start at or after the previous mark's end, beat "
-            f"{_plain(previous.end)}, got beat {_plain(mark.beat)}"
+            f"{plain_number(previous.end)}, got beat {plain_number(mark.beat)}"
         )
         for (_, previous), (index, mark) in pairwise(marks)
         if mark.beat < previous.end
@@ -161,11 +161,11 @@ def _marks_problems(pairs: Sequence[tuple[object, object]], where: str) -> list[
     seen: set[object] = set()
     for name, marks in pairs:
         at = f"{where}.{name}"
-        problems += _layer_name_problems(name, where)
+        problems += layer_name_problems(name, where)
         if name in seen:
             problems.append(f"{where}: duplicate layer name {name!r}")
         seen.add(name)
-        layer_problems = _layer_list_problems(marks, at)
+        layer_problems = layer_list_problems(marks, at)
         problems += layer_problems
         if layer_problems:
             continue
@@ -175,13 +175,13 @@ def _marks_problems(pairs: Sequence[tuple[object, object]], where: str) -> list[
             for index, item in enumerate(items)
             if not isinstance(item, Mark)
         ]
-        problems += _layer_order_problems(
+        problems += layer_order_problems(
             [(index, item) for index, item in enumerate(items) if isinstance(item, Mark)], at
         )
     return problems
 
 
-def _marks_field_problems(marks: object, where: str) -> list[str]:
+def marks_field_problems(marks: object, where: str) -> list[str]:
     """Check a song's or graph's `marks` field."""
     if isinstance(marks, Marks):
         return []
@@ -199,11 +199,11 @@ class MarkData(TypedDict):
 type MarksData = dict[str, list[MarkData]]
 
 
-def _marks_to_data(marks: Marks) -> MarksData:
+def layers_to_data(marks: Marks) -> MarksData:
     """Return the layers as plain data, in authored order, with numbers in one spelling."""
     return {
         name: [
-            {"beat": _plain(mark.beat), "end": _plain(mark.end), "text": mark.text}
+            {"beat": plain_number(mark.beat), "end": plain_number(mark.end), "text": mark.text}
             for mark in layer
         ]
         for name, layer in marks.pairs

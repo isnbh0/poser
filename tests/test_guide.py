@@ -20,7 +20,8 @@ from poser.core.guide import FIRST_INSTRUMENT_PLACEHOLDER
 from poser.core.loading import load_song
 from poser.core.ports import ResolvedSound
 from poser.core.reading import OUTCOME_TAGS
-from poser.core.song import MAX_SONG_S, Song, SongError, parse_song
+from poser.core.rules import MAX_SONG_S
+from poser.core.song import Song, SongError, parse_song
 from poser.core.song import Song as SongValue
 from poser.core.sounds import parse_sound_ref
 from poser.core.statuses import RENDER_STATUSES
@@ -105,7 +106,7 @@ def python_examples(tmp_path: Path) -> list[Song | Graph]:
         path = tmp_path / f"example{index}" / "example.py"
         path.parent.mkdir()
         path.write_text(body.replace(FIRST_INSTRUMENT_PLACEHOLDER, f'"{first}"'))
-        song = load_song(path, SONG_FORMATS)
+        song = load_song(path, SONG_FORMATS).source
         assert isinstance(song, Song | Graph)
         songs.append(song)
     return songs
@@ -371,7 +372,7 @@ def test_sound_names_resolve(tmp_path: Path) -> None:
         span for text in texts for span in BACKTICKED.findall(text) if span.startswith(prefixes)
     }
     songs = python_songs(tmp_path) + [parse_song(yaml.safe_load(b)) for b in blocks("yaml")]
-    songs.append(cast("SongValue", load_song(SURGE_DIR / "demo.yaml", SONG_FORMATS)))
+    songs.append(cast("SongValue", load_song(SURGE_DIR / "demo.yaml", SONG_FORMATS).source))
     sounds = {track.sound for example in songs for track in example.tracks}
     assert spans
     assert sounds

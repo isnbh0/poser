@@ -131,7 +131,7 @@ def main(argv: list[str] | None = None) -> int:
         fail(PROG, error)
         return EXIT_BAD_CONFIG
     try:
-        song = load_song(args.song, formats)
+        song = load_song(args.song, formats).graph
         if args.track:
             request = ScoreRequest(song, tuple(NodeName(name) for name in args.track))
         else:

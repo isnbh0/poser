@@ -15,6 +15,15 @@ uv run check-instruments
 If a command fails after the upgrade, find its message below, newest change first, and apply the
 fix. A change listed here applies to every studio that pinned a poser commit from before it.
 
+## Frameworks read graphs
+
+- **Symptom:** a custom framework fails with `AttributeError: 'Graph' object has no attribute
+  'tracks'`, or its `Song` branch never runs.
+  **Cause:** a framework's `ScoreRequest.song` is now always a `Graph`, whether the song is a
+  YAML file or a script. A YAML song's tracks are its graph's track nodes.
+  **Fix:** read track nodes from `song.nodes` (those whose `kind` is `"track"`), and stop
+  branching on `Song`.
+
 ## Song marks
 
 - **Symptom:** a YAML song fails to load with `cannot read <song>: duplicate key '<key>' at line

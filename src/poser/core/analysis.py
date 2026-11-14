@@ -17,6 +17,7 @@ import numpy as np
 from poser.core.audio import Audio, measure_peak_dbfs, stem_samples
 from poser.core.cache import StampProblem
 from poser.core.graph import Graph, Node
+from poser.core.loading import LoadedSong
 from poser.core.names import Identifier, NodeName, SongId
 from poser.core.ports import (
     AudioFileError,
@@ -61,22 +62,22 @@ from poser.core.report import (
     silent_defects,
 )
 from poser.core.session import song_session
-from poser.core.song import Song, song_graph, song_last_beat
+from poser.core.song import song_last_beat
 
 
-def measure(audio: Audio, song: Song | Graph, measurer: Measurer) -> Measurements:
+def measure(audio: Audio, graph: Graph, measurer: Measurer) -> Measurements:
     """Measure audio: its peak, clipping, and bar levels here, and its loudness and bands through
     the measurer."""
     samples = audio.samples
     levels = measurer.measure(audio)
     # Counted in beats, so a bar starting exactly at the last beat is never included.
-    bars = math.ceil(song_last_beat(song) / BAR_BEATS)
+    bars = math.ceil(song_last_beat(graph) / BAR_BEATS)
     return Measurements(
         peak_dbfs=measure_peak_dbfs(samples),
         integrated_lufs=levels.integrated_lufs,
         clipped_samples=int(np.count_nonzero(np.abs(samples) > 1.0)),
         bands_db=levels.bands_db,
-        bar_dbfs=tuple(bar_dbfs(samples, song.seconds(BAR_BEATS), bars)),
+        bar_dbfs=tuple(bar_dbfs(samples, graph.seconds(BAR_BEATS), bars)),
     )
 
 
@@ -144,7 +145,7 @@ def report_json(report: Report) -> str:
 
 
 def analyze_song(
-    song: Song | Graph,
+    loaded: LoadedSong,
     song_name: str,
     renders: RenderStore,
     song_id: SongId,
@@ -157,22 +158,22 @@ def analyze_song(
 ) -> Report:
     """Mix and measure a song's stems, and keep the analysis as the next record.
 
-    The song is a Song, which compiles to its graph, or a Graph, whose effect references resolve
-    against the configured recipes first. `song_name` is the song file's name without its
-    suffix. Raises SongError for a node naming an unknown effect recipe, SongBusyError when
-    another run holds the song's lock, and ValueError when the store's stem suffix differs from
-    the audio files' or the mixer returns the wrong length. An OSError from the store, the audio
-    files, the mixer, or the visualizer propagates after the lock is released.
+    The song's effect references are checked against the configured recipes first. `song_name`
+    is the song file's name without its suffix. Raises SongError for a track or node naming an
+    unknown effect recipe, SongBusyError when another run holds the song's lock, and ValueError
+    when the store's stem suffix differs from the audio files' or the mixer returns the wrong
+    length. An OSError from the store, the audio files, the mixer, or the visualizer propagates
+    after the lock is released.
     """
     require_stem_format(renders, audio_files)
     with song_session(renders, song_id) as store:
         return _analyze(
-            song, song_name, store, instruments, effects, audio_files, record_writer, tools
+            loaded, song_name, store, instruments, effects, audio_files, record_writer, tools
         )
 
 
 def _analyze(
-    song: Song | Graph,
+    loaded: LoadedSong,
     song_name: str,
     store: SongStore,
     instruments: Mapping[Identifier, Instrument],
@@ -181,8 +182,9 @@ def _analyze(
     record_writer: RecordWriter,
     tools: AnalysisTools,
 ) -> Report:
-    graph = song_graph(song, [*effects])
-    frames = stem_samples(song)
+    loaded.check_effects([*effects])
+    graph = loaded.graph
+    frames = stem_samples(graph)
     keys: dict[NodeName, str] = {}
     sound_keys: dict[NodeName, str] = {}
     stems: dict[NodeName, Audio] = {}
@@ -248,7 +250,7 @@ def _analyze(
 
     # Results from older audio must not survive a run that cannot replace them.
     store.clear_latest()
-    song_text = record_writer.dump(song)
+    song_text = record_writer.dump(loaded.source)
     record = store.start_record(song_text, record_writer.suffix)
     song_sha256 = hashlib.sha256(song_text.encode("utf-8")).hexdigest()
     complete = not failures
@@ -261,8 +263,8 @@ def _analyze(
             nodes.append(failures[name])
             continue
         audio = stems[name]
-        measurements = measure(audio, song, tools.measurer)
-        sections = _sections(tools.sections, SectionInput(song, node, audio, measurements))
+        measurements = measure(audio, graph, tools.measurer)
+        sections = _sections(tools.sections, SectionInput(graph, node, audio, measurements))
         image = None
         if complete:
             image = store.image_path(name, suffix)
@@ -300,7 +302,7 @@ def _analyze(
         audio_files.write(mix_path, mixed)
         mix_image = store.image_path(None, suffix)
         tools.visualizer.draw(mixed, mix_image, MIX_NAME)
-        measurements = measure(mixed, song, tools.measurer)
+        measurements = measure(mixed, graph, tools.measurer)
         mix = MixReport(
             path=str(mix_path),
             peak_dbfs=measurements.peak_dbfs,
@@ -310,7 +312,7 @@ def _analyze(
             bar_dbfs=measurements.bar_dbfs,
             spectrogram=str(mix_image),
             defects=tuple(mix_defects(measurements)),
-            sections=_sections(tools.sections, SectionInput(song, None, mixed, measurements)),
+            sections=_sections(tools.sections, SectionInput(graph, None, mixed, measurements)),
         )
 
     report = Report(

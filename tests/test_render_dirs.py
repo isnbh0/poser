@@ -38,8 +38,8 @@ def test_script_and_yaml_with_one_stem_render_apart(workspace: CommandWorkspace)
     script = write_script_song(workspace.root / "songs" / "x.py", "synth")
     data = write_song(workspace.root / "songs" / "x.yaml", ("lead", "synth"))
 
-    script_song = load_song(script, SONG_FORMATS)
-    data_song = load_song(data, SONG_FORMATS)
+    script_song = load_song(script, SONG_FORMATS).source
+    data_song = load_song(data, SONG_FORMATS).source
     assert isinstance(script_song, Song)
     assert isinstance(data_song, Song)
     assert script_song.tracks == data_song.tracks

@@ -644,13 +644,13 @@ class Visualizer(Protocol):
 class SectionInput:
     """What a report section sees for one node or the mix."""
 
-    song: Song | Graph
+    song: Graph
     node: Node | None  # None for the mix.
     audio: Audio  # The node's stem before gain, or the mix.
     measurements: Measurements
 
     def __post_init__(self) -> None:
-        _require("SectionInput", "song", self.song, (Song, Graph))
+        _require("SectionInput", "song", self.song, Graph)
         if self.node is not None:
             _require("SectionInput", "node", self.node, Node)
         _require("SectionInput", "audio", self.audio, Audio)

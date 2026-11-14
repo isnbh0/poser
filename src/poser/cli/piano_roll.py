@@ -81,7 +81,7 @@ def main(argv: list[str] | None = None) -> int:
 
         def draw(path: Path) -> None:
             loaded = load_song(args.song, composition.song_formats())
-            composition.piano_roll_drawer().draw(project_piano_roll(loaded), path)
+            composition.piano_roll_drawer().draw(project_piano_roll(loaded.graph), path)
 
         destination = _publish(args.song, args.output, draw, replace=args.replace)
     except Exception as error:  # noqa: BLE001 — command boundary includes third-party drawing errors.

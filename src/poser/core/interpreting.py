@@ -25,7 +25,7 @@ from poser.core.reading import (
     TextLayer,
 )
 from poser.core.rules import SongError
-from poser.core.song import Song, song_last_beat
+from poser.core.song import song_last_beat
 
 if TYPE_CHECKING:
     from poser.core.names import Identifier
@@ -105,7 +105,7 @@ def _parse_layer(
     return rejected or ParsedLayer(vocabulary.name, tuple(parsed))
 
 
-def interpret_marks(song: Song | Graph, vocabularies: Sequence[Vocabulary]) -> AuthoredMarks:
+def interpret_marks(graph: Graph, vocabularies: Sequence[Vocabulary]) -> AuthoredMarks:
     """Translate the song's mark layers, clipped to its end, through the vocabularies.
 
     A vocabulary reads the layer equal to its name; a layer no vocabulary reads stays text. A
@@ -113,8 +113,8 @@ def interpret_marks(song: Song | Graph, vocabularies: Sequence[Vocabulary]) -> A
     named in one SongError. A vocabulary that raises, or returns neither a ReadingValue nor
     Rejected, makes its layer a LayerError, and the other layers proceed.
     """
-    end = float(song_last_beat(song))
-    marks = song.marks.within(end)
+    end = float(song_last_beat(graph))
+    marks = graph.marks.within(end)
     by_name = {vocabulary.name: vocabulary for vocabulary in vocabularies}
     rejected: list[str] = []
     layers: dict[LayerName, LayerOutcome] = {}

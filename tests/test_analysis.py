@@ -29,6 +29,7 @@ from poser.core.audio import Audio, measure_peak_dbfs, stem_samples, write_raw_a
 from poser.core.cache import Stamp, node_key
 from poser.core.graph import Graph, Node, Wire
 from poser.core.jsonvalue import Json
+from poser.core.loading import LoadedSong
 from poser.core.names import Identifier, SongId, TrackName
 from poser.core.ports import (
     Effect,
@@ -103,7 +104,7 @@ class Setup:
             mixer or FakeMixer(), FakeMeasurer(), self.visualizer, tuple(sections)
         )
         results = render_song(
-            song or make_song(),
+            LoadedSong(song or make_song()),
             self.renders,
             SONG_ID,
             self.instruments,
@@ -120,7 +121,7 @@ class Setup:
 
     def analyze(self, song: Song | Graph | None = None) -> Report:
         return analyze_song(
-            song or make_song(),
+            LoadedSong(song or make_song()),
             "demo",
             self.renders,
             SONG_ID,
@@ -167,14 +168,14 @@ def node_key_of(song: Song, index: int, setup: Setup) -> str:
 
 def test_measure_takes_peak_clipping_and_bars_from_the_audio_and_levels_from_the_measurer() -> None:
     song = Song(bpm=120, tracks=(Track("lead", "fake", (Note(0, 60, 8, 100),)),))
-    samples = np.zeros((2, stem_samples(song)), dtype=np.float32)
+    samples = np.zeros((2, stem_samples(song.graph())), dtype=np.float32)
     samples[:, :96000] = 0.5
     samples[:, 96000:192000] = 0.25
     samples[0, 10] = 1.5
     samples[1, 20] = -1.25
     levels = Levels(-9.0, dict.fromkeys(BANDS, -3.0))
 
-    measurements = measure(Audio(samples), song, FakeMeasurer(levels))
+    measurements = measure(Audio(samples), song.graph(), FakeMeasurer(levels))
 
     assert measurements.peak_dbfs == measure_peak_dbfs(samples)
     assert measurements.clipped_samples == 2
@@ -204,7 +205,7 @@ def test_analysis_refuses_a_store_whose_stems_the_audio_files_cannot_read(
 
     with setup.store.lock(), pytest.raises(ValueError, match=r"stem suffix \.wav differs"):
         analyze_song(
-            make_song(),
+            LoadedSong(make_song()),
             "demo",
             wav,
             SONG_ID,
@@ -257,7 +258,7 @@ def test_mix_is_the_gain_weighted_sum_of_the_stems(tmp_path: Path) -> None:
 
     report = setup.analyze(make_song(gain=-6.0))
 
-    mix = setup.audio_files.read(setup.store.mix_path(), stem_samples(make_song()))
+    mix = setup.audio_files.read(setup.store.mix_path(), stem_samples(make_song().graph()))
     assert np.allclose(mix.samples, 0.5 * 10 ** (-6 / 20) + 0.2)
     lead, bass = report.nodes
     assert lead.gain_db == -6.0
@@ -268,11 +269,11 @@ def test_mix_is_the_gain_weighted_sum_of_the_stems(tmp_path: Path) -> None:
 def test_stray_stem_does_not_enter_the_mix(tmp_path: Path) -> None:
     setup = Setup(tmp_path)
     stray = setup.store.stem_path(TrackName("removed"))
-    write_raw_audio(stray, np.full((2, stem_samples(make_song())), 0.25, dtype=np.float32))
+    write_raw_audio(stray, np.full((2, stem_samples(make_song().graph())), 0.25, dtype=np.float32))
 
     setup.analyze()
 
-    mix = setup.audio_files.read(setup.store.mix_path(), stem_samples(make_song()))
+    mix = setup.audio_files.read(setup.store.mix_path(), stem_samples(make_song().graph()))
     assert np.allclose(mix.samples, 0.7)
 
 
@@ -290,7 +291,7 @@ def test_report_keys_are_the_stamp_keys(tmp_path: Path) -> None:
 def spoil(setup: Setup, case: str) -> Song:
     """Spoil the bass stem one way and return the song to analyze."""
     stem = setup.store.stem_path(BASS)
-    frames = stem_samples(make_song())
+    frames = stem_samples(make_song().graph())
     match case:
         case "missing" | "missing_and_unresolved":
             stem.unlink()
@@ -329,7 +330,7 @@ def _restamp(setup: Setup, samples: np.ndarray) -> None:
     setup.store.write_stamp(BASS, stamp)
 
 
-FRAMES = stem_samples(make_song())
+FRAMES = stem_samples(make_song().graph())
 
 
 @pytest.mark.parametrize(
@@ -766,7 +767,7 @@ def test_a_feedback_graph_analyzes_through_its_group_keys(tmp_path: Path) -> Non
     assert len(set(keys)) == 3
 
     render_song(
-        graph,
+        LoadedSong(graph),
         setup.renders,
         SONG_ID,
         setup.instruments,

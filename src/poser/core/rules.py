@@ -53,7 +53,7 @@ class Note:
             "length": self.length,
             "velocity": self.velocity,
         }
-        if problems := _note_problems(values, "Note"):
+        if problems := note_problems(values, "Note"):
             raise SongError(problems)
         object.__setattr__(self, "pitch", normal_pitch(self.pitch))
 
@@ -72,7 +72,7 @@ class ControlChange:
             "value": self.value,
             "shape": self.shape,
         }
-        if problems := _control_change_problems(values, "ControlChange"):
+        if problems := control_change_problems(values, "ControlChange"):
             raise SongError(problems)
 
 
@@ -125,7 +125,7 @@ def _is_int_in_range(value: object, low: int, high: int) -> bool:
     return is_int(value) and low <= value <= high
 
 
-def _at(where: str, field: str) -> str:
+def field_path(where: str, field: str) -> str:
     """Return the location of a field below `where`, or the field alone at the top level."""
     return f"{where}.{field}" if where else field
 
@@ -136,7 +136,7 @@ def _at(where: str, field: str) -> str:
 # graphs share them, so a value never passes one rule as a track and another as a node.
 
 
-def _note_problems(values: Mapping[str, object], where: str) -> list[str]:
+def note_problems(values: Mapping[str, object], where: str) -> list[str]:
     beat, pitch = values.get("beat"), values.get("pitch")
     length, velocity = values.get("length"), values.get("velocity")
     problems: list[str] = []
@@ -158,25 +158,27 @@ def _bound_problems(value: object, where: str) -> list[str]:
     return [f"{where}: must be a finite number, got {value!r}"]
 
 
-def _span_problems(start: object, end: object, where: str, start_field: str) -> list[str]:
+def span_problems(start: object, end: object, where: str, start_field: str) -> list[str]:
     """Check a span of beats: finite bounds with `0 <= start < end`.
 
     Every span type checks its bounds here; `start_field` names its start, such as `beat`.
     """
-    problems = _bound_problems(start, _at(where, start_field)) + _bound_problems(
-        end, _at(where, "end")
+    problems = _bound_problems(start, field_path(where, start_field)) + _bound_problems(
+        end, field_path(where, "end")
     )
     if problems or not (is_number(start) and is_number(end)):
         return problems
     if start < 0:
-        problems.append(f"{_at(where, start_field)}: must not be negative, got {start!r}")
+        problems.append(f"{field_path(where, start_field)}: must not be negative, got {start!r}")
     # Compared as stored: two ints can round to one float.
     if float(end) <= float(start):
-        problems.append(f"{_at(where, 'end')}: must be after {start_field} {start!r}, got {end!r}")
+        problems.append(
+            f"{field_path(where, 'end')}: must be after {start_field} {start!r}, got {end!r}"
+        )
     return problems
 
 
-def _line_problems(text: object, where: str) -> list[str]:
+def line_problems(text: object, where: str) -> list[str]:
     """Check a label: one non-empty line of text without leading or trailing spaces."""
     if not isinstance(text, str):
         return [
@@ -193,7 +195,7 @@ def is_shape(value: object) -> TypeGuard[Shape]:
     return value in SHAPES
 
 
-def _control_change_problems(values: Mapping[str, object], where: str) -> list[str]:
+def control_change_problems(values: Mapping[str, object], where: str) -> list[str]:
     beat, control = values.get("beat"), values.get("control")
     cc_value, shape = values.get("value"), values.get("shape")
     problems: list[str] = []
@@ -210,8 +212,8 @@ def _control_change_problems(values: Mapping[str, object], where: str) -> list[s
     return problems
 
 
-def _track_field_problems(values: Mapping[str, object], where: str) -> list[str]:
-    """Check a track's name, sound, gain, and `pitched`. `_track_problems` checks the rest."""
+def track_field_problems(values: Mapping[str, object], where: str) -> list[str]:
+    """Check a track's name, sound, gain, and `pitched`. `track_problems` checks the rest."""
     name, sound, gain = values.get("name"), values.get("sound"), values.get("gain")
     pitched = values.get("pitched")
     problems: list[str] = []
@@ -234,7 +236,7 @@ def _track_field_problems(values: Mapping[str, object], where: str) -> list[str]
     return problems
 
 
-def _unpitched_problems(notes: Sequence[tuple[int, Note]], where: str) -> list[str]:
+def unpitched_problems(notes: Sequence[tuple[int, Note]], where: str) -> list[str]:
     """Check an unpitched track's notes, given with their indexes: each pitch selects a key of
     the track's sound, such as a drum in a kit, and a key number has no fraction.
     """
@@ -258,21 +260,21 @@ def _is_sound_ref(value: object) -> bool:
     return True
 
 
-def _notes_problems(notes: object, where: str) -> list[str]:
+def notes_problems(notes: object, where: str) -> list[str]:
     """Check that a track's notes are a non-empty list, not the notes themselves."""
     if not isinstance(notes, list | tuple) or not notes:
         return [f"{where}.notes: must list at least one note"]
     return []
 
 
-def _cc_problems(cc: object, where: str) -> list[str]:
+def cc_problems(cc: object, where: str) -> list[str]:
     """Check that a track's controller changes are a list, not the changes themselves."""
     if not isinstance(cc, list | tuple):
         return [f"{where}.cc: must be a list of controller changes, got {cc!r}"]
     return []
 
 
-def _cc_order_problems(
+def cc_order_problems(
     changes: Sequence[tuple[int, ControlChange]], where: str, *, complete: bool
 ) -> list[str]:
     """Check that controller changes are in time order and that each ramp has a target.
@@ -300,11 +302,11 @@ def _cc_order_problems(
     return problems
 
 
-def _track_problems(values: Mapping[str, object], where: str) -> list[str]:
+def track_problems(values: Mapping[str, object], where: str) -> list[str]:
     """Check every field of a track built in code, whose notes and changes are objects."""
-    problems = _track_field_problems(values, where)
+    problems = track_field_problems(values, where)
     notes = values["notes"]
-    problems += _notes_problems(notes, where)
+    problems += notes_problems(notes, where)
     if isinstance(notes, list | tuple):
         items = cast("Sequence[object]", notes)
         problems += [
@@ -314,9 +316,9 @@ def _track_problems(values: Mapping[str, object], where: str) -> list[str]:
         ]
         if values.get("pitched") is False:
             valid = [(i, note) for i, note in enumerate(items) if isinstance(note, Note)]
-            problems += _unpitched_problems(valid, where)
+            problems += unpitched_problems(valid, where)
     cc = values["cc"]
-    problems += _cc_problems(cc, where)
+    problems += cc_problems(cc, where)
     if isinstance(cc, list | tuple):
         items = cast("Sequence[object]", cc)
         problems += [
@@ -325,13 +327,13 @@ def _track_problems(values: Mapping[str, object], where: str) -> list[str]:
             if not isinstance(change, ControlChange)
         ]
         changes = [(i, c) for i, c in enumerate(items) if isinstance(c, ControlChange)]
-        problems += _cc_order_problems(changes, where, complete=len(changes) == len(items))
+        problems += cc_order_problems(changes, where, complete=len(changes) == len(items))
     if "effects" in values:
-        problems += _effects_problems(values["effects"], where)
+        problems += effects_problems(values["effects"], where)
     return problems
 
 
-def _effects_problems(effects: object, where: str) -> list[str]:
+def effects_problems(effects: object, where: str) -> list[str]:
     """Check that a track's effects are a list of recipe names."""
     if not isinstance(effects, list | tuple):
         return [f"{where}.effects: must be a list of effect recipe names, got {effects!r}"]
@@ -342,20 +344,20 @@ def _effects_problems(effects: object, where: str) -> list[str]:
     ]
 
 
-def _song_field_problems(
+def song_field_problems(
     values: Mapping[str, object], where: str, *, group: str = "tracks", noun: str = "track"
 ) -> list[str]:
     """Check a song's bpm and that its members are a non-empty list, not the members themselves."""
     bpm, items = values.get("bpm"), values.get(group)
     problems: list[str] = []
     if "bpm" in values and not (is_number(bpm) and bpm > 0):
-        problems.append(f"{_at(where, 'bpm')}: must be a positive number, got {bpm!r}")
+        problems.append(f"{field_path(where, 'bpm')}: must be a positive number, got {bpm!r}")
     if group in values and (not isinstance(items, list | tuple) or not items):
-        problems.append(f"{_at(where, group)}: must list at least one {noun}")
+        problems.append(f"{field_path(where, group)}: must list at least one {noun}")
     return problems
 
 
-def _duplicate_name_problems(
+def duplicate_name_problems(
     values: Sequence[Named], where: str, *, group: str = "tracks", noun: str = "track"
 ) -> list[str]:
     # Names become filenames, and macOS treats names differing only in case as the same file.
@@ -363,20 +365,20 @@ def _duplicate_name_problems(
     seen: set[str] = set()
     for value in values:
         if value.name.casefold() in seen:
-            problems.append(f"{_at(where, group)}: duplicate {noun} name {value.name!r}")
+            problems.append(f"{field_path(where, group)}: duplicate {noun} name {value.name!r}")
         seen.add(value.name.casefold())
     return problems
 
 
-def _last_beat(values: Sequence[Timed]) -> float:
+def last_beat(values: Sequence[Timed]) -> float:
     note_ends = [note.beat + note.length for value in values for note in value.notes]
     return max([*note_ends, *(change.beat for value in values for change in value.cc)])
 
 
-def _length_problems(bpm: float, values: Sequence[Timed], where: str) -> list[str]:
+def length_problems(bpm: float, values: Sequence[Timed], where: str) -> list[str]:
     """Check that a song or graph with a valid bpm and valid members ends within `MAX_SONG_S`."""
     try:
-        seconds = float(_last_beat(values) * 60 / bpm)
+        seconds = float(last_beat(values) * 60 / bpm)
     except OverflowError:
         seconds = math.inf
     if seconds <= MAX_SONG_S:
@@ -411,25 +413,25 @@ class ControlData(TypedDict):
     shape: NotRequired[Shape]
 
 
-def _plain(value: float) -> float:
+def plain_number(value: float) -> float:
     """Return a number in one spelling, so equal values write equal text: an integral number as an
     int, any other as a float.
     """
     return int(value) if float(value).is_integer() else float(value)
 
 
-def _note_to_data(note: Note) -> NoteData:
+def note_to_data(note: Note) -> NoteData:
     return {
-        "beat": _plain(note.beat),
+        "beat": plain_number(note.beat),
         "pitch": note.pitch,
-        "length": _plain(note.length),
+        "length": plain_number(note.length),
         "velocity": note.velocity,
     }
 
 
-def _control_to_data(change: ControlChange) -> ControlData:
+def control_to_data(change: ControlChange) -> ControlData:
     data: ControlData = {
-        "beat": _plain(change.beat),
+        "beat": plain_number(change.beat),
         "control": change.control,
         "value": change.value,
         "shape": change.shape,

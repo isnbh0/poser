@@ -166,25 +166,28 @@ def test_a_request_rejects_a_track_it_cannot_read(
     value: Song | Graph, tracks: tuple[str, ...], named: str
 ) -> None:
     with pytest.raises(ValueError, match=named):
-        ScoreRequest(value, tuple(NodeName(name) for name in tracks))
+        ScoreRequest(
+            value if isinstance(value, Graph) else value.graph(),
+            tuple(NodeName(name) for name in tracks),
+        )
 
 
 def test_a_request_may_select_no_track() -> None:
-    assert ScoreRequest(song(KEYS), ()).tracks == ()
+    assert ScoreRequest(song(KEYS).graph(), ()).tracks == ()
 
 
 def test_the_default_request_reads_every_pitched_track_in_order() -> None:
-    assert ScoreRequest.default(song(BASS, DRUMS, KEYS)).tracks == ("bass", "keys")
+    assert ScoreRequest.default(song(BASS, DRUMS, KEYS).graph()).tracks == ("bass", "keys")
     assert ScoreRequest.default(graph()).tracks == ("keys",)
-    assert ScoreRequest.default(song(DRUMS)).tracks == ()
+    assert ScoreRequest.default(song(DRUMS).graph()).tracks == ()
 
 
 def test_a_request_ends_at_the_song_s_last_beat() -> None:
-    assert ScoreRequest.default(song(KEYS, BASS)).end == 8
+    assert ScoreRequest.default(song(KEYS, BASS).graph()).end == 8
     late = Track("keys", "synth", (NOTE,), cc=(ControlChange(10, 1, 64),))
-    assert ScoreRequest.default(song(late)).end == 10
+    assert ScoreRequest.default(song(late).graph()).end == 10
     # Every track counts, including one the request does not read.
-    assert ScoreRequest(song(KEYS, BASS), (NodeName("keys"),)).end == 8
+    assert ScoreRequest(song(KEYS, BASS).graph(), (NodeName("keys"),)).end == 8
 
 
 # read_song
@@ -225,7 +228,7 @@ NOT_A_VALUE = cast("ReadingValue", NotAValue("x"))
 
 
 def test_read_song_records_each_broken_framework_as_an_error() -> None:
-    request = ScoreRequest.default(song(KEYS))
+    request = ScoreRequest.default(song(KEYS).graph())
     broken = {
         "raises": Fake("raises", raises),
         "wrong-type": Fake("wrong-type", "a string"),
@@ -257,7 +260,7 @@ def test_read_song_records_each_broken_framework_as_an_error() -> None:
 
 
 def test_an_unknowable_reading_is_not_an_error() -> None:
-    request = ScoreRequest(song(KEYS), ())
+    request = ScoreRequest(song(KEYS).graph(), ())
     unknowable = Reading(request.end, (ReadingSpan(0, request.end, Unknowable("silence")),))
 
     readings = read_song(request, [Fake("quiet", unknowable)])
@@ -266,7 +269,7 @@ def test_an_unknowable_reading_is_not_an_error() -> None:
 
 
 def test_readings_have_a_json_form() -> None:
-    request = ScoreRequest.default(song(KEYS, BASS))
+    request = ScoreRequest.default(song(KEYS, BASS).graph())
     reading = Reading(
         8,
         (
@@ -306,7 +309,8 @@ def test_frameworks_never_see_marks() -> None:
         seen.append(request)
         return good(request)
 
-    marked = Song(120, (KEYS, BASS), marks=Marks({"parts": [Mark(0, 4, "intro")]}))
+    marked = Song(120, (KEYS, BASS), marks=Marks({"parts": [Mark(0, 4, "intro")]})).graph()
+    assert marked.marks
     request = ScoreRequest(marked, (NodeName("bass"),))
 
     read_song(request, [Fake("recording", record)])
@@ -332,8 +336,8 @@ def test_marks_never_change_a_reading_of_a_generated_song() -> None:
     for seed in range(300):
         song = random_song(seed)
         marked = replace(song, marks=MARKS)
-        assert read_song(ScoreRequest.default(marked), [tonal]) == read_song(
-            ScoreRequest.default(song), [tonal]
+        assert read_song(ScoreRequest.default(marked.graph()), [tonal]) == read_song(
+            ScoreRequest.default(song.graph()), [tonal]
         ), seed
 
 
@@ -450,7 +454,7 @@ def marked(layers: dict[str, list[Mark]]) -> Song:
 def test_interpreting_clips_marks_to_the_song_s_end() -> None:
     song = marked({"fake": [Mark(0, 2, "x"), Mark(2, 8, "y"), Mark(9, 10, "x")]})
 
-    authored = interpret_marks(song, [FakeVocabulary()])
+    authored = interpret_marks(song.graph(), [FakeVocabulary()])
 
     assert authored.end == 4
     assert authored.layers == {
@@ -464,7 +468,7 @@ def test_interpreting_clips_marks_to_the_song_s_end() -> None:
 def test_a_layer_no_vocabulary_reads_is_text() -> None:
     song = marked({"parts": [Mark(0, 2, "boom")], "fake": [Mark(0, 1, "x")]})
 
-    authored = interpret_marks(song, [FakeVocabulary()])
+    authored = interpret_marks(song.graph(), [FakeVocabulary()])
 
     assert authored.layers["parts"] == TextLayer((Mark(0, 2, "boom"),))
     assert isinstance(authored.layers["fake"], ParsedLayer)
@@ -472,7 +476,7 @@ def test_a_layer_no_vocabulary_reads_is_text() -> None:
 
 
 def test_interpreting_without_marks_gives_no_layers() -> None:
-    assert interpret_marks(song(KEYS), [FakeVocabulary()]) == AuthoredMarks(4, {})
+    assert interpret_marks(song(KEYS).graph(), [FakeVocabulary()]) == AuthoredMarks(4, {})
 
 
 def test_every_rejected_label_is_named_in_one_song_error() -> None:
@@ -481,7 +485,7 @@ def test_every_rejected_label_is_named_in_one_song_error() -> None:
     )
 
     with pytest.raises(SongError) as error:
-        interpret_marks(song, [FakeVocabulary(), FakeVocabulary("other")])
+        interpret_marks(song.graph(), [FakeVocabulary(), FakeVocabulary("other")])
 
     assert error.value.problems == [
         "marks.fake[1]: 'z' is not a fake label: not x or y",
@@ -492,7 +496,7 @@ def test_every_rejected_label_is_named_in_one_song_error() -> None:
 def test_a_vocabulary_that_raises_fails_only_its_layer() -> None:
     song = marked({"fake": [Mark(0, 1, "x"), Mark(1, 2, "boom")], "other": [Mark(0, 1, "y")]})
 
-    authored = interpret_marks(song, [FakeVocabulary(), FakeVocabulary("other")])
+    authored = interpret_marks(song.graph(), [FakeVocabulary(), FakeVocabulary("other")])
 
     assert authored.layers["fake"] == LayerError(Identifier("fake"), "RuntimeError: boom")
     assert authored.layers["other"] == ParsedLayer(
@@ -506,7 +510,7 @@ def test_a_vocabulary_returning_neither_value_nor_rejection_fails_its_layer(
 ) -> None:
     song = marked({"fake": [Mark(0, 1, "x")]})
 
-    authored = interpret_marks(song, [FakeVocabulary(parse=lambda _: result)])
+    authored = interpret_marks(song.graph(), [FakeVocabulary(parse=lambda _: result)])
 
     layer = authored.layers["fake"]
     assert isinstance(layer, LayerError)
@@ -523,7 +527,7 @@ def test_authored_marks_have_a_json_form() -> None:
         }
     )
 
-    authored = interpret_marks(song, [FakeVocabulary(), FakeVocabulary("other")])
+    authored = interpret_marks(song.graph(), [FakeVocabulary(), FakeVocabulary("other")])
 
     assert marks_to_data(authored) == {
         "fake": {

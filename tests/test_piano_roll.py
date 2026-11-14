@@ -33,7 +33,7 @@ def song() -> Song:
 def test_projection_preserves_authored_events_without_compiling() -> None:
     source = song()
     before = repr(source)
-    roll = project_piano_roll(source)
+    roll = project_piano_roll(source.graph())
     assert roll.tempo == 123.5
     assert tuple(panel.name for panel in roll.panels) == ("lead", "bass")
     assert tuple(panel.notes for panel in roll.panels) == tuple(t.notes for t in source.tracks)
@@ -43,7 +43,6 @@ def test_projection_preserves_authored_events_without_compiling() -> None:
         (0.25, 0, 1.5, 1),
     ]
     assert repr(source) == before
-    assert roll == project_piano_roll(source.graph(("echo",)))
     changed = replace(
         source,
         tracks=tuple(
@@ -51,11 +50,11 @@ def test_projection_preserves_authored_events_without_compiling() -> None:
             for t in source.tracks
         ),
     )
-    assert project_piano_roll(changed) == roll
+    assert project_piano_roll(changed.graph()) == roll
 
 
 def test_graph_filtering_order_and_routing_independence() -> None:
-    tracks = song().graph(("echo",)).nodes
+    tracks = song().graph().nodes
     graph = Graph(
         123.5,
         (tracks[2], Node("delay", "delay", delay_samples=512), tracks[1], tracks[0]),
@@ -114,7 +113,7 @@ def test_normalization_and_immutability() -> None:
 
 
 def test_figure_geometry_and_labels() -> None:
-    roll = project_piano_roll(song())
+    roll = project_piano_roll(song().graph())
     figure = piano_roll.build_figure(roll)
     try:
         assert len(figure.axes) == 2
@@ -162,7 +161,7 @@ def test_empty_views(panels: tuple[PianoRollPanel, ...], tmp_path: Path) -> None
 
 
 def test_png_and_io_failure(tmp_path: Path) -> None:
-    roll = project_piano_roll(song())
+    roll = project_piano_roll(song().graph())
     path = tmp_path / "notes.png"
     piano_roll.write_png(roll, path)
     assert path.read_bytes().startswith(b"\x89PNG\r\n\x1a\n")
@@ -222,7 +221,7 @@ assert not any(name.startswith("poser.adapters.pedalboard") for name in sys.modu
 
 def test_a_fractional_pitch_draws_at_its_exact_height(tmp_path: Path) -> None:
     source = Song(100, (Track("lead", "synth", (Note(0, 60.5, 1, 100), Note(1, 64, 1, 90))),))
-    roll = project_piano_roll(source)
+    roll = project_piano_roll(source.graph())
 
     assert [note.pitch for note in roll.panels[0].notes] == [60.5, 64]
     path = tmp_path / "quarter.png"

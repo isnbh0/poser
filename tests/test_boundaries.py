@@ -421,9 +421,9 @@ def test_the_showcase_states_its_chords() -> None:
     assert len(chords) == 16
     assert (chords[0].beat, chords[-1].end) == (0, 64)
     root = Path()
-    layer = interpret_marks(song, [create_chords({}, AdapterContext(root, root, root))]).layers[
-        "chords"
-    ]
+    layer = interpret_marks(
+        song.graph(), [create_chords({}, AdapterContext(root, root, root))]
+    ).layers["chords"]
     assert isinstance(layer, ParsedLayer)
     values = [parsed.value for parsed in layer.marks]
     assert len(values) == 16
@@ -447,6 +447,8 @@ def test_the_showcase_states_its_key() -> None:
     (mark,) = song.marks.layers["key"]
     assert (mark.beat, mark.end, mark.text) == (0, 64, "A minor")
     root = Path()
-    layer = interpret_marks(song, [create_key({}, AdapterContext(root, root, root))]).layers["key"]
+    layer = interpret_marks(
+        song.graph(), [create_key({}, AdapterContext(root, root, root))]
+    ).layers["key"]
     assert isinstance(layer, ParsedLayer)
     assert [parsed.value for parsed in layer.marks] == [KeyMark(9, "minor")]

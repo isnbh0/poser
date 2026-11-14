@@ -11,13 +11,12 @@ from poser.core.rules import (
     CONTROL_MAX,
     ControlChange,
     Timed,
-    _plain,
     is_int,
     is_number,
     is_pitch,
     normal_pitch,
+    plain_number,
 )
-from poser.core.song import Song
 
 
 class PitchSupport(StrEnum):
@@ -116,7 +115,7 @@ class Performance:
             previous = order
 
 
-def _ramp_events(song: Song | Graph, start: ControlChange, end: ControlChange) -> list[Control]:
+def _ramp_events(graph: Graph, start: ControlChange, end: ControlChange) -> list[Control]:
     """Return one event per value along a linear segment, at the beat where the line rounds to it.
 
     The segment's start value is the start entry's own event, so values run from one past it.
@@ -125,7 +124,7 @@ def _ramp_events(song: Song | Graph, start: ControlChange, end: ControlChange) -
     direction = 1 if end.value > start.value else -1
     return [
         Control(
-            sample_at(song, start.beat + (step - 0.5) / span * (end.beat - start.beat)),
+            sample_at(graph, start.beat + (step - 0.5) / span * (end.beat - start.beat)),
             start.control,
             start.value + direction * step,
         )
@@ -133,7 +132,7 @@ def _ramp_events(song: Song | Graph, start: ControlChange, end: ControlChange) -
     ]
 
 
-def _control_events(song: Song | Graph, timed: Timed) -> list[Control]:
+def _control_events(graph: Graph, timed: Timed) -> list[Control]:
     """Return a member's controller changes as events in time order.
 
     Each controller holds its first value from the start of the song, as automation does in a
@@ -144,14 +143,14 @@ def _control_events(song: Song | Graph, timed: Timed) -> list[Control]:
     events: list[Control] = []
     seen: set[int] = set()
     for index, change in enumerate(timed.cc):
-        events.append(Control(sample_at(song, change.beat), change.control, change.value))
+        events.append(Control(sample_at(graph, change.beat), change.control, change.value))
         if change.control not in seen:
             seen.add(change.control)
             events.append(Control(0, change.control, change.value))
         if change.shape == "linear":
             # The constructor guarantees a later change to the same controller.
             target = next(c for c in timed.cc[index + 1 :] if c.control == change.control)
-            events.extend(_ramp_events(song, change, target))
+            events.extend(_ramp_events(graph, change, target))
     events.sort(key=lambda event: event.sample)
 
     last_at_sample = {
@@ -170,8 +169,8 @@ def _control_events(song: Song | Graph, timed: Timed) -> list[Control]:
     return kept
 
 
-def perform(song: Song | Graph, timed: Timed) -> Performance:
-    """Return what the member's instrument plays, over the song's or graph's stem length.
+def perform(graph: Graph, timed: Timed) -> Performance:
+    """Return what the member's instrument plays, over the graph's stem length.
 
     Times snap to whole samples, so float error, as in beats 0.1 + 0.2 against 0.3, cannot place
     a note-off just after the note-on it should precede. A note ends at least one sample after it
@@ -179,13 +178,13 @@ def perform(song: Song | Graph, timed: Timed) -> Performance:
     """
     events: list[Event] = []
     for note in timed.notes:
-        start = sample_at(song, note.beat)
-        end = max(sample_at(song, note.beat + note.length), start + 1)
+        start = sample_at(graph, note.beat)
+        end = max(sample_at(graph, note.beat + note.length), start + 1)
         events.append(NoteOn(start, note.pitch, note.velocity))
         events.append(NoteOff(end, note.pitch))
-    events.extend(_control_events(song, timed))
+    events.extend(_control_events(graph, timed))
     events.sort(key=lambda event: (event.sample, _rank(event)))
-    return Performance(stem_samples(song), tuple(events))
+    return Performance(stem_samples(graph), tuple(events))
 
 
 @dataclass(frozen=True)
@@ -195,9 +194,7 @@ class PitchProblem:
     detail: str  # Names the first offending note's beat and pitch, and how many notes are affected.
 
 
-def perform_for(
-    song: Song | Graph, timed: Timed, pitches: PitchSupport
-) -> Performance | PitchProblem:
+def perform_for(graph: Graph, timed: Timed, pitches: PitchSupport) -> Performance | PitchProblem:
     """Return what the member's instrument plays, or the problem when it cannot play the pitches.
 
     The render path builds every track's performance here, so an instrument declaring anything
@@ -212,9 +209,9 @@ def perform_for(
             notes = "1 note is" if count == 1 else f"{count} notes are"
             return PitchProblem(
                 f"plays only whole MIDI pitches; {notes} fractional, first at beat "
-                f"{_plain(first.beat)} with pitch {first.pitch}"
+                f"{plain_number(first.beat)} with pitch {first.pitch}"
             )
-    return perform(song, timed)
+    return perform(graph, timed)
 
 
 def _event_to_data(event: Event) -> JsonValue:

@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, override
 
 import pytest
+import yaml
 from fakes import (
     FakeInstrument,
     FakeMeasurer,
@@ -33,6 +34,7 @@ from poser.core.delivery import (
     DeliveryIOFailed,
     DeliveryResult,
     DestinationRefused,
+    ExecutionFailed,
     InputsChanged,
     InputSnapshot,
     PublishedDelivery,
@@ -316,6 +318,18 @@ def test_failure_outcomes_preserve_history_and_never_publish(
     assert not list(harness.root.rglob(".poser-export-*"))
     if failure != "render":
         assert list((harness.root / "renders").rglob("history/*/report.json"))
+
+
+def test_an_unknown_effect_recipe_fails_naming_its_track(harness: Harness) -> None:
+    data = yaml.safe_load(harness.song.read_text())
+    data["tracks"][0]["effects"] = ["drive"]
+    harness.song.write_text(yaml.safe_dump(data))
+
+    result = harness.run()
+
+    assert isinstance(result, ExecutionFailed)
+    assert "tracks[0]: no effect recipe 'drive' in poser.toml" in result.detail
+    assert not harness.destination.exists()
 
 
 def test_destination_race_does_not_replace_empty_owner_directory(harness: Harness) -> None:

@@ -19,6 +19,6 @@ def test_reference_setup_has_songs() -> None:
 
 @pytest.mark.parametrize("path", SONGS, ids=[path.name for path in SONGS])
 def test_song_loads(path: Path) -> None:
-    song = load_song(path, SONG_FORMATS)
+    song = load_song(path, SONG_FORMATS).source
     assert isinstance(song, Song)
     assert song.tracks

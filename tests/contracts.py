@@ -135,7 +135,7 @@ def check_instrument_contract(
 
     notes = (Note(beat=0, pitch=60, length=1, velocity=100), Note(1, 64, 1, 100))
     song = Song(bpm=120, tracks=(Track("contract", str(ref), notes),))
-    performance = perform(song, song.tracks[0])
+    performance = perform(song.graph(), song.tracks[0])
     path = tmp_path / "contract-render.npy"
     failure = instrument.render(RenderRequest(first, performance, path), timeout_s)
     assert failure is None, failure
@@ -429,10 +429,10 @@ def check_section_contract(section: object) -> None:
     note = (Note(beat=0, pitch=60, length=1, velocity=100),)
     song = Song(bpm=120, tracks=(Track("lead", "fake", note),))
     measurements = Measurements(-20.0, -23.0, 0, dict.fromkeys(BANDS, -30.0), (-20.0,))
-    frames = stem_samples(song)  # Analysis hands sections whole stems, tail included.
+    frames = stem_samples(song.graph())  # Analysis hands sections whole stems, tail included.
     assert frames >= CONTRACT_FRAMES
     audio = constant_audio(0.1, frames)
-    track = section.track(SectionInput(song, song.graph().nodes[0], audio, measurements))
+    track = section.track(SectionInput(song.graph(), song.graph().nodes[0], audio, measurements))
     assert isinstance(track, SectionResult), f"track returned a {type(track).__name__}"
-    mix = section.mix(SectionInput(song, None, audio, measurements))
+    mix = section.mix(SectionInput(song.graph(), None, audio, measurements))
     assert isinstance(mix, SectionResult), f"mix returned a {type(mix).__name__}"

@@ -23,15 +23,13 @@ from poser.core.statuses import StemStatus
 @pytest.mark.real_plugins
 def test_demo_song_renders_aligned_audible_stems(tmp_path: Path) -> None:
     song = load_song(SURGE_DIR / "demo.yaml", SONG_FORMATS)
-    assert isinstance(song, Song)
-    expected_samples = stem_samples(song)
+    assert isinstance(song.source, Song)
+    expected_samples = stem_samples(song.graph)
 
     results = real_render(tmp_path, song, "songs/demo.yaml")
 
     # Render order is the graph's topological order, not the report's song order.
-    assert [result.track for result in results] == [
-        node.name for node in song.graph().topological()
-    ]
+    assert [result.track for result in results] == [node.name for node in song.graph.topological()]
     for result in results:
         assert result.status is StemStatus.RENDERED, result.detail
         assert result.stem is not None

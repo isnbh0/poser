@@ -17,8 +17,8 @@ from poser.core.graph import Graph
 from poser.core.jsonvalue import JsonValue
 from poser.core.marks import LAYER_PATTERN, LayerName, Mark
 from poser.core.names import Identifier, NodeName
-from poser.core.rules import Note, _line_problems, _plain, _span_problems
-from poser.core.song import Song, is_number, song_last_beat
+from poser.core.rules import Note, line_problems, plain_number, span_problems
+from poser.core.song import is_number, song_last_beat
 
 
 @runtime_checkable
@@ -87,7 +87,7 @@ class Rejected:
     reason: str
 
     def __post_init__(self) -> None:
-        if problems := _line_problems(self.reason, "Rejected.reason"):
+        if problems := line_problems(self.reason, "Rejected.reason"):
             raise ValueError("\n".join(problems))
 
 
@@ -111,7 +111,7 @@ class ReadingSpan[V: ReadingValue]:
     outcome: Outcome[V]
 
     def __post_init__(self) -> None:
-        if problems := _span_problems(self.start, self.end, "ReadingSpan", "start"):
+        if problems := span_problems(self.start, self.end, "ReadingSpan", "start"):
             raise ValueError("\n".join(problems))
         if not isinstance(self.outcome, Known | Ambiguous | Unknowable):
             raise ValueError(f"ReadingSpan.outcome must be an outcome, got {self.outcome!r}")
@@ -156,27 +156,25 @@ class Reading[V: ReadingValue]:
         object.__setattr__(self, "spans", typed)
 
 
-def _track_notes(song: Song | Graph) -> dict[str, tuple[bool, bool, tuple[Note, ...]]]:
+def _track_notes(graph: Graph) -> dict[str, tuple[bool, bool, tuple[Note, ...]]]:
     """Each node's name, with whether it is a track, whether it is pitched, and its notes."""
-    if isinstance(song, Song):
-        return {track.name: (True, track.pitched, track.notes) for track in song.tracks}
-    return {node.name: (node.kind == "track", node.pitched, node.notes) for node in song.nodes}
+    return {node.name: (node.kind == "track", node.pitched, node.notes) for node in graph.nodes}
 
 
 @dataclass(frozen=True)
 class ScoreRequest:
     """A reading of the score, the authored notes, of some of a song's pitched tracks.
 
-    `tracks` names distinct pitched tracks of the song, a Song's tracks or a Graph's track nodes,
-    and may be empty.
+    `song` is the song's graph, and `tracks` names distinct pitched track nodes of it, and may be
+    empty.
     """
 
-    song: Song | Graph
+    song: Graph
     tracks: tuple[NodeName, ...]
 
     def __post_init__(self) -> None:
-        if not isinstance(self.song, Song | Graph):
-            raise ValueError(f"ScoreRequest.song must be a Song or Graph, got {self.song!r}")
+        if not isinstance(self.song, Graph):
+            raise ValueError(f"ScoreRequest.song must be a Graph, got {self.song!r}")
         if not isinstance(self.tracks, Sequence) or isinstance(self.tracks, str):
             raise ValueError(f"ScoreRequest.tracks must be a sequence, got {self.tracks!r}")
         known = _track_notes(self.song)
@@ -195,7 +193,7 @@ class ScoreRequest:
         object.__setattr__(self, "tracks", tuple(names))
 
     @classmethod
-    def default(cls, song: Song | Graph) -> "ScoreRequest":
+    def default(cls, song: Graph) -> "ScoreRequest":
         """Select every pitched track, in source order."""
         names = [
             name
@@ -257,13 +255,13 @@ def readings_to_data(readings: SongReadings) -> JsonValue:
             continue
         frameworks[name] = {
             "spans": [
-                {"start": _plain(span.start), "end": _plain(span.end)}
+                {"start": plain_number(span.start), "end": plain_number(span.end)}
                 | _outcome_to_data(span.outcome)
                 for span in reading.spans
             ]
         }
     return {
-        "end": _plain(readings.end),
+        "end": plain_number(readings.end),
         "tracks": list(readings.tracks),
         "frameworks": frameworks,
     }
@@ -407,7 +405,7 @@ class AuthoredMarks:
 
 
 def _mark_data(mark: Mark) -> dict[str, JsonValue]:
-    return {"beat": _plain(mark.beat), "end": _plain(mark.end), "text": mark.text}
+    return {"beat": plain_number(mark.beat), "end": plain_number(mark.end), "text": mark.text}
 
 
 def marks_to_data(authored: AuthoredMarks) -> JsonValue:

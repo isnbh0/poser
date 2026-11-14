@@ -35,7 +35,7 @@ def cc_track(*changes: ControlChange, notes: tuple[Note, ...] = (Note(0, 60, 1, 
 
 
 def performed(track: Track, song: Song | None = None) -> Performance:
-    return perform(song or make_song(track), track)
+    return perform((song or make_song(track)).graph(), track)
 
 
 def note_events(track: Track) -> list[tuple[str, float, int]]:
@@ -94,16 +94,16 @@ def test_scaled_beats_and_tempo_preserve_sample_timed_performance() -> None:
         cc=(ControlChange(0, 1, 0), ControlChange(4, 1, 64)),
     )
 
-    performance = perform(make_song(slow, bpm=60), slow)
+    performance = perform(make_song(slow, bpm=60).graph(), slow)
     assert Control(96000, 1, 64) in performance.events
-    assert performance == perform(make_song(fast, bpm=120), fast)
+    assert performance == perform(make_song(fast, bpm=120).graph(), fast)
 
 
 def test_fixed_beats_follow_song_tempo() -> None:
     track = make_track("lead", Note(1, 60, 2, 100))
 
-    slow = perform(make_song(track, bpm=60), track)
-    fast = perform(make_song(track, bpm=120), track)
+    slow = perform(make_song(track, bpm=60).graph(), track)
+    fast = perform(make_song(track, bpm=120).graph(), track)
 
     assert slow.events == (NoteOn(48000, 60, 100), NoteOff(144000, 60))
     assert fast.events == (NoteOn(24000, 60, 100), NoteOff(72000, 60))
@@ -121,8 +121,8 @@ def test_every_track_performs_over_the_song_length_plus_tail() -> None:
     long = make_track("long", Note(6, 40, 2, 100), Note(0, 40, 1, 100))
     song = make_song(short, long)
     expected = int((4.0 + TAIL_S) * SAMPLE_RATE)
-    assert perform(song, short).samples == expected
-    assert perform(song, long).samples == expected
+    assert perform(song.graph(), short).samples == expected
+    assert perform(song.graph(), long).samples == expected
 
 
 def test_repeated_pitch_ends_before_it_retriggers() -> None:
@@ -156,7 +156,7 @@ def test_perform_ends_a_song_whose_last_event_lands_on_its_last_beat() -> None:
     track = cc_track(ControlChange(0, 1, 0), ControlChange(4, 1, 9))  # The note ends at beat 1.
     song = make_song(track)
 
-    performance = perform(song, track)
+    performance = perform(song.graph(), track)
 
     assert performance.events[-1] == Control(96000, 1, 9)
     assert performance.samples == int((2.0 + TAIL_S) * SAMPLE_RATE)
@@ -457,7 +457,7 @@ def test_perform_for_refuses_a_fraction_only_on_a_semitone_instrument() -> None:
     whole = make_track("lead", Note(0, 60, 1, 100))
     quarter = make_track("lead", Note(2, 64.5, 1, 100), Note(0, 60, 1, 100), Note(1, 60.5, 1, 90))
 
-    problem = perform_for(make_song(quarter), quarter, PitchSupport.SEMITONES)
+    problem = perform_for(make_song(quarter).graph(), quarter, PitchSupport.SEMITONES)
 
     assert problem == PitchProblem(
         "plays only whole MIDI pitches; 2 notes are fractional, first at beat 1 with pitch 60.5"
@@ -468,4 +468,4 @@ def test_perform_for_refuses_a_fraction_only_on_a_semitone_instrument() -> None:
         (quarter, PitchSupport.CONTINUOUS),
     ]:
         song = make_song(track)
-        assert perform_for(song, track, pitches) == perform(song, track)
+        assert perform_for(song.graph(), track, pitches) == perform(song.graph(), track)

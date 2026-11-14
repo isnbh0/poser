@@ -6,11 +6,10 @@ from poser.core.graph import Graph
 from poser.core.rules import (
     NODE_NAME,
     Note,
-    _duplicate_name_problems,
-    _song_field_problems,
+    duplicate_name_problems,
     is_number,
+    song_field_problems,
 )
-from poser.core.song import Song
 
 
 @dataclass(frozen=True)
@@ -45,22 +44,18 @@ class PianoRoll:
     panels: tuple[PianoRollPanel, ...]
 
     def __post_init__(self) -> None:
-        if problems := _song_field_problems({"bpm": self.tempo}, "PianoRoll"):
+        if problems := song_field_problems({"bpm": self.tempo}, "PianoRoll"):
             raise ValueError("\n".join(problems))
         if not isinstance(self.panels, list | tuple):
             raise ValueError("Panels must be a list or tuple of PianoRollPanel values")
         if any(not isinstance(panel, PianoRollPanel) for panel in self.panels):
             raise ValueError("Panels must contain only PianoRollPanel values")
-        if problems := _duplicate_name_problems(self.panels, "PianoRoll", group="panels"):
+        if problems := duplicate_name_problems(self.panels, "PianoRoll", group="panels"):
             raise ValueError("\n".join(problems))
         object.__setattr__(self, "panels", tuple(self.panels))
 
 
-def project_piano_roll(song: Song | Graph) -> PianoRoll:
-    """Project authored notes without compiling effects or consulting instruments."""
-    sources = (
-        song.tracks
-        if isinstance(song, Song)
-        else (node for node in song.nodes if node.kind == "track")
-    )
-    return PianoRoll(song.bpm, tuple(PianoRollPanel(item.name, item.notes) for item in sources))
+def project_piano_roll(graph: Graph) -> PianoRoll:
+    """Project the track nodes' authored notes without consulting instruments."""
+    tracks = (node for node in graph.nodes if node.kind == "track")
+    return PianoRoll(graph.bpm, tuple(PianoRollPanel(node.name, node.notes) for node in tracks))

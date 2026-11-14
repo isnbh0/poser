@@ -35,6 +35,7 @@ from poser.core.audio import (
 )
 from poser.core.cache import Stamp, cycle_key, delay_identity, node_key, sound_key
 from poser.core.graph import Graph, Node, Wire
+from poser.core.loading import LoadedSong
 from poser.core.names import Identifier, NodeName, SongId
 from poser.core.performance import NoteOn, Performance, PitchProblem, perform_for
 from poser.core.ports import (
@@ -55,7 +56,7 @@ from poser.core.ports import (
     SoundFailure,
 )
 from poser.core.session import song_session
-from poser.core.song import Song, is_number, song_graph
+from poser.core.song import is_number
 from poser.core.sounds import parse_sound_ref
 from poser.core.statuses import RenderFailureStatus, RenderStatus, SoundFailureStatus, StemStatus
 
@@ -292,7 +293,7 @@ def node_cache_key(
 
 
 def render_song(
-    song: Song | Graph,
+    loaded: LoadedSong,
     renders: RenderStore,
     song_id: SongId,
     instruments: Mapping[Identifier, Instrument],
@@ -305,26 +306,26 @@ def render_song(
 ) -> list[TrackResult]:
     """Render each node whose inputs changed since its stem was written, or every node if forced.
 
-    The song is a Song, which compiles to its graph, or a Graph, whose effect references resolve
-    against the configured recipes first. Nodes render in the graph's cycle-group order, its
-    topological order while no group holds a cycle, so a node reads stems its run just wrote or
-    found current. A feedback graph's cycle group renders as one job, stepped through fixed
-    blocks, with the whole job under the one timeout. A node whose upstream did not produce a
-    stem is not rendered, and a group none of whose external inputs are met fails whole. Each
-    rendering of a track again after a late start is reported to `notify` as one line. Raises
-    SongError for a node naming an unknown effect recipe, SongBusyError when another run holds
-    the song's lock, and ValueError when the store's stem suffix differs from the audio files' or
-    a node's inputs do not sum to finite audio.
+    The song's effect references are checked against the configured recipes first. Nodes render
+    in the graph's cycle-group order, its topological order while no group holds a cycle, so a
+    node reads stems its run just wrote or found current. A feedback graph's cycle group renders
+    as one job, stepped through fixed blocks, with the whole job under the one timeout. A node
+    whose upstream did not produce a stem is not rendered, and a group none of whose external
+    inputs are met fails whole. Each rendering of a track again after a late start is reported
+    to `notify` as one line. Raises SongError for a track or node naming an unknown effect
+    recipe, SongBusyError when another run holds the song's lock, and ValueError when the
+    store's stem suffix differs from the audio files' or a node's inputs do not sum to finite
+    audio.
     """
     require_stem_format(renders, audio_files)
     with song_session(renders, song_id) as store:
         return _render(
-            song, store, instruments, audio_files, effects, timeout_s, force=force, notify=notify
+            loaded, store, instruments, audio_files, effects, timeout_s, force=force, notify=notify
         )
 
 
 def _render(
-    song: Song | Graph,
+    loaded: LoadedSong,
     store: SongStore,
     instruments: Mapping[Identifier, Instrument],
     audio_files: AudioFiles,
@@ -335,9 +336,10 @@ def _render(
     notify: Notify,
 ) -> list[TrackResult]:
     """Render inside a caller-owned song session; never acquire a second lock."""
-    graph = song_graph(song, [*effects])
+    loaded.check_effects([*effects])
+    graph = loaded.graph
     groups = cycle_groups(graph)
-    frames = stem_samples(song)
+    frames = stem_samples(graph)
     # Results from older stems must not survive a render.
     store.clear_latest()
     keys: dict[NodeName, str] = {}
@@ -345,7 +347,6 @@ def _render(
     for group in graph.groups():
         if len(group) == 1 and group[0].name not in groups:
             results[NodeName(group[0].name)] = _render_node(
-                song,
                 graph,
                 group[0],
                 store,
@@ -379,7 +380,6 @@ def _render(
 
 
 def _render_node(
-    song: Song | Graph,
     graph: Graph,
     node: Node,
     store: SongStore,
@@ -422,12 +422,14 @@ def _render_node(
     store.discard(name)
     if node.kind == "effect":
         rendered = _render_effect_node(
-            song, graph, node, cast("ResolvedNode", resolved), store, audio_files, timeout_s
+            graph, node, cast("ResolvedNode", resolved), store, audio_files, timeout_s
         )
     elif node.kind == "delay":
-        rendered = _render_delay_node(song, graph, node, store, audio_files)
+        rendered = _render_delay_node(graph, node, store, audio_files)
     else:
-        rendered = _render_track_node(song, node, cast("ResolvedNode", resolved), timeout_s, notify)
+        rendered = _render_track_node(
+            graph, node, cast("ResolvedNode", resolved), timeout_s, notify
+        )
     if isinstance(rendered, TrackResult):
         return rendered
     return _write_stem(name, key, identity, store, audio_files, rendered)
@@ -793,7 +795,6 @@ def _control_audio_of(
 
 
 def _render_delay_node(
-    song: Song | Graph,
     graph: Graph,
     node: Node,
     store: SongStore,
@@ -806,7 +807,7 @@ def _render_delay_node(
     input sample moved exactly.
     """
     name = NodeName(node.name)
-    frames = stem_samples(song)
+    frames = stem_samples(graph)
     try:
         audio = _upstream_audio(graph, node, store, audio_files, frames)
     except AudioFileError as error:
@@ -818,7 +819,7 @@ def _render_delay_node(
 
 
 def _render_track_node(
-    song: Song | Graph,
+    graph: Graph,
     node: Node,
     resolved: ResolvedNode,
     timeout_s: float,
@@ -838,7 +839,7 @@ def _render_track_node(
     if not isinstance(adapter, Instrument) or not isinstance(sound, ResolvedSound):
         raise ValueError(f"a track node resolved to a {type(adapter).__name__}, not an instrument")
     name = NodeName(node.name)
-    performance = perform_for(song, node, adapter.pitches)
+    performance = perform_for(graph, node, adapter.pitches)
     if isinstance(performance, PitchProblem):
         instrument = parse_sound_ref(cast("str", node.sound)).instrument
         return TrackResult(
@@ -891,7 +892,6 @@ def _render_track_node(
 
 
 def _render_effect_node(
-    song: Song | Graph,
     graph: Graph,
     node: Node,
     resolved: ResolvedNode,
@@ -908,8 +908,8 @@ def _render_effect_node(
     if not isinstance(adapter, Effect) or not isinstance(recipe, ResolvedEffect):
         raise ValueError(f"an effect node resolved to a {type(adapter).__name__}, not an effect")
     name = NodeName(node.name)
-    # The input is read before the old stem is discarded, so a failure here keeps both.
-    frames = stem_samples(song)
+    # The caller discarded the old stem and stamp, so a failure here leaves the node with neither.
+    frames = stem_samples(graph)
     try:
         audio = _upstream_audio(graph, node, store, audio_files, frames)
         control = _control_audio(graph, node, store, audio_files, frames)

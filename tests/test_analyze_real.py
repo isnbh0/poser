@@ -30,4 +30,4 @@ def test_demo_song_mixes_and_analyzes(tmp_path: Path) -> None:
     assert report.mix.integrated_lufs is not None
     assert math.isfinite(report.mix.integrated_lufs)
     with ReadableAudioFile(report.mix.path) as mix:  # ty: ignore[no-matching-overload]
-        assert mix.frames == stem_samples(song)
+        assert mix.frames == stem_samples(song.graph)

@@ -71,7 +71,7 @@ def one_track(specs: Sequence[Spec]) -> Song:
 
 def whole(song: Song | Graph) -> Outcome[TonalKey]:
     """The outcome of a reading with one window covering the whole song."""
-    request = ScoreRequest.default(song)
+    request = ScoreRequest.default(song if isinstance(song, Graph) else song.graph())
     (span,) = read_keys(request, request.end).spans
     return span.outcome
 
@@ -104,7 +104,7 @@ def test_a_plain_c_major_scale_is_ambiguous_with_a_minor() -> None:
 
 def test_the_reference_demo_is_known_c_major() -> None:
     demo = load_song(SURGE_DIR / "demo.yaml", SONG_FORMATS)
-    assert known(whole(demo), 0, "major").correlation == pytest.approx(0.902, abs=1e-3)
+    assert known(whole(demo.graph), 0, "major").correlation == pytest.approx(0.902, abs=1e-3)
 
 
 def test_a_d_dorian_chant_is_known_d_minor() -> None:
@@ -157,7 +157,7 @@ def test_a_lone_weak_fit_is_ambiguous_with_the_runner_up() -> None:
 
 def test_a_lone_weak_fit_lists_every_key_tied_for_second() -> None:
     song, _ = tonal_song(140)
-    spans = read_keys(ScoreRequest.default(song), 7.5).spans
+    spans = read_keys(ScoreRequest.default(song.graph()), 7.5).spans
     (span,) = [span for span in spans if span.start == 15]
     assert isinstance(span.outcome, Ambiguous), span.outcome
     best, *tied = span.outcome.candidates
@@ -183,7 +183,7 @@ def test_quarter_tones_past_a_quarter_of_the_time_are_between_classes() -> None:
 
 def test_an_empty_selection_is_silent_in_every_window() -> None:
     song = one_track([*CADENCE, (20, 60, 4)])
-    request = ScoreRequest(song, ())
+    request = ScoreRequest(song.graph(), ())
 
     reading = read_keys(request, 16)
 
@@ -195,20 +195,20 @@ def test_two_keys_read_as_two_spans_and_a_thin_tail_as_too_few() -> None:
     raised = [(beat + 16, pitch + 6, length) for beat, pitch, length in CADENCE]
     song = one_track(CADENCE + raised)
 
-    first, second = read_keys(ScoreRequest.default(song), 16).spans
+    first, second = read_keys(ScoreRequest.default(song.graph()), 16).spans
     assert (first.start, first.end, second.start, second.end) == (0, 16, 16, 27)
     known(first.outcome, 0, "major")
     assert known(second.outcome, 6, "major").name == "F# major"
 
     tail = one_track([*CADENCE, *raised, (32, 60, 4), (36, 67, 4)])
-    spans = read_keys(ScoreRequest.default(tail), 16).spans
+    spans = read_keys(ScoreRequest.default(tail.graph()), 16).spans
     assert [(span.start, span.end) for span in spans] == [(0, 16), (16, 32), (32, 40)]
     assert spans[2].outcome == Unknowable(TOO_FEW)
 
 
 def test_window_boundaries_are_multiples_of_the_window() -> None:
     song = one_track([(0, 60, 30)])
-    reading = read_keys(ScoreRequest.default(song), 7.5)
+    reading = read_keys(ScoreRequest.default(song.graph()), 7.5)
     assert [span.end for span in reading.spans] == [7.5, 15, 22.5, 30]
 
 
@@ -217,17 +217,17 @@ def test_unpitched_tracks_are_not_read() -> None:
     melody = Track("melody", "synth", notes(CADENCE))
     with_drums = Song(60, (drums, melody))
 
-    request = ScoreRequest.default(with_drums)
+    request = ScoreRequest.default(with_drums.graph())
 
     assert request.tracks == (NodeName("melody"),)
-    assert read_keys(request, 16) == read_keys(ScoreRequest.default(one_track(CADENCE)), 16)
+    assert read_keys(request, 16) == read_keys(ScoreRequest.default(one_track(CADENCE).graph()), 16)
 
 
 def test_the_adapter_reads_with_its_window() -> None:
     root = Path("/studio")
     framework = create_tonal({"window_beats": 8}, AdapterContext(root, root, root))
     song = one_track([*CADENCE, (12, 60, 4)])
-    request = ScoreRequest.default(song)
+    request = ScoreRequest.default(song.graph())
     assert framework.name == "tonal"
     assert framework.guide.startswith("## Tonal reading")
     assert framework.read(request) == read_keys(request, 8)
@@ -351,7 +351,7 @@ def known_share(songs: list[Song], window_beats: float | None) -> float:
     """The share of windows read as known; `None` reads each song as one window."""
     windows = known = 0
     for song in songs:
-        request = ScoreRequest.default(song)
+        request = ScoreRequest.default(song.graph())
         reading = read_keys(request, window_beats or request.end)
         windows += len(reading.spans)
         known += sum(isinstance(span.outcome, Known) for span in reading.spans)
@@ -371,7 +371,7 @@ def test_tonal_songs_are_mostly_known_in_their_key() -> None:
     windows = right = 0
     for seed in SEEDS:
         song, (tonic, mode) = tonal_song(seed)
-        for span in read_keys(ScoreRequest.default(song), 16).spans:
+        for span in read_keys(ScoreRequest.default(song.graph()), 16).spans:
             windows += 1
             outcome = span.outcome
             right += isinstance(outcome, Known) and (
@@ -384,4 +384,4 @@ def test_tonal_songs_are_mostly_known_in_their_key() -> None:
 def test_read_keys_refuses_a_window_that_is_not_a_positive_number(window: float) -> None:
     song, _ = tonal_song(0)
     with pytest.raises(ValueError, match="window_beats must be a finite positive number"):
-        read_keys(ScoreRequest.default(song), window)
+        read_keys(ScoreRequest.default(song.graph()), window)

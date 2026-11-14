@@ -62,7 +62,7 @@ def test_success_writes_current_guide_and_loadable_demo(
     assert (target / "songs/demo.yaml").read_bytes() == demo
     assert files("poser.reference_setups.surge").joinpath("demo.yaml").read_bytes() == demo
     assert find_workspace(target / "songs") == Workspace(target.resolve())
-    song = load_song(target / "songs/demo.yaml", SONG_FORMATS)
+    song = load_song(target / "songs/demo.yaml", SONG_FORMATS).source
     assert isinstance(song, Song)
     assert song.tracks
     assert {str(track.sound) for track in song.tracks} == {"surge"}
@@ -138,7 +138,9 @@ def test_yaml_only_studio_reads_yaml_and_refuses_scripts(tmp_path: Path, plugin:
     config = target / "poser.toml"
     config.write_text(config.read_text() + '\n[adapters]\nsong_formats = ["yaml"]\n')
     composition = load(config, target / "sounds", target / "renders")
-    assert isinstance(load_song(target / "songs/demo.yaml", composition.song_formats()), Song)
+    assert isinstance(
+        load_song(target / "songs/demo.yaml", composition.song_formats()).source, Song
+    )
     with pytest.raises(SongError, match="cannot read"):
         load_song(target / "songs/example.py", composition.song_formats())
 

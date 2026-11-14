@@ -95,7 +95,7 @@ def test_a_captured_state_reaches_the_render(tmp_path: Path) -> None:
     )
 
     song = Song(bpm=60, tracks=(Track("lead", "serum", (Note(0, 60, 1.5, 100),)),))
-    performance = perform(song, song.tracks[0])
+    performance = perform(song.graph(), song.tracks[0])
     default = render(serum, SoundRef(config.name), performance, tmp_path / "default.npy")
     low = render(serum, SoundRef(config.name, "saved/low"), performance, tmp_path / "saved.npy")
     preset_ref = SoundRef(config.name, "test/Test/low")

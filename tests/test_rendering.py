@@ -27,6 +27,7 @@ from poser.core.analysis import AnalysisTools, analyze_song
 from poser.core.audio import NUM_CHANNELS, SAMPLE_RATE, Audio
 from poser.core.cache import Stamp, StampProblem, node_key, sound_key
 from poser.core.graph import BUFFER_SIZE, Graph, Node, Wire
+from poser.core.loading import LoadedSong
 from poser.core.marks import Mark, Marks
 from poser.core.names import Identifier, NodeName, SongId, TrackName
 from poser.core.performance import (
@@ -118,7 +119,7 @@ class Setup:
 
     def render(self, song: Song | Graph, *, force: bool = False) -> list[TrackResult]:
         return render_song(
-            song,
+            LoadedSong(song),
             self.renders,
             SONG_ID,
             self.instruments,
@@ -132,7 +133,7 @@ class Setup:
     def analyze(self, song: Song | Graph) -> Report:
         tools = AnalysisTools(FakeMixer(), FakeMeasurer(), FakeVisualizer())
         return analyze_song(
-            song,
+            LoadedSong(song),
             "demo",
             self.renders,
             SONG_ID,
@@ -247,7 +248,7 @@ def test_render_writes_stamped_stems_and_reports_their_peaks(tmp_path: Path) -> 
     assert stamp.track_key == node_key(graph, graph.nodes[0], resolved.sound_key, ())
     assert stamp.status is StemStatus.RENDERED
     audio = setup.audio_files.read(
-        setup.store.stem_path(BASS), perform(song, song.tracks[1]).samples
+        setup.store.stem_path(BASS), perform(song.graph(), song.tracks[1]).samples
     )
     assert np.allclose(audio.samples, 0.2)
 
@@ -334,7 +335,7 @@ def test_changed_stem_or_spoiled_stamp_renders_again(tmp_path: Path) -> None:
     stem = setup.store.stem_path(LEAD)
     info = stem.stat()
     setup.audio_files.write(
-        stem, setup.audio_files.read(stem, perform(song, song.tracks[0]).samples)
+        stem, setup.audio_files.read(stem, perform(song.graph(), song.tracks[0]).samples)
     )
     os.utime(stem, ns=(info.st_atime_ns, info.st_mtime_ns + 10**9))
     setup.store.spoil_stamp(BASS)
@@ -600,9 +601,9 @@ def test_requests_carry_the_performance_to_a_path_that_is_gone_afterwards(tmp_pa
     requests = setup.instrument.renders
     assert [request.sound.ref.name for request in requests] == ["pad", "dead", None]
     assert [request.performance for request in requests] == [
-        perform(song, song.tracks[1]),
-        perform(song, song.tracks[2]),
-        perform(song, song.tracks[0]),
+        perform(song.graph(), song.tracks[1]),
+        perform(song.graph(), song.tracks[2]),
+        perform(song.graph(), song.tracks[0]),
     ]
     assert len({request.audio_path for request in requests}) == 3
     assert not [request.audio_path for request in requests if request.audio_path.exists()]
@@ -712,10 +713,17 @@ def test_render_order_is_topological_and_report_order_is_song_order(tmp_path: Pa
     tools = AnalysisTools(FakeMixer(), FakeMeasurer(), FakeVisualizer())
 
     rendered = render_song(
-        song, renders, SONG_ID, instruments, audio_files, timeout_s=10.0, force=False
+        LoadedSong(song), renders, SONG_ID, instruments, audio_files, timeout_s=10.0, force=False
     )
     report = analyze_song(
-        song, "demo", renders, SONG_ID, instruments, audio_files, FakeRecordWriter(), tools
+        LoadedSong(song),
+        "demo",
+        renders,
+        SONG_ID,
+        instruments,
+        audio_files,
+        FakeRecordWriter(),
+        tools,
     )
 
     graph = song.graph()
@@ -748,7 +756,7 @@ def chain_setup(tmp_path: Path, **effect: object) -> Setup:
 
 
 def lead_frames(song: Song) -> int:
-    return perform(song, song.tracks[0]).samples
+    return perform(song.graph(), song.tracks[0]).samples
 
 
 def by_node(report: Report) -> dict[NodeName, NodeReport]:
@@ -1535,7 +1543,7 @@ def test_a_fractional_pitch_on_a_continuous_instrument_renders(tmp_path: Path) -
 
     assert results[LEAD].status is StemStatus.RENDERED
     (request,) = setup.instrument.renders
-    assert request.performance == perform(song, song.tracks[0])
+    assert request.performance == perform(song.graph(), song.tracks[0])
     pitches = [event.pitch for event in request.performance.events if isinstance(event, NoteOn)]
     assert pitches == [60, 60.5]
 
@@ -1548,7 +1556,7 @@ def test_a_whole_pitch_song_on_a_semitone_instrument_renders_as_before(tmp_path:
 
     assert same(statuses(list(results.values())), [StemStatus.RENDERED] * 2)
     assert [request.performance for request in setup.instrument.renders] == [
-        perform(song, track) for track in song.tracks
+        perform(song.graph(), track) for track in song.tracks
     ]
 
 

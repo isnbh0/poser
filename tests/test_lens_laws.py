@@ -57,7 +57,7 @@ def transposed(song: Song, k: float) -> Song:
 
 
 def read(song: Song, window: float) -> Reading[TonalKey]:
-    return read_keys(ScoreRequest.default(song), window)
+    return read_keys(ScoreRequest.default(song.graph()), window)
 
 
 @cache

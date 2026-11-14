@@ -29,7 +29,7 @@ from poser.core.song import Note, Song, SongError, Track
 
 def loaded(path: Path) -> Song:
     """The song at `path`, which these fixtures always build as a Song, never a Graph."""
-    song = load_song(path, SONG_FORMATS)
+    song = load_song(path, SONG_FORMATS).source
     assert isinstance(song, Song)
     return song
 
@@ -158,7 +158,7 @@ def test_writing_through_a_symlink_keeps_the_link(tmp_path: Path) -> None:
     write_yaml_song(helper_song(), link)
 
     assert link.is_symlink()
-    assert load_song(real, SONG_FORMATS) == helper_song()
+    assert load_song(real, SONG_FORMATS).source == helper_song()
 
 
 def test_writing_into_a_missing_directory_is_a_song_error(tmp_path: Path) -> None:
@@ -216,7 +216,7 @@ def test_song_with_gains_round_trips(tmp_path: Path) -> None:
     path = tmp_path / "song.yaml"
     write_yaml_song(gain_song(), path)
 
-    assert load_song(path, SONG_FORMATS) == gain_song()
+    assert load_song(path, SONG_FORMATS).source == gain_song()
     assert "gain" not in yaml.safe_load(path.read_text())["tracks"][1]
 
 
@@ -224,7 +224,7 @@ def test_song_with_controller_changes_round_trips(tmp_path: Path) -> None:
     path = tmp_path / "song.yaml"
     write_yaml_song(cc_track_song(), path)
 
-    assert load_song(path, SONG_FORMATS) == cc_track_song()
+    assert load_song(path, SONG_FORMATS).source == cc_track_song()
 
 
 SCRIPT_HEADER = """from poser import ControlChange, Note, Song, Track
@@ -247,7 +247,7 @@ def build():
 """,
     )
 
-    song = load_song(path, SONG_FORMATS)
+    song = load_song(path, SONG_FORMATS).source
 
     assert song == Song(120, (Track("lead", "serum", (Note(0, 60, 1, 100),), gain=-3.0),))
 
@@ -263,7 +263,7 @@ def test_script_song_may_return_a_graph_the_author_wired(tmp_path: Path) -> None
         '    return Graph(120, (lead, drive), (Wire("lead", "lead.drive", "audio"),))\n'
     )
 
-    graph = load_song(path, SONG_FORMATS)
+    graph = load_song(path, SONG_FORMATS).source
 
     assert isinstance(graph, Graph)
     assert graph.bpm == 120
@@ -296,7 +296,7 @@ def build():
 """,
     )
 
-    graph = load_song(path, SONG_FORMATS)
+    graph = load_song(path, SONG_FORMATS).source
 
     assert isinstance(graph, Graph)
     assert graph.mode == "feedback"
@@ -444,8 +444,8 @@ def test_script_and_yaml_with_one_stem_both_load(tmp_path: Path) -> None:
     )
     (tmp_path / "x.yaml").write_text(yaml.safe_dump(valid_song()))
 
-    assert load_song(tmp_path / "x.py", SONG_FORMATS).bpm == 90
-    assert load_song(tmp_path / "x.yaml", SONG_FORMATS).bpm == 120
+    assert load_song(tmp_path / "x.py", SONG_FORMATS).graph.bpm == 90
+    assert load_song(tmp_path / "x.yaml", SONG_FORMATS).graph.bpm == 120
 
 
 @pytest.mark.parametrize("where", ["import", "build"])
@@ -521,7 +521,7 @@ def test_format_suffixes() -> None:
 def test_yml_suffix_loads_as_yaml(tmp_path: Path) -> None:
     path = tmp_path / "song.yml"
     path.write_text(yaml.safe_dump(valid_song()))
-    assert load_song(path, SONG_FORMATS).bpm == 120
+    assert load_song(path, SONG_FORMATS).graph.bpm == 120
 
 
 def test_text_file_is_not_a_song(tmp_path: Path) -> None:
@@ -665,7 +665,7 @@ def build():
 """,
     )
 
-    song = load_song(path, SONG_FORMATS)
+    song = load_song(path, SONG_FORMATS).source
 
     assert isinstance(song, Song)
     assert song.marks == Marks({"parts": [Mark(0, 8, "intro")]})

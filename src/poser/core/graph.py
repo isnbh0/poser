@@ -5,7 +5,7 @@ from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Literal, NotRequired, TypedDict, cast
 
-from poser.core.marks import NO_MARKS, Marks, MarksData, _marks_field_problems, _marks_to_data
+from poser.core.marks import NO_MARKS, Marks, MarksData, layers_to_data, marks_field_problems
 from poser.core.rules import (
     GAIN_MAX_DB,
     GAIN_MIN_DB,
@@ -14,15 +14,15 @@ from poser.core.rules import (
     ControlData,
     Note,
     NoteData,
-    _control_to_data,
-    _duplicate_name_problems,
-    _length_problems,
-    _note_to_data,
-    _plain,
-    _song_field_problems,
-    _track_problems,
+    control_to_data,
+    duplicate_name_problems,
     is_int,
     is_number,
+    length_problems,
+    note_to_data,
+    plain_number,
+    song_field_problems,
+    track_problems,
 )
 
 # A node is a track, an effect chain, or a delay line; a wire carries audio or control.
@@ -146,7 +146,7 @@ class Graph:
         two graphs that differ in any node, wire, gain, mode, or mark give different data.
         """
         data: GraphData = {
-            "bpm": _plain(self.bpm),
+            "bpm": plain_number(self.bpm),
             "mode": self.mode,
             "nodes": [_node_to_data(node) for node in self.nodes],
             "wires": [
@@ -154,14 +154,14 @@ class Graph:
                     "from_name": wire.from_name,
                     "to_name": wire.to_name,
                     "kind": wire.kind,
-                    "gain_db": _plain(wire.gain_db),
+                    "gain_db": plain_number(wire.gain_db),
                 }
                 for wire in self.wires
             ],
         }
         # A graph without marks keeps the record text it had before marks existed.
         if self.marks:
-            data["marks"] = _marks_to_data(self.marks)
+            data["marks"] = layers_to_data(self.marks)
         return data
 
     def groups(self) -> tuple[tuple[Node, ...], ...]:
@@ -252,7 +252,7 @@ def _node_problems(node: Node) -> list[str]:
     if node.kind != "track" and node.pitched is not True:
         problems.append(f"Node.pitched: only a track node can be unpitched, got {node.pitched!r}")
     if node.kind == "track":
-        problems += _track_problems(
+        problems += track_problems(
             {"sound": node.sound, "notes": node.notes, "cc": node.cc, "pitched": node.pitched},
             "Node",
         )
@@ -274,12 +274,12 @@ def _listed(value: object) -> list[object]:
 
 def _graph_problems(graph: Graph) -> list[str]:
     """Check every field of a graph built in code, whose nodes and wires are objects."""
-    problems = _song_field_problems(
+    problems = song_field_problems(
         {"bpm": graph.bpm, "nodes": graph.nodes}, "Graph", group="nodes", noun="node"
     )
     if graph.mode not in MODES:
         problems.append(f"Graph.mode: must be acyclic or feedback, got {graph.mode!r}")
-    problems += _marks_field_problems(graph.marks, "Graph")
+    problems += marks_field_problems(graph.marks, "Graph")
     node_items = _listed(graph.nodes)
     problems += [
         f"Graph.nodes[{index}]: must be a Node, got {node!r}"
@@ -287,10 +287,10 @@ def _graph_problems(graph: Graph) -> list[str]:
         if not isinstance(node, Node)
     ]
     nodes = [node for node in node_items if isinstance(node, Node)]
-    problems += _duplicate_name_problems(nodes, "Graph", group="nodes", noun="node")
+    problems += duplicate_name_problems(nodes, "Graph", group="nodes", noun="node")
     # The timeline rule needs a valid bpm and valid nodes, so other problems are reported first.
     if not problems and is_number(graph.bpm):
-        problems += _length_problems(graph.bpm, nodes, "Graph")
+        problems += length_problems(graph.bpm, nodes, "Graph")
     wire_items = _listed(graph.wires)
     problems += [
         f"Graph.wires[{index}]: must be a Wire, got {wire!r}"
@@ -365,12 +365,12 @@ def _acceptance_problems(nodes: Sequence[Node], wires: Sequence[Wire]) -> list[s
 
 def _node_to_data(node: Node) -> "NodeData":
     """Return a node as plain data: its name, fader, and the payload its kind carries."""
-    data: NodeData = {"name": node.name, "kind": node.kind, "gain_db": _plain(node.gain_db)}
+    data: NodeData = {"name": node.name, "kind": node.kind, "gain_db": plain_number(node.gain_db)}
     if node.kind == "track":
         data["sound"] = cast("str", node.sound)
-        data["notes"] = [_note_to_data(note) for note in node.notes]
+        data["notes"] = [note_to_data(note) for note in node.notes]
         if node.cc:
-            data["cc"] = [_control_to_data(change) for change in node.cc]
+            data["cc"] = [control_to_data(change) for change in node.cc]
         if not node.pitched:
             data["pitched"] = False
     elif node.kind == "effect":

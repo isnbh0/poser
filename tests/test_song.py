@@ -7,6 +7,7 @@ from typing import cast
 import pytest
 
 from poser.core.graph import Graph, GraphError, Node, Wire
+from poser.core.loading import check_effect_recipes
 from poser.core.marks import NO_MARKS, Mark, Marks
 from poser.core.music import chord, notes, pitch, scale, swing
 from poser.core.names import Identifier, TrackName
@@ -19,7 +20,6 @@ from poser.core.song import (
     SongError,
     Track,
     parse_song,
-    song_graph,
     song_to_data,
 )
 from poser.core.sounds import SoundRef
@@ -639,18 +639,23 @@ def test_bad_effects_are_reported_with_other_problems(
     assert any(p.startswith("bpm") for p in raised.value.problems)
 
 
-def test_an_unknown_recipe_name_is_a_compile_problem_naming_it() -> None:
+def test_an_unknown_recipe_name_is_a_problem_naming_its_track() -> None:
     with pytest.raises(SongError) as raised:
-        chain_song("drive").graph(("crush",))
+        check_effect_recipes(chain_song("drive"), ("crush",))
 
     assert raised.value.problems == ["tracks[0]: no effect recipe 'drive' in poser.toml"]
-    # Without the configured names, every recipe is unknown, as a caller without the mapping.
+    # Without the configured names, every recipe is unknown.
     with pytest.raises(SongError):
-        chain_song("drive").graph()
+        check_effect_recipes(chain_song("drive"), ())
+    check_effect_recipes(chain_song("drive"), ("drive",))
+
+
+def test_compiling_checks_no_recipe_names() -> None:
+    assert [node.effect for node in chain_song("drive").graph().nodes] == [None, "drive"]
 
 
 def test_a_chain_compiles_in_series_with_the_fader_on_its_leaf() -> None:
-    graph = chain_song("drive", "crush").graph(("drive", "crush"))
+    graph = chain_song("drive", "crush").graph()
 
     assert [node.name for node in graph.nodes] == ["bass", "bass.drive", "bass.crush"]
     assert [node.kind for node in graph.nodes] == ["track", "effect", "effect"]
@@ -666,7 +671,7 @@ def test_a_chain_compiles_in_series_with_the_fader_on_its_leaf() -> None:
 
 def test_a_track_without_effects_compiles_as_before() -> None:
     song = chain_song()
-    graph = song.graph(("drive",))
+    graph = song.graph()
 
     assert [node.name for node in graph.nodes] == ["bass"]
     assert graph.wires == ()
@@ -674,7 +679,7 @@ def test_a_track_without_effects_compiles_as_before() -> None:
 
 
 def test_repeated_recipe_instances_take_ordinals() -> None:
-    graph = chain_song("drive", "crush", "drive").graph(("drive", "crush"))
+    graph = chain_song("drive", "crush", "drive").graph()
 
     assert [node.name for node in graph.nodes] == [
         "bass",
@@ -695,8 +700,8 @@ def test_two_tracks_chains_stay_distinct_and_the_compile_is_deterministic() -> N
         (make_track(name="a", effects=("drive",)), make_track(name="b", effects=("drive",))),
     )
 
-    graph = song.graph(("drive",))
-    again = song.graph(("drive",))
+    graph = song.graph()
+    again = song.graph()
 
     assert [node.name for node in graph.nodes] == ["a", "a.drive", "b", "b.drive"]
     assert graph == again
@@ -709,21 +714,15 @@ def graph_song() -> Graph:
     return Graph(120, (lead, drive), (Wire("lead", "lead.drive", "audio"),))
 
 
-def test_song_graph_hands_a_graph_back_and_resolves_its_effect_references() -> None:
-    """C14: a Graph's recipes resolve against `effects` exactly as a compiled song's do."""
+def test_an_unknown_graph_recipe_is_a_problem_naming_its_node() -> None:
+    """C14: a Graph's recipes are checked against `effects` exactly as a song's are."""
     graph = graph_song()
-    assert song_graph(graph, ("drive",)) is graph
+    check_effect_recipes(graph, ("drive",))
 
     with pytest.raises(SongError) as raised:
-        song_graph(graph, ())
+        check_effect_recipes(graph, ())
 
     assert raised.value.problems == ["nodes[1]: no effect recipe 'drive' in poser.toml"]
-
-
-def test_song_graph_compiles_a_song_as_its_method_does() -> None:
-    song = chain_song("drive")
-
-    assert song_graph(song, ("drive",)) == song.graph(("drive",))
 
 
 # Pitch is a number on the MIDI scale, and a track can be unpitched.
@@ -874,10 +873,11 @@ def test_a_song_rejects_marks_that_are_not_marks() -> None:
         Song(100, one_track_song().tracks, marks={"parts": []})  # ty: ignore[invalid-argument-type]
 
 
-def test_compiled_graphs_carry_no_marks() -> None:
-    song = one_track_song(Marks({"parts": [Mark(0, 4, "intro")]}))
-    assert song.graph().marks == Marks()
-    assert song.graph() == one_track_song().graph()
+def test_compiled_graphs_carry_the_songs_marks() -> None:
+    marks = Marks({"parts": [Mark(0, 4, "intro")]})
+    song = one_track_song(marks)
+    assert song.graph().marks == marks
+    assert song.graph() != one_track_song().graph()
 
 
 def two_layer_song() -> Song:

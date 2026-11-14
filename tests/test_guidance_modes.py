@@ -121,7 +121,7 @@ def test_examples_load_in_both_modes(tmp_path: Path, enabled: bool) -> None:
     for i, body in enumerate(examples):
         path = tmp_path / f"example{i}.py"
         path.write_text(body)
-        song = load_song(path, SONG_FORMATS)
+        song = load_song(path, SONG_FORMATS).source
         assert isinstance(song, Song | Graph)
         sources = song.tracks if isinstance(song, Song) else song.nodes
         assert sources[0].sound == "synth"

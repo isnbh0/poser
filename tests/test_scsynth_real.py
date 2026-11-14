@@ -19,6 +19,7 @@ from poser.cli.check import EXIT_ALL_PASS
 from poser.cli.check import main as check_main
 from poser.compose import Composition
 from poser.core.audio import SAMPLE_RATE, Audio, read_raw_audio
+from poser.core.loading import LoadedSong
 from poser.core.names import Identifier, SongId
 from poser.core.performance import Control, NoteOff, NoteOn, Performance
 from poser.core.ports import AdapterContext, RenderRequest, ResolvedSound
@@ -75,7 +76,7 @@ def render_song(instrument: ScsynthInstrument, tmp_path: Path, song: Song, name:
 
     resolved = instrument.resolve(SoundRef(Identifier("sc"), None))
     assert isinstance(resolved, ResolvedSound), resolved
-    performance = perform(song, song.tracks[0])
+    performance = perform(song.graph(), song.tracks[0])
     path = tmp_path / name
     assert instrument.render(RenderRequest(resolved, performance, path), 120.0) is None
     audio = read_raw_audio(path, performance.samples)
@@ -144,7 +145,7 @@ def test_real_polyphony_renders_inside_the_timeout(
 
     resolved = instrument.resolve(SoundRef(Identifier("sc"), None))
     assert isinstance(resolved, ResolvedSound)
-    performance = perform(song, song.tracks[0])
+    performance = perform(song.graph(), song.tracks[0])
     path = tmp_path / "poly.npy"
     started = time.monotonic()
     failure = instrument.render(RenderRequest(resolved, performance, path), 120.0)
@@ -306,7 +307,7 @@ def render(composition: Composition, song: Song, song_id: str, *, force: bool) -
     from poser.core.rendering import render_song
 
     return render_song(
-        song,
+        LoadedSong(song),
         composition.render_store(),
         SongId(song_id),
         composition.instruments(),
@@ -378,7 +379,7 @@ def test_two_engine_mix_sums_the_leaves(tmp_path: Path) -> None:
         assert result.status in (StemStatus.RENDERED, StemStatus.SILENT), result
 
     analyze_song(
-        song,
+        LoadedSong(song),
         "two-engines",
         composition.render_store(),
         song_id,
@@ -409,4 +410,4 @@ def test_two_engine_mix_sums_the_leaves(tmp_path: Path) -> None:
 def stem_samples_of(song: Song) -> int:
     from poser.core.audio import stem_samples
 
-    return stem_samples(song)
+    return stem_samples(song.graph())
