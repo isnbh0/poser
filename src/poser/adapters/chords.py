@@ -4,14 +4,23 @@ import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 
+from poser.core.evidence import (
+    BETWEEN_SHARE,
+    CLASS_NAMES,
+    TOO_LITTLE_BEATS,
+    PitchTally,
+    percent_above,
+    percent_below,
+    twelve_tone_obstacle,
+)
 from poser.core.jsonvalue import JsonValue
 from poser.core.music import CHORDS, LETTER_SEMITONES
 from poser.core.names import Identifier
 from poser.core.ports import AdapterContext, ConfigError
-from poser.core.reading import Rejected
+from poser.core.reading import Agrees, Contradicts, Rejected, Unchecked
 from poser.core.song import is_int
 
-NAMES = ("C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B")
+NAMES = CLASS_NAMES
 ACCIDENTALS: Mapping[str, int] = {"": 0, "#": 1, "b": -1}
 # Each quality spelling, mapped to its key of CHORDS; every key has exactly one spelling.
 SUFFIXES: Mapping[str, str] = {
@@ -38,6 +47,20 @@ REASON = (
     "sus4, and an optional /bass, such as Am7 or C/G"
 )
 
+CHORD_TONE_FLOOR = 0.4  # Chord tones sounding for less than this share contradict the label.
+CHORD_CLASH_LIMIT = 0.15  # Clashing tones sounding for more than this share contradict it.
+PERFECT_FIFTH = 7
+# Each pair of intervals of which a quality holds one: the other would change the quality.
+ALTERNATIVES = ((3, 4), (10, 11))
+# What an interval from the root makes of a chord that does not hold it.
+CLASH_NAMES: Mapping[int, str] = {
+    3: "makes this chord minor",
+    4: "makes this chord major",
+    10: "makes this chord a dominant seventh",
+    11: "makes this chord a major seventh",
+    PERFECT_FIFTH: "gives this chord a perfect fifth",
+}
+
 GUIDE = """\
 ## Chords
 
@@ -48,7 +71,25 @@ and `dim7`. Spelling is strict: no spaces, no lowercase roots, and no other qual
 example, `Am7` is A minor seventh and `C/G` is C major over G.
 
 `read-song` shows the chords marks above the framework readings, with each label as written.
-"""
+
+`read-song` checks each chord mark against the notes inside its span, counting each note for the
+beats it sounds there under its nearest twelve-tone pitch class. The chord's tones are its root,
+its quality's intervals, and its bass. The mark is contradicted, with a `warning`, when its
+tones sound for less than {floor} of the sounding time, or when the tones that would change its
+quality sound for more than {limit}: the other third, the other seventh, or the perfect fifth of
+a chord without one. The mark is `unchecked` when nothing sounds in its span, when less than
+{little} beats of sound do, or when more than {between} of the sounding time lies between
+twelve-tone pitch classes.
+
+Not every chord tone has to sound, and the root need not stand out. A label that shares most of
+its tones with the notes passes, such as `Am` or `Em` over a C major triad. An unaccompanied
+scale run can contradict a true label. The bass is not checked for being the lowest note.
+""".format(
+    floor=f"{CHORD_TONE_FLOOR:.0%}",
+    limit=f"{CHORD_CLASH_LIMIT:.0%}",
+    little=f"{TOO_LITTLE_BEATS:g}",
+    between=f"{BETWEEN_SHARE:.0%}",
+)
 
 
 @dataclass(frozen=True)
@@ -78,6 +119,55 @@ class Chord:
 
     def describe(self) -> str:
         return self.name
+
+    @property
+    def tones(self) -> frozenset[int]:
+        """The chord's pitch classes: its root, its quality's intervals, and its bass."""
+        return frozenset({self.bass, *((self.root + step) % 12 for step in CHORDS[self.quality])})
+
+    @property
+    def clashes(self) -> Mapping[int, str]:
+        """Each pitch class that would make this a different chord, with what it makes of it.
+
+        They are the other third, the other seventh, and the perfect fifth of a chord without
+        one, less any that are chord tones.
+        """
+        intervals = CHORDS[self.quality]
+        steps = [
+            other
+            for pair in ALTERNATIVES
+            for held, other in (pair, pair[::-1])
+            if held in intervals and other not in intervals
+        ]
+        if PERFECT_FIFTH not in intervals:
+            steps.append(PERFECT_FIFTH)
+        return {
+            (self.root + step) % 12: CLASH_NAMES[step]
+            for step in steps
+            if (self.root + step) % 12 not in self.tones
+        }
+
+    def check(self, tally: PitchTally) -> Agrees | Contradicts | Unchecked:
+        """Compare the chord with what sounds in its span."""
+        if obstacle := twelve_tone_obstacle(tally):
+            return Unchecked(obstacle)
+        tones = self.tones
+        on_tones = tally.share(tones)
+        if on_tones < CHORD_TONE_FLOOR:
+            return Contradicts(
+                f"{percent_below(on_tones, CHORD_TONE_FLOOR)}% of the sounding time is on the "
+                f"tones of {self.name}, most of the rest on "
+                f"{tally.loudest(set(range(12)) - tones)}"
+            )
+        clashes = self.clashes
+        on_clashes = tally.share(clashes)
+        if on_clashes <= CHORD_CLASH_LIMIT:
+            return Agrees()
+        largest = min(clashes, key=lambda pc: (-tally.weights[pc], pc))
+        return Contradicts(
+            f"{percent_above(on_clashes, CHORD_CLASH_LIMIT)}% of the sounding time is on "
+            f"{tally.loudest(clashes)}, which {clashes[largest]}, not {self.name}"
+        )
 
 
 def _pitch_class(letter: str, accidental: str) -> int:

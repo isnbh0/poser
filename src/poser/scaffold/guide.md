@@ -61,6 +61,7 @@ def build() -> Song:
 | `marks` | song, optional | layer names to lists of marks | lowercase letters, digits, `_`, `-`, starting with a letter or digit |
 | `end` | mark | number | after `beat` |
 | `text` | mark | text | one line, no leading or trailing spaces |
+| `deliberate` | mark, optional | `true` or `false` | true when the label is intended despite the notes |
 
 A `step` holds until that controller's next change; `linear` ramps to it and needs a later one.
 
@@ -262,10 +263,20 @@ each mark's text as written. A layer named like a configured vocabulary shows th
 reading of its labels, and other layers show as text; "Frameworks here" lists this workspace's
 vocabularies. Frameworks never see marks, so the authored and the inferred appear side by side.
 
+A vocabulary may compare a mark's label with the notes inside the mark's span. `read-song` prints
+`warning: <detail>` under a mark the notes contradict and `unchecked: <reason>` under one it could
+not judge; a mark with neither line agreed, or belongs to a layer nothing checks. JSON carries
+each checked mark's result as `check`: `agrees`, `contradicts`, or `unchecked`, with the detail
+or reason as `detail`. Neither line changes the exit code. Each vocabulary's own section states
+its rule. Set `deliberate` on a mark whose label is intended despite the notes, as in
+`Mark(0, 4, "C", deliberate=True)`: the check still runs, and its warning becomes a
+`deliberate: <detail>` line. A `deliberate` mark the notes agree with, or one in a layer nothing
+checks, says so on its `deliberate` line.
+
 It then prints each framework's reading, without loading plugins or touching renders. Repeat
 `--track <name>` to read only those pitched tracks (the default is every pitched track), and
-`--framework <name>` to use only those configured frameworks (the default is all); neither
-filters marks. `--json` prints the readings as JSON, with a `marks` object when the song has
+`--framework <name>` to use only those configured frameworks (the default is all). Every mark
+is still shown, and `--track` narrows the notes a claim is checked against. `--json` prints the readings as JSON, with a `marks` object when the song has
 marks, and `--config` selects a workspace explicitly. Exit codes: 0 when every framework returned
 a reading, whatever its outcomes; 1 when a framework failed, printed as `<name>: error: <detail>`,
 or a vocabulary failed, printed as `<layer> marks: error: <detail>`; 2 when the song or

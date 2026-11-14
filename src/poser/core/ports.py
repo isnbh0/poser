@@ -13,12 +13,21 @@ from pathlib import Path
 from typing import Protocol, cast, runtime_checkable
 
 from poser.core.audio import Audio
+from poser.core.evidence import PitchTally
 from poser.core.graph import Graph, Wire
 from poser.core.jsonvalue import Json
 from poser.core.names import Identifier, NodeName, SongId, Suffix
 from poser.core.performance import Performance, PitchSupport
 from poser.core.piano_roll import PianoRoll
-from poser.core.reading import Reading, ReadingValue, Rejected, ScoreRequest
+from poser.core.reading import (
+    Agrees,
+    Contradicts,
+    Reading,
+    ReadingValue,
+    Rejected,
+    ScoreRequest,
+    Unchecked,
+)
 from poser.core.report import Levels
 from poser.core.song import Song, is_int, is_number
 from poser.core.sounds import SoundEntry, SoundRef
@@ -747,6 +756,21 @@ class Vocabulary(Protocol):
 
     def parse(self, text: str) -> ReadingValue | Rejected:
         """Return the value a label names, or Rejected with a one-line reason.
+
+        Reads only its argument, writes nothing, and starts nothing.
+        """
+        ...
+
+
+@runtime_checkable
+class Claim(Protocol):
+    """A vocabulary's value that says something the notes can contradict.
+
+    A value that is not a Claim is never checked.
+    """
+
+    def check(self, tally: PitchTally) -> Agrees | Contradicts | Unchecked:
+        """Compare the label with `tally`, what sounds in its mark's span, where something does.
 
         Reads only its argument, writes nothing, and starts nothing.
         """

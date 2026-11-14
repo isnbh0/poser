@@ -590,6 +590,49 @@ def test_a_dump_with_marks_loads_back_equal(tmp_path: Path) -> None:
     assert loaded(path) == song
 
 
+def test_a_deliberate_mark_round_trips_through_yaml(tmp_path: Path) -> None:
+    marks = Marks({"chords": [Mark(0, 4, "Am"), Mark(4, 8, "C", deliberate=True)]})
+    song = Song(helper_song().bpm, helper_song().tracks, marks=marks)
+
+    text = YamlSongFormat().dump(song)
+
+    assert text.count("deliberate: true") == 1
+    path = tmp_path / "song.yaml"
+    path.write_text(text)
+    assert loaded(path) == song
+    assert YamlSongFormat().dump(song.graph()).count("deliberate: true") == 1
+
+
+def test_a_yaml_mark_states_its_flag_as_true_or_false(tmp_path: Path) -> None:
+    path = tmp_path / "song.yaml"
+    path.write_text(MARKED_SONG.replace("text: intro}", "text: intro, deliberate: true}"))
+    assert loaded(path).marks == Marks({"parts": [Mark(0, 4, "intro", deliberate=True)]})
+
+    path.write_text(MARKED_SONG.replace("text: intro}", "text: intro, deliberate: 'yes'}"))
+    with pytest.raises(SongError) as error:
+        loaded(path)
+    assert error.value.problems == ["marks.parts[0].deliberate: must be true or false, got 'yes'"]
+
+
+def test_a_script_song_keeps_its_deliberate_marks(tmp_path: Path) -> None:
+    path = write_script(
+        tmp_path,
+        """
+from poser import Mark, Marks, Note, Song, Track
+
+
+def build():
+    lead = Track("lead", "serum", (Note(0, 60, 4, 90),))
+    return Song(120, (lead,), marks=Marks({"chords": [Mark(0, 4, "C", deliberate=True)]}))
+""",
+    )
+
+    song = load_song(path, SONG_FORMATS).source
+
+    assert isinstance(song, Song)
+    assert song.marks == Marks({"chords": [Mark(0, 4, "C", deliberate=True)]})
+
+
 MARKED_SONG = """bpm: 120
 tracks:
   - name: lead

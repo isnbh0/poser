@@ -19,7 +19,7 @@ from poser.core.graph import Graph
 from poser.core.guide import FIRST_INSTRUMENT_PLACEHOLDER
 from poser.core.loading import load_song
 from poser.core.ports import ResolvedSound
-from poser.core.reading import OUTCOME_TAGS
+from poser.core.reading import OUTCOME_TAGS, Agrees, Contradicts, Unchecked
 from poser.core.rules import MAX_SONG_S
 from poser.core.song import Song, SongError, parse_song
 from poser.core.song import Song as SongValue
@@ -223,6 +223,7 @@ def test_song_keys_match_the_code() -> None:
         song.SONG_KEYS
         | song.OPTIONAL_SONG_KEYS
         | song.MARK_KEYS
+        | song.OPTIONAL_MARK_KEYS
         | song.TRACK_KEYS
         | song.OPTIONAL_TRACK_KEYS
         | song.NOTE_KEYS
@@ -248,7 +249,7 @@ def with_key(key: str, value: object) -> dict[str, object]:
     data: dict[str, object] = {"bpm": 100, "tracks": [track]}
     if key in song.SONG_KEYS | song.OPTIONAL_SONG_KEYS:
         data[key] = value
-    if key in song.MARK_KEYS - {"beat"}:
+    if key in (song.MARK_KEYS | song.OPTIONAL_MARK_KEYS) - {"beat"}:
         mark[key] = value
         data["marks"] = {"parts": [mark]}
     if key in song.TRACK_KEYS | song.OPTIONAL_TRACK_KEYS:
@@ -282,6 +283,7 @@ VALID_VALUES: dict[str, object] = {
     "marks": {"parts": [{"beat": 0, "end": 4, "text": "intro"}]},
     "end": 8,
     "text": "verse two",
+    "deliberate": True,
 }
 
 
@@ -306,6 +308,27 @@ def test_mark_rows_match_validation() -> None:
             parse_song(with_key("text", rejected))
     with pytest.raises(SongError):
         parse_song(with_key("marks", {"Parts": [{"beat": 0, "end": 1, "text": "a"}]}))
+
+
+def test_the_deliberate_row_matches_validation() -> None:
+    rows = {row[0]: row[1:] for row in table("Songs")}
+    assert rows["`deliberate`"][:2] == ["mark, optional", "`true` or `false`"]
+    parse_song(with_key("deliberate", True))
+    parse_song(with_key("deliberate", False))
+    for rejected in ("yes", 1, None):
+        with pytest.raises(SongError, match=r"marks\.parts\[0\]\.deliberate"):
+            parse_song(with_key("deliberate", rejected))
+
+
+def test_framework_readings_cover_claim_checks() -> None:
+    text = " ".join(section("Framework readings").split())
+    named = set(BACKTICKED.findall(text))
+    assert {"warning: <detail>", "unchecked: <reason>", "deliberate: <detail>"} <= named
+    assert {"check", "detail", "deliberate", Agrees.TAG, Contradicts.TAG, Unchecked.TAG} <= named
+    assert '`Mark(0, 4, "C", deliberate=True)`' in text
+    assert "`--track` narrows the notes a claim is checked against" in text
+    assert "Neither line changes the exit code" in text
+    assert "Marks never change audio or readings" in " ".join(section("Songs").split())
 
 
 def integer_ranges() -> list[tuple[str, int, int]]:

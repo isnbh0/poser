@@ -19,8 +19,10 @@ from poser.core.marks import Mark, Marks
 from poser.core.names import Identifier, NodeName
 from poser.core.ports import AdapterContext, Framework, Vocabulary
 from poser.core.reading import (
+    Agrees,
     Ambiguous,
     AuthoredMarks,
+    Contradicts,
     FrameworkError,
     Known,
     LayerError,
@@ -32,6 +34,7 @@ from poser.core.reading import (
     Rejected,
     ScoreRequest,
     TextLayer,
+    Unchecked,
     Unknowable,
     marks_to_data,
     readings_to_data,
@@ -454,7 +457,7 @@ def marked(layers: dict[str, list[Mark]]) -> Song:
 def test_interpreting_clips_marks_to_the_song_s_end() -> None:
     song = marked({"fake": [Mark(0, 2, "x"), Mark(2, 8, "y"), Mark(9, 10, "x")]})
 
-    authored = interpret_marks(song.graph(), [FakeVocabulary()])
+    authored = interpret_marks(ScoreRequest.default(song.graph()), [FakeVocabulary()])
 
     assert authored.end == 4
     assert authored.layers == {
@@ -468,7 +471,7 @@ def test_interpreting_clips_marks_to_the_song_s_end() -> None:
 def test_a_layer_no_vocabulary_reads_is_text() -> None:
     song = marked({"parts": [Mark(0, 2, "boom")], "fake": [Mark(0, 1, "x")]})
 
-    authored = interpret_marks(song.graph(), [FakeVocabulary()])
+    authored = interpret_marks(ScoreRequest.default(song.graph()), [FakeVocabulary()])
 
     assert authored.layers["parts"] == TextLayer((Mark(0, 2, "boom"),))
     assert isinstance(authored.layers["fake"], ParsedLayer)
@@ -476,7 +479,9 @@ def test_a_layer_no_vocabulary_reads_is_text() -> None:
 
 
 def test_interpreting_without_marks_gives_no_layers() -> None:
-    assert interpret_marks(song(KEYS).graph(), [FakeVocabulary()]) == AuthoredMarks(4, {})
+    assert interpret_marks(
+        ScoreRequest.default(song(KEYS).graph()), [FakeVocabulary()]
+    ) == AuthoredMarks(4, {})
 
 
 def test_every_rejected_label_is_named_in_one_song_error() -> None:
@@ -485,7 +490,9 @@ def test_every_rejected_label_is_named_in_one_song_error() -> None:
     )
 
     with pytest.raises(SongError) as error:
-        interpret_marks(song.graph(), [FakeVocabulary(), FakeVocabulary("other")])
+        interpret_marks(
+            ScoreRequest.default(song.graph()), [FakeVocabulary(), FakeVocabulary("other")]
+        )
 
     assert error.value.problems == [
         "marks.fake[1]: 'z' is not a fake label: not x or y",
@@ -496,7 +503,9 @@ def test_every_rejected_label_is_named_in_one_song_error() -> None:
 def test_a_vocabulary_that_raises_fails_only_its_layer() -> None:
     song = marked({"fake": [Mark(0, 1, "x"), Mark(1, 2, "boom")], "other": [Mark(0, 1, "y")]})
 
-    authored = interpret_marks(song.graph(), [FakeVocabulary(), FakeVocabulary("other")])
+    authored = interpret_marks(
+        ScoreRequest.default(song.graph()), [FakeVocabulary(), FakeVocabulary("other")]
+    )
 
     assert authored.layers["fake"] == LayerError(Identifier("fake"), "RuntimeError: boom")
     assert authored.layers["other"] == ParsedLayer(
@@ -510,7 +519,9 @@ def test_a_vocabulary_returning_neither_value_nor_rejection_fails_its_layer(
 ) -> None:
     song = marked({"fake": [Mark(0, 1, "x")]})
 
-    authored = interpret_marks(song.graph(), [FakeVocabulary(parse=lambda _: result)])
+    authored = interpret_marks(
+        ScoreRequest.default(song.graph()), [FakeVocabulary(parse=lambda _: result)]
+    )
 
     layer = authored.layers["fake"]
     assert isinstance(layer, LayerError)
@@ -527,7 +538,9 @@ def test_authored_marks_have_a_json_form() -> None:
         }
     )
 
-    authored = interpret_marks(song.graph(), [FakeVocabulary(), FakeVocabulary("other")])
+    authored = interpret_marks(
+        ScoreRequest.default(song.graph()), [FakeVocabulary(), FakeVocabulary("other")]
+    )
 
     assert marks_to_data(authored) == {
         "fake": {
@@ -539,4 +552,101 @@ def test_authored_marks_have_a_json_form() -> None:
         },
         "parts": {"vocabulary": None, "marks": [{"beat": 0, "end": 2, "text": "intro"}]},
         "other": {"vocabulary": "other", "error": "RuntimeError: boom"},
+    }
+
+
+# Check results
+
+
+@pytest.mark.parametrize("check", ["contradicts", Rejected("no"), 1, True])
+def test_a_parsed_mark_refuses_a_check_that_is_not_a_result(check: object) -> None:
+    with pytest.raises(ValueError, match=r"ParsedMark\.check"):
+        ParsedMark(Mark(0, 1, "x"), X, check)  # ty: ignore[invalid-argument-type]
+
+
+def test_a_parsed_mark_holds_a_result_or_none() -> None:
+    assert ParsedMark(Mark(0, 1, "x"), X).check is None
+    for check in (Agrees(), Contradicts("the notes differ"), Unchecked("nothing sounds")):
+        assert ParsedMark(Mark(0, 1, "x"), X, check).check == check
+
+
+@pytest.mark.parametrize("text", ["", " ", "a\nb", " a", 5, None])
+def test_a_contradiction_and_an_unchecked_result_need_one_line_of_text(text: object) -> None:
+    with pytest.raises(ValueError, match=r"Contradicts\.detail"):
+        Contradicts(text)  # ty: ignore[invalid-argument-type]
+    with pytest.raises(ValueError, match=r"Unchecked\.reason"):
+        Unchecked(text)  # ty: ignore[invalid-argument-type]
+
+
+def test_checks_and_flags_have_a_json_form() -> None:
+    def parsed(beat: float, check: object, deliberate: bool = False) -> ParsedMark:
+        mark = Mark(beat, beat + 1, "x", deliberate=deliberate)
+        return ParsedMark(mark, X, check)  # ty: ignore[invalid-argument-type]
+
+    layer = ParsedLayer(
+        Identifier("fake"),
+        (
+            parsed(0, None),
+            parsed(1, Agrees()),
+            parsed(2, Contradicts("the notes differ")),
+            parsed(3, Unchecked("nothing sounds")),
+            parsed(4, Contradicts("the notes differ"), deliberate=True),
+            parsed(5, Agrees(), deliberate=True),
+            parsed(6, None, deliberate=True),
+        ),
+    )
+    text = TextLayer((Mark(0, 1, "intro"), Mark(1, 2, "verse", deliberate=True)))
+
+    data = marks_to_data(AuthoredMarks(8, {"fake": layer, "parts": text}))
+
+    value = {"label": "x"}
+    assert data == {
+        "fake": {
+            "vocabulary": "fake",
+            "marks": [
+                {"beat": 0, "end": 1, "text": "x", "value": value},
+                {"beat": 1, "end": 2, "text": "x", "value": value, "check": "agrees"},
+                {
+                    "beat": 2,
+                    "end": 3,
+                    "text": "x",
+                    "value": value,
+                    "check": "contradicts",
+                    "detail": "the notes differ",
+                },
+                {
+                    "beat": 3,
+                    "end": 4,
+                    "text": "x",
+                    "value": value,
+                    "check": "unchecked",
+                    "detail": "nothing sounds",
+                },
+                {
+                    "beat": 4,
+                    "end": 5,
+                    "text": "x",
+                    "value": value,
+                    "check": "contradicts",
+                    "detail": "the notes differ",
+                    "deliberate": True,
+                },
+                {
+                    "beat": 5,
+                    "end": 6,
+                    "text": "x",
+                    "value": value,
+                    "check": "agrees",
+                    "deliberate": True,
+                },
+                {"beat": 6, "end": 7, "text": "x", "value": value, "deliberate": True},
+            ],
+        },
+        "parts": {
+            "vocabulary": None,
+            "marks": [
+                {"beat": 0, "end": 1, "text": "intro"},
+                {"beat": 1, "end": 2, "text": "verse", "deliberate": True},
+            ],
+        },
     }

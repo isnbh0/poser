@@ -14,6 +14,7 @@ from poser.adapters.tonal import (
     GUIDE,
     KEY_GUIDE,
     KEY_MODES,
+    KEY_OUTSIDE_LIMIT,
     KEY_REJECTION,
     NO_FIT,
     SILENCE,
@@ -25,6 +26,7 @@ from poser.adapters.tonal import (
     create_tonal,
     read_keys,
 )
+from poser.core.evidence import BETWEEN_SHARE, TOO_LITTLE_BEATS
 from poser.core.graph import Graph
 from poser.core.loading import load_song
 from poser.core.music import MODES as SCALES
@@ -270,6 +272,16 @@ def test_the_key_modes_are_seven_modes_of_the_scale_table() -> None:
 
 def test_the_key_rejection_is_the_stated_reason() -> None:
     assert KEY_REJECTION == KEY_REASON
+
+
+def test_the_key_guide_states_its_rule_with_the_code_s_numbers() -> None:
+    text = " ".join(KEY_GUIDE.split())
+    assert (KEY_OUTSIDE_LIMIT, TOO_LITTLE_BEATS, BETWEEN_SHARE) == (0.15, 0.25, 0.25)
+    assert "more than 15% of the sounding time is outside" in text
+    assert "less than 0.25 beats of sound" in text
+    assert "more than 25% of the sounding time lies between" in text
+    for word in ("`warning`", "`unchecked`", "`--track`", "`mixolydian`", "nine of the twelve"):
+        assert word in text
 
 
 def test_the_key_guide_names_every_mode() -> None:

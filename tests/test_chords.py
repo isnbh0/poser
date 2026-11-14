@@ -7,6 +7,7 @@ import pytest
 
 from poser.adapters import chords
 from poser.adapters.chords import Chord, ChordsVocabulary, create_chords
+from poser.core.evidence import BETWEEN_SHARE, TOO_LITTLE_BEATS
 from poser.core.music import CHORDS
 from poser.core.ports import AdapterContext, ConfigError, Vocabulary
 from poser.core.reading import ReadingValue, Rejected
@@ -98,3 +99,15 @@ def test_factory(tmp_path: Path) -> None:
     assert vocabulary.guide.startswith("## Chords\n")
     with pytest.raises(ConfigError, match="unknown option 'window_beats'"):
         create_chords({"window_beats": 8}, _context(tmp_path))
+
+
+def test_the_guide_states_its_rule_with_the_code_s_numbers() -> None:
+    text = " ".join(chords.GUIDE.split())
+    limits = (chords.CHORD_TONE_FLOOR, chords.CHORD_CLASH_LIMIT, TOO_LITTLE_BEATS, BETWEEN_SHARE)
+    assert limits == (0.4, 0.15, 0.25, 0.25)
+    assert "tones sound for less than 40% of the sounding time" in text
+    assert "quality sound for more than 15%" in text
+    assert "less than 0.25 beats of sound" in text
+    assert "more than 25% of the sounding time lies between" in text
+    for word in ("`warning`", "`unchecked`", "`Am` or `Em`", "scale run", "lowest note"):
+        assert word in text

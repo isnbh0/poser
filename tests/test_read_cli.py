@@ -190,6 +190,11 @@ def marked(workspace: CommandWorkspace, chords: object = CHORDS) -> Path:
     )
 
 
+# What the fixtures' notes make of their labels: the song leaves C major for F# major at beat 16.
+F_A_DETAIL = "33% of the sounding time is on the tones of F/A, most of the rest on G and B"
+G7_DETAIL = "0% of the sounding time is on the tones of G7, most of the rest on F#"
+A_MINOR_DETAIL = "17% of the sounding time is outside A minor, most on C#, D# and A#"
+
 TONAL_TEXT = (
     "tonal (tracks: keys, bass)\n  beats 0-16: C major (r 0.90)\n  beats 16-27: F# major (r 0.90)\n"
 )
@@ -241,14 +246,16 @@ def test_marks_print_above_the_readings(
         "chords marks (chords vocabulary)\n"
         "  beats 0-4: Am\n"
         "  beats 4-8: F/A\n"
+        f"    warning: {F_A_DETAIL}\n"
         "  beats 24-27: G7\n"
+        f"    warning: {G7_DETAIL}\n"
         "parts marks (text)\n"
         "  beats 0-16: opening\n"
         "  beats 16-27: lift\n" + TONAL_TEXT
     )
 
 
-def test_options_do_not_filter_marks(
+def test_options_show_every_mark(
     workspace: CommandWorkspace, capsys: pytest.CaptureFixture[str]
 ) -> None:
     assert read.main([str(marked(workspace)), "--track", "keys", "--framework", "tonal"]) == 0
@@ -275,18 +282,23 @@ def test_json_adds_the_marks(
                     "end": 4,
                     "text": "Am",
                     "value": {"chord": "Am", "root": 9, "quality": "min", "bass": 9},
+                    "check": "agrees",
                 },
                 {
                     "beat": 4,
                     "end": 8,
                     "text": "F/A",
                     "value": {"chord": "F/A", "root": 5, "quality": "maj", "bass": 9},
+                    "check": "contradicts",
+                    "detail": F_A_DETAIL,
                 },
                 {
                     "beat": 24,
                     "end": 27,
                     "text": "G7",
                     "value": {"chord": "G7", "root": 7, "quality": "7", "bass": 7},
+                    "check": "contradicts",
+                    "detail": G7_DETAIL,
                 },
             ],
         },
@@ -330,7 +342,8 @@ def test_a_stated_key_prints_above_the_inferred_key(
 
     assert read.main([str(song)]) == 0
     assert capsys.readouterr().out == (
-        "key marks (key vocabulary)\n  beats 0-27: A minor\n" + TONAL_TEXT
+        f"key marks (key vocabulary)\n  beats 0-27: A minor\n    warning: {A_MINOR_DETAIL}\n"
+        + TONAL_TEXT
     )
 
     assert read.main([str(song), "--json"]) == 0
@@ -345,6 +358,8 @@ def test_a_stated_key_prints_above_the_inferred_key(
                     "end": 27,
                     "text": "A minor",
                     "value": {"key": "A minor", "tonic": 9, "mode": "minor"},
+                    "check": "contradicts",
+                    "detail": A_MINOR_DETAIL,
                 }
             ],
         }
@@ -405,3 +420,145 @@ def test_a_failing_vocabulary_exits_1(
     out = capsys.readouterr().out
     assert out.startswith("chords marks: error: RuntimeError: cannot parse\nparts marks (text)\n")
     assert out.endswith(TONAL_TEXT)
+
+
+# Claim checks: one line at most under a mark, by its check and its `deliberate` flag.
+
+NOTHING_SOUNDS = "nothing sounds"
+
+
+@pytest.mark.parametrize(
+    ("mark", "line", "check"),
+    [
+        ({"beat": 4, "end": 8, "text": "F/A"}, f"warning: {F_A_DETAIL}", "contradicts"),
+        (
+            {"beat": 4, "end": 8, "text": "F/A", "deliberate": True},
+            f"deliberate: {F_A_DETAIL}",
+            "contradicts",
+        ),
+        ({"beat": 12, "end": 16, "text": "C"}, f"unchecked: {NOTHING_SOUNDS}", "unchecked"),
+        (
+            {"beat": 12, "end": 16, "text": "C", "deliberate": True},
+            f"unchecked: {NOTHING_SOUNDS}",
+            "unchecked",
+        ),
+        ({"beat": 0, "end": 4, "text": "Am"}, None, "agrees"),
+        (
+            {"beat": 0, "end": 4, "text": "Am", "deliberate": True},
+            "deliberate: not needed, the notes agree",
+            "agrees",
+        ),
+    ],
+    ids=[
+        "contradicts",
+        "contradicts-deliberate",
+        "unchecked",
+        "unchecked-deliberate",
+        "agrees",
+        "agrees-deliberate",
+    ],
+)
+def test_a_checked_mark_prints_at_most_one_line_about_its_check(
+    workspace: CommandWorkspace,
+    capsys: pytest.CaptureFixture[str],
+    mark: dict[str, object],
+    line: str | None,
+    check: str,
+) -> None:
+    song = marked(workspace, [mark])
+    span = f"  beats {mark['beat']}-{mark['end']}: {mark['text']}\n"
+    under = "" if line is None else f"    {line}\n"
+
+    assert read.main([str(song)]) == 0
+    assert capsys.readouterr().out == (
+        "chords marks (chords vocabulary)\n"
+        + span
+        + under
+        + "parts marks (text)\n  beats 0-16: opening\n  beats 16-27: lift\n"
+        + TONAL_TEXT
+    )
+
+    assert read.main([str(song), "--json"]) == 0
+    data = json.loads(capsys.readouterr().out)
+    (written,) = data["marks"]["chords"]["marks"]
+    assert written["check"] == check
+    assert written.get("detail") == (
+        None if line is None or check == "agrees" else line.split(": ", 1)[1]
+    )
+    assert written.get("deliberate") == mark.get("deliberate")
+
+
+@pytest.mark.parametrize(
+    ("flag", "under"),
+    [({}, ""), ({"deliberate": True}, "    deliberate: nothing checks this layer\n")],
+    ids=["plain", "deliberate"],
+)
+def test_a_mark_nothing_checks_says_so_only_when_deliberate(
+    workspace: CommandWorkspace,
+    capsys: pytest.CaptureFixture[str],
+    flag: dict[str, object],
+    under: str,
+) -> None:
+    song = write(
+        workspace.root / "parts.yaml",
+        track("keys", CADENCE),
+        marks={"parts": [{"beat": 0, "end": 11, "text": "opening", **flag}]},
+    )
+
+    assert read.main([str(song)]) == 0
+    out = capsys.readouterr().out
+    assert out.startswith("parts marks (text)\n  beats 0-11: opening\n" + under + "tonal (")
+
+    assert read.main([str(song), "--json"]) == 0
+    (written,) = json.loads(capsys.readouterr().out)["marks"]["parts"]["marks"]
+    assert written == {"beat": 0, "end": 11, "text": "opening", **flag}
+
+
+def test_a_track_selection_narrows_the_notes_a_claim_is_checked_against(
+    workspace: CommandWorkspace, capsys: pytest.CaptureFixture[str]
+) -> None:
+    song = write(
+        workspace.root / "layered.yaml",
+        track("keys", [(0, 60, 4), (0, 64, 4), (0, 67, 4)]),
+        track("other", [(0, pitch, 4) for pitch in (54, 58, 61, 63, 68)]),
+        marks={"chords": [{"beat": 0, "end": 4, "text": "C"}]},
+    )
+    header = "chords marks (chords vocabulary)\n  beats 0-4: C\n"
+
+    assert read.main([str(song)]) == 0
+    assert capsys.readouterr().out.startswith(
+        header + "    warning: 37% of the sounding time is on the tones of C, most of the rest on "
+        "C#, D# and F#\n"
+    )
+
+    assert read.main([str(song), "--track", "keys"]) == 0
+    assert capsys.readouterr().out.startswith(header + "tonal (tracks: keys)\n")
+
+
+def test_marks_that_agree_print_what_they_always_did(
+    workspace: CommandWorkspace, capsys: pytest.CaptureFixture[str]
+) -> None:
+    raised = [(beat + 16, pitch + 6, length) for beat, pitch, length in CADENCE]
+    song = write(
+        workspace.root / "agreeing.yaml",
+        track("keys", CADENCE + raised),
+        track("bass", [(0, 48, 2), (4, 43, 2), (16, 54, 2), (20, 49, 2)]),
+        marks={
+            "chords": [{"beat": 0, "end": 4, "text": "Am"}, {"beat": 7, "end": 11, "text": "C"}],
+            "key": [
+                {"beat": 0, "end": 16, "text": "C major"},
+                {"beat": 16, "end": 27, "text": "F# major"},
+            ],
+        },
+    )
+
+    assert read.main([str(song)]) == 0
+
+    assert capsys.readouterr().out == (
+        "chords marks (chords vocabulary)\n"
+        "  beats 0-4: Am\n"
+        "  beats 7-11: C\n"
+        "key marks (key vocabulary)\n"
+        "  beats 0-16: C major\n"
+        "  beats 16-27: F# major\n" + TONAL_TEXT
+    )

@@ -3,14 +3,17 @@ authored marks through each configured vocabulary."""
 
 import dataclasses
 from collections.abc import Sequence
-from typing import TYPE_CHECKING
 
-from poser.core.graph import Graph
+from poser.core.evidence import tally_pitches
 from poser.core.marks import NO_MARKS, LayerName, Mark
-from poser.core.ports import Framework, Vocabulary
+from poser.core.names import Identifier
+from poser.core.ports import Claim, Framework, Vocabulary
 from poser.core.reading import (
+    Agrees,
     Ambiguous,
     AuthoredMarks,
+    Check,
+    Contradicts,
     FrameworkError,
     Known,
     LayerError,
@@ -23,12 +26,9 @@ from poser.core.reading import (
     ScoreRequest,
     SongReadings,
     TextLayer,
+    Unchecked,
 )
 from poser.core.rules import SongError
-from poser.core.song import song_last_beat
-
-if TYPE_CHECKING:
-    from poser.core.names import Identifier
 
 
 def _values(reading: Reading[ReadingValue]) -> list[object]:
@@ -78,12 +78,38 @@ def read_song(request: ScoreRequest, frameworks: Sequence[Framework]) -> SongRea
     return SongReadings(request.end, request.tracks, readings)
 
 
+NOTHING_SOUNDS = "nothing sounds"
+
+
+def _check(
+    parsed: ParsedMark, request: ScoreRequest, vocabulary: Identifier
+) -> Check | LayerError | None:
+    """Check a parsed mark's value against the notes in the mark's span, when it is a claim."""
+    value = parsed.value
+    if not isinstance(value, Claim):
+        return None
+    tally = tally_pitches(request, parsed.mark.beat, min(parsed.mark.end, request.end))
+    if tally.total <= 0:
+        return Unchecked(NOTHING_SOUNDS)
+    try:
+        result: object = value.check(tally)
+    except Exception as error:  # noqa: BLE001 -- a claim's failure is reported, not raised.
+        return LayerError(vocabulary, f"{type(error).__name__}: {error}")
+    if not isinstance(result, Agrees | Contradicts | Unchecked):
+        return LayerError(
+            vocabulary,
+            f"TypeError: check returned {result!r}, which is not Agrees, Contradicts, or Unchecked",
+        )
+    return result
+
+
 def _parse_layer(
-    name: LayerName, marks: Sequence[Mark], vocabulary: Vocabulary
+    name: LayerName, marks: Sequence[Mark], vocabulary: Vocabulary, request: ScoreRequest
 ) -> ParsedLayer | LayerError | list[str]:
-    """Parse one layer's labels: its values, its vocabulary's failure, or each rejected label's
-    problem. A vocabulary that fails on any label fails the whole layer, and the layer's
-    rejections are dropped, since a failing vocabulary's rejections cannot be trusted."""
+    """Parse one layer's labels and check those that are claims: its values, its vocabulary's
+    failure, or each rejected label's problem. A vocabulary that fails on any label fails the
+    whole layer, and the layer's rejections are dropped, since a failing vocabulary's rejections
+    cannot be trusted. Claims are checked only in a layer without rejected labels."""
     parsed: list[ParsedMark] = []
     rejected: list[str] = []
     for index, mark in enumerate(marks):
@@ -102,19 +128,31 @@ def _parse_layer(
                 vocabulary.name,
                 f"TypeError: returned {result!r}, which is neither a ReadingValue nor Rejected",
             )
-    return rejected or ParsedLayer(vocabulary.name, tuple(parsed))
+    if rejected:
+        return rejected
+    checked: list[ParsedMark] = []
+    for item in parsed:
+        check = _check(item, request, vocabulary.name)
+        if isinstance(check, LayerError):
+            return check
+        checked.append(ParsedMark(item.mark, item.value, check))
+    return ParsedLayer(vocabulary.name, tuple(checked))
 
 
-def interpret_marks(graph: Graph, vocabularies: Sequence[Vocabulary]) -> AuthoredMarks:
-    """Translate the song's mark layers, clipped to its end, through the vocabularies.
+def interpret_marks(request: ScoreRequest, vocabularies: Sequence[Vocabulary]) -> AuthoredMarks:
+    """Translate the request's song's mark layers, clipped to its end, through the vocabularies.
 
     A vocabulary reads the layer equal to its name; a layer no vocabulary reads stays text. A
     label a vocabulary rejects is the author's error: every rejected label in every layer is
     named in one SongError. A vocabulary that raises, or returns neither a ReadingValue nor
     Rejected, makes its layer a LayerError, and the other layers proceed.
+
+    A value that is a Claim is checked against the request's notes inside its mark's span: a
+    span where nothing sounds is Unchecked, and otherwise the result is the value's own. A
+    check that raises, or returns no check result, makes its layer a LayerError.
     """
-    end = float(song_last_beat(graph))
-    marks = graph.marks.within(end)
+    end = request.end
+    marks = request.song.marks.within(end)
     by_name = {vocabulary.name: vocabulary for vocabulary in vocabularies}
     rejected: list[str] = []
     layers: dict[LayerName, LayerOutcome] = {}
@@ -123,7 +161,7 @@ def interpret_marks(graph: Graph, vocabularies: Sequence[Vocabulary]) -> Authore
         if vocabulary is None:
             layers[name] = TextLayer(layer)
         else:
-            outcome = _parse_layer(name, layer, vocabulary)
+            outcome = _parse_layer(name, layer, vocabulary, request)
             if isinstance(outcome, list):
                 rejected += outcome
             else:

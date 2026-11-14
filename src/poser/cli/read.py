@@ -15,11 +15,15 @@ from poser.cli.common import (
 from poser.cli.workspace import WorkspaceError, fill_path_options
 from poser.core.interpreting import interpret_marks, read_song
 from poser.core.loading import load_song
+from poser.core.marks import Mark
 from poser.core.names import NodeName
 from poser.core.ports import ConfigError, Framework, Vocabulary
 from poser.core.reading import (
+    Agrees,
     Ambiguous,
     AuthoredMarks,
+    Check,
+    Contradicts,
     FrameworkError,
     Known,
     LayerError,
@@ -29,6 +33,7 @@ from poser.core.reading import (
     ScoreRequest,
     SongReadings,
     TextLayer,
+    Unchecked,
     Unknowable,
     marks_to_data,
     readings_to_data,
@@ -69,8 +74,22 @@ def format_readings(readings: SongReadings) -> str:
     return "\n".join(blocks)
 
 
+def _check_line(mark: Mark, check: Check | None) -> str | None:
+    """What to say under a mark about its check: nothing when it agreed and set no flag."""
+    match check:
+        case Contradicts(detail=detail):
+            return f"{'deliberate' if mark.deliberate else 'warning'}: {detail}"
+        case Unchecked(reason=reason):
+            return f"unchecked: {reason}"
+        case Agrees():
+            return "deliberate: not needed, the notes agree" if mark.deliberate else None
+        case None:
+            return "deliberate: nothing checks this layer" if mark.deliberate else None
+
+
 def format_marks(authored: AuthoredMarks) -> str:
-    """One block per mark layer: a header naming what read it, then each mark's authored text."""
+    """One block per mark layer: a header naming what read it, then each mark's authored text,
+    with a line under a mark whose check did not simply agree."""
     blocks: list[str] = []
     for name, layer in authored.layers.items():
         match layer:
@@ -79,11 +98,15 @@ def format_marks(authored: AuthoredMarks) -> str:
                 continue
             case ParsedLayer(vocabulary=vocabulary, marks=parsed):
                 header = f"{name} marks ({vocabulary} vocabulary)"
-                marks = tuple(item.mark for item in parsed)
-            case TextLayer(marks=marks):
+                marks = tuple((item.mark, item.check) for item in parsed)
+            case TextLayer(marks=text_marks):
                 header = f"{name} marks (text)"
+                marks = tuple((mark, None) for mark in text_marks)
         lines = [header]
-        lines += [f"  beats {_beat(mark.beat)}-{_beat(mark.end)}: {mark.text}" for mark in marks]
+        for mark, check in marks:
+            lines.append(f"  beats {_beat(mark.beat)}-{_beat(mark.end)}: {mark.text}")
+            if (line := _check_line(mark, check)) is not None:
+                lines.append(f"    {line}")
         blocks.append("\n".join(lines))
     return "\n".join(blocks)
 
@@ -140,7 +163,7 @@ def main(argv: list[str] | None = None) -> int:
         fail(PROG, error)
         return EXIT_BAD_CONFIG
     try:
-        authored = interpret_marks(song, vocabularies)
+        authored = interpret_marks(request, vocabularies)
     except SongError as error:
         fail(PROG, error)
         return EXIT_BAD_CONFIG

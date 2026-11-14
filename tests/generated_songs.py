@@ -89,3 +89,24 @@ def tonal_song(seed: int) -> tuple[Song, tuple[int, Mode]]:
             beat += 4
     tracks = (Track("chords", SOUND, tuple(chords)), Track("melody", SOUND, tuple(melody)))
     return Song(BPM, tracks), (tonic, mode)
+
+
+NAMES = ("C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B")
+
+
+def chord_labels(song: Song) -> tuple[tuple[float, float, str], ...]:
+    """The chords of a `tonal_song`, in order, as `(beat, end, label)`.
+
+    Each label names the major or minor triad on the lowest of the notes its `chords` track
+    starts at one beat, such as `F#m`.
+    """
+    (track,) = (track for track in song.tracks if track.name == "chords")
+    by_beat: dict[float, list[Note]] = {}
+    for note in track.notes:
+        by_beat.setdefault(note.beat, []).append(note)
+    labels = []
+    for beat, notes in sorted(by_beat.items()):
+        root, third, _ = sorted(note.pitch for note in notes)
+        suffix = {3: "m", 4: ""}[int(third - root)]
+        labels.append((beat, beat + notes[0].length, NAMES[int(root) % 12] + suffix))
+    return tuple(labels)

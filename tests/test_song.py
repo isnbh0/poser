@@ -909,6 +909,39 @@ def test_songs_without_marks_write_no_marks_key() -> None:
     assert data == {k: v for k, v in song_to_data(two_layer_song()).items() if k != "marks"}
 
 
+def test_a_deliberate_mark_round_trips_through_parse_song() -> None:
+    marks = Marks({"chords": [Mark(0, 4, "Am"), Mark(4, 8, "C", deliberate=True)]})
+    song = Song(helper_song().bpm, helper_song().tracks, marks=marks)
+
+    data = song_to_data(song)
+
+    assert data["marks"]["chords"] == [
+        {"beat": 0, "end": 4, "text": "Am"},
+        {"beat": 4, "end": 8, "text": "C", "deliberate": True},
+    ]
+    assert parse_song(data) == song
+    assert song.graph().marks == marks
+
+
+def test_a_false_deliberate_flag_reads_as_an_unset_one() -> None:
+    data = with_marks({"chords": [{**MARK, "deliberate": False}]})
+
+    assert parse_song(data).marks == Marks({"chords": [Mark(0, 4, "Am")]})
+
+
+def test_a_song_without_the_flag_writes_the_data_it_always_did() -> None:
+    assert song_to_data(two_layer_song())["marks"] == {
+        "chords": [
+            {"beat": 0, "end": 4, "text": "Am"},
+            {"beat": 4, "end": 8.5, "text": "F/C"},
+        ],
+        "parts": [
+            {"beat": 0, "end": 2, "text": "intro"},
+            {"beat": 6, "end": 100, "text": "verse"},
+        ],
+    }
+
+
 def with_marks(marks: object) -> dict[str, object]:
     return {**valid_song(), "marks": marks}
 
@@ -929,6 +962,11 @@ MARK = {"beat": 0, "end": 4, "text": "Am"}
         ({"chords": [{**MARK, "text": 7}]}, "marks.chords[0].text: must be text; quote numbers"),
         ({"chords": [{**MARK, "text": True}]}, "marks.chords[0].text: must be text"),
         ({"chords": [{**MARK, "end": 0}]}, "marks.chords[0].end: must be after beat"),
+        (
+            {"chords": [{**MARK, "deliberate": "yes"}]},
+            "marks.chords[0].deliberate: must be true or false, got 'yes'",
+        ),
+        ({"chords": [{**MARK, "deliberate": 1}]}, "marks.chords[0].deliberate: must be true"),
         (
             {"chords": [MARK, {**MARK, "beat": 3, "end": 5}]},
             "marks.chords[1]: must start at or after the previous mark's end, beat 4, got beat 3",

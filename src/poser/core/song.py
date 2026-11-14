@@ -50,6 +50,7 @@ from poser.core.sounds import SoundRef, parse_sound_ref
 SONG_KEYS = {"bpm", "tracks"}
 OPTIONAL_SONG_KEYS = {"marks"}
 MARK_KEYS = {"beat", "end", "text"}
+OPTIONAL_MARK_KEYS = {"deliberate"}
 TRACK_KEYS = {"name", "sound", "notes"}
 OPTIONAL_TRACK_KEYS = {"gain", "cc", "effects", "pitched"}
 NOTE_KEYS = {"beat", "pitch", "length", "velocity"}
@@ -354,15 +355,21 @@ def _parse_mark(value: object, where: str, problems: list[str]) -> Mark | None:
     if data is None:
         problems.append(f"{where}: must be a mapping, got {value!r}")
         return None
-    _check_keys(data, MARK_KEYS, where, problems)
+    _check_keys(data, MARK_KEYS, where, problems, OPTIONAL_MARK_KEYS)
 
-    field_problems = mark_problems(_present(data, MARK_KEYS), where)
+    field_problems = mark_problems(_present(data, MARK_KEYS | OPTIONAL_MARK_KEYS), where)
     problems += field_problems
     beat, end, text = data.get("beat"), data.get("end"), data.get("text")
+    deliberate = data.get("deliberate", False)
     # These fail only when a problem was reported. A missing key reads as None.
-    if field_problems or not (is_number(beat) and is_number(end) and isinstance(text, str)):
+    if field_problems or not (
+        is_number(beat)
+        and is_number(end)
+        and isinstance(text, str)
+        and isinstance(deliberate, bool)
+    ):
         return None
-    return Mark(beat=beat, end=end, text=text)
+    return Mark(beat=beat, end=end, text=text, deliberate=deliberate)
 
 
 def _parse_marks(value: object, problems: list[str]) -> Marks:

@@ -165,3 +165,24 @@ def test_within_keeps_and_clips_marks_before_the_end(end: float) -> None:
 def test_within_needs_a_positive_finite_end(end: float) -> None:
     with pytest.raises(ValueError, match="positive finite"):
         Marks({"a": [Mark(0, 1, "x")]}).within(end)
+
+
+def test_a_mark_is_not_deliberate_unless_it_says_so() -> None:
+    assert Mark(0, 1, "x").deliberate is False
+    assert Mark(0, 1, "x", True).deliberate is True
+    assert Mark(0, 1, "x", deliberate=True) != Mark(0, 1, "x")
+
+
+@pytest.mark.parametrize("value", [1, 0, "yes", "true", None])
+def test_a_mark_rejects_a_deliberate_flag_that_is_not_a_bool(value: object) -> None:
+    with pytest.raises(SongError, match=r"Mark\.deliberate: must be true or false"):
+        Mark(0, 1, "x", deliberate=value)  # ty: ignore[invalid-argument-type]
+
+
+def test_within_keeps_the_flag_on_a_mark_it_cuts() -> None:
+    marks = Marks({"a": [Mark(0, 2, "kept", deliberate=True), Mark(2, 8, "cut", deliberate=True)]})
+
+    assert marks.within(4).layers["a"] == (
+        Mark(0, 2, "kept", deliberate=True),
+        Mark(2, 4, "cut", deliberate=True),
+    )

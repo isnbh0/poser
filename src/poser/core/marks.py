@@ -11,7 +11,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from itertools import pairwise
 from types import MappingProxyType
-from typing import TypedDict, cast
+from typing import NotRequired, TypedDict, cast
 
 from poser.core.rules import (
     SongError,
@@ -29,14 +29,24 @@ type LayerName = str
 
 @dataclass(frozen=True)
 class Mark:
-    """One label over the beats from `beat` to `end`."""
+    """One label over the beats from `beat` to `end`.
+
+    `deliberate` says the label is intended whatever the notes under it are: a check that finds
+    them contradicting it reports that as a note, not a warning.
+    """
 
     beat: float
     end: float
     text: str
+    deliberate: bool = False
 
     def __post_init__(self) -> None:
-        values = {"beat": self.beat, "end": self.end, "text": self.text}
+        values = {
+            "beat": self.beat,
+            "end": self.end,
+            "text": self.text,
+            "deliberate": self.deliberate,
+        }
         if problems := mark_problems(values, "Mark"):
             raise SongError(problems)
         object.__setattr__(self, "beat", float(self.beat))
@@ -84,7 +94,7 @@ class Marks:
         layers: dict[str, list[Mark]] = {}
         for name, marks in self.pairs:
             kept = [
-                mark if mark.end <= end else Mark(mark.beat, end, mark.text)
+                mark if mark.end <= end else Mark(mark.beat, end, mark.text, mark.deliberate)
                 for mark in marks
                 if mark.beat < end
             ]
@@ -113,6 +123,11 @@ def mark_problems(values: Mapping[str, object], where: str) -> list[str]:
             problems.append(f"{field_path(where, 'beat')}: must not be negative, got {beat!r}")
     if "text" in values:
         problems += line_problems(values["text"], field_path(where, "text"))
+    if "deliberate" in values and not isinstance(values["deliberate"], bool):
+        problems.append(
+            f"{field_path(where, 'deliberate')}: must be true or false, got "
+            f"{values['deliberate']!r}"
+        )
     return problems
 
 
@@ -194,6 +209,7 @@ class MarkData(TypedDict):
     beat: float
     end: float
     text: str
+    deliberate: NotRequired[bool]
 
 
 type MarksData = dict[str, list[MarkData]]
@@ -201,13 +217,19 @@ type MarksData = dict[str, list[MarkData]]
 
 def layers_to_data(marks: Marks) -> MarksData:
     """Return the layers as plain data, in authored order, with numbers in one spelling."""
-    return {
-        name: [
-            {"beat": plain_number(mark.beat), "end": plain_number(mark.end), "text": mark.text}
-            for mark in layer
-        ]
-        for name, layer in marks.pairs
+    return {name: [_mark_to_data(mark) for mark in layer] for name, layer in marks.pairs}
+
+
+def _mark_to_data(mark: Mark) -> MarkData:
+    data: MarkData = {
+        "beat": plain_number(mark.beat),
+        "end": plain_number(mark.end),
+        "text": mark.text,
     }
+    # A mark that does not set the flag keeps the form it had before the flag existed.
+    if mark.deliberate:
+        data["deliberate"] = True
+    return data
 
 
 # The empty marks: the default of every song and graph.

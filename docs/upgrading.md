@@ -128,6 +128,15 @@ fix. A change listed here applies to every studio that last ran a poser from bef
   `read-song` shows it above `tonal`'s inferred key. Studios on the `western` preset read it
   automatically; a studio with a pinned `vocabularies` list adds `"key"` to it.
 
+- **New:** `read-song` compares each `key` and `chords` mark with the notes inside its span, and
+  prints `warning: <detail>` under a mark the notes contradict and `unchecked: <reason>` under
+  one it could not judge. `--json` carries the result as `check` on each mark. Neither line
+  changes the exit code, and `POSER.md` states each rule. A mark may set `deliberate: true`, in
+  Python `Mark(0, 4, "C", deliberate=True)`, to say its label is intended; its warning then
+  prints as `deliberate: <detail>`. A script that passes a graph to
+  `poser.core.interpreting.interpret_marks` passes a `ScoreRequest` instead, such as
+  `ScoreRequest.default(graph)`.
+
 ## Framework-neutral pitch and readings
 
 - **Symptom:** `update-guide`, `check-instruments`, and other commands that build instruments

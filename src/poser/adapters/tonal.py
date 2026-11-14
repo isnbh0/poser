@@ -15,18 +15,31 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Literal
 
+from poser.core.evidence import (
+    BETWEEN,
+    BETWEEN_SHARE,
+    TOO_LITTLE_BEATS,
+    PitchTally,
+    percent_above,
+    tally_pitches,
+    twelve_tone_obstacle,
+)
 from poser.core.jsonvalue import JsonValue
 from poser.core.music import LETTER_SEMITONES
+from poser.core.music import MODES as SCALES
 from poser.core.names import Identifier
 from poser.core.ports import AdapterContext, ConfigError
 from poser.core.reading import (
+    Agrees,
     Ambiguous,
+    Contradicts,
     Known,
     Outcome,
     Reading,
     ReadingSpan,
     Rejected,
     ScoreRequest,
+    Unchecked,
     Unknowable,
 )
 from poser.core.song import is_int, is_number
@@ -40,8 +53,6 @@ MAJOR = (6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88)
 MINOR = (6.33, 2.68, 3.52, 5.38, 2.60, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17)
 PROFILES: Mapping[Mode, tuple[float, ...]] = {"major": MAJOR, "minor": MINOR}
 
-BETWEEN_SEMITONES = 0.4  # A note farther than 40 cents from its nearest class lies between two.
-BETWEEN_SHARE = 0.25  # More than this share of sounding time between classes is unknowable.
 MIN_CLASSES = 5  # Fewer sounding pitch classes than this imply no key.
 MIN_SPREAD = 0.4  # Pitch-class weights whose deviation over mean is below this are even.
 MIN_FIT = 0.75  # A best correlation below this fits no key.
@@ -52,7 +63,6 @@ DEFAULT_WINDOW_BEATS = 16.0
 MIN_WINDOW_BEATS = 1.0
 
 SILENCE = "no selected notes sound"
-BETWEEN = "pitches lie between twelve-tone pitch classes"
 TOO_FEW = "too few pitch classes to imply a key"
 EVEN = "pitch classes are close to evenly weighted"
 NO_FIT = "no key fits"
@@ -151,25 +161,24 @@ def _order(key: TonalKey) -> tuple[float, int, int]:
     return (-key.correlation, key.tonic, MODES.index(key.mode))
 
 
-def _window_outcome(request: ScoreRequest, start: float, end: float) -> Outcome[TonalKey]:
-    by_class: list[list[float]] = [[] for _ in range(12)]
-    between: list[float] = []
-    distance: list[float] = []  # weight * distance from the nearest class, in semitones
+def _distance(request: ScoreRequest, start: float, end: float) -> float:
+    """The span's sounding time, each note's weighted by its distance in semitones from its
+    nearest twelve-tone pitch class."""
+    distance: list[float] = []
     for note in request.notes():
         weight = max(0.0, min(note.beat + note.length, end) - max(note.beat, start))
-        if weight <= 0:
-            continue
-        nearest = math.floor(note.pitch + 0.5)
-        offset = abs(note.pitch - nearest)
-        by_class[nearest % 12].append(weight)
-        distance.append(weight * offset)
-        if offset > BETWEEN_SEMITONES:
-            between.append(weight)
-    weights = [math.fsum(items) for items in by_class]
-    total = math.fsum(w for items in by_class for w in items)
+        if weight > 0:
+            distance.append(weight * abs(note.pitch - math.floor(note.pitch + 0.5)))
+    return math.fsum(distance)
+
+
+def _window_outcome(request: ScoreRequest, start: float, end: float) -> Outcome[TonalKey]:
+    tally = tally_pitches(request, start, end)
+    weights = list(tally.weights)
+    total = tally.total
     if total <= 0:
         return Unknowable(SILENCE)
-    if math.fsum(between) > BETWEEN_SHARE * total:
+    if tally.between > BETWEEN_SHARE * total:
         return Unknowable(BETWEEN)
     if sum(1 for weight in weights if weight > 0) < MIN_CLASSES:
         return Unknowable(TOO_FEW)
@@ -177,7 +186,7 @@ def _window_outcome(request: ScoreRequest, start: float, end: float) -> Outcome[
     deviation = math.sqrt(math.fsum((weight - mean) ** 2 for weight in weights) / 12)
     if deviation / mean < MIN_SPREAD:
         return Unknowable(EVEN)
-    cents = 100 * math.fsum(distance) / total
+    cents = 100 * _distance(request, start, end) / total
     keys = sorted(
         (
             TonalKey(tonic, mode, _correlation(weights, tonic, PROFILES[mode]), cents)
@@ -269,6 +278,13 @@ KEY_REJECTION = (
     f"must be a tonic A to G with optional # or b, then {KEY_MODE_LIST}, such as A minor"
 )
 
+KEY_OUTSIDE_LIMIT = 0.15  # More than this share of sounding time off the scale contradicts.
+# The scales whose pitch classes a mode allows; `minor` allows the raised sixth and seventh.
+KEY_SCALES: Mapping[KeyMode, tuple[str, ...]] = {
+    **{mode: (mode,) for mode in KEY_MODES},
+    "minor": ("minor", "harmonic_minor", "melodic_minor"),
+}
+
 KEY_GUIDE = """\
 ## Key marks
 
@@ -276,7 +292,24 @@ The `key` layer states the author's key, written as a tonic `A` to `G` with an o
 `b`, a space, and a mode, such as `A minor`, `F# major`, or `D dorian`. The modes are `major`,
 `minor`, `dorian`, `phrygian`, `lydian`, `mixolydian`, and `locrian`. `read-song` shows it above
 the readings, as written. It never changes `tonal`'s reading.
-"""
+
+`read-song` checks each key mark against the notes inside its span, counting each note for the
+beats it sounds there under its nearest twelve-tone pitch class. The mark is contradicted, with
+a `warning`, when more than {limit} of the sounding time is outside the mode's scale on the
+stated tonic. `minor` also allows the raised sixth and seventh. The mark is `unchecked` when
+nothing sounds in its span, when less than {little} beats of sound do, or when more than
+{between} of the sounding time lies between twelve-tone pitch classes.
+
+The check tests which notes sound, never which note is home, so `C major`, `A minor`, and
+`D dorian` all pass over the same passage. `minor` allows nine of the twelve pitch classes, so
+a wrong `minor` label often passes, and so does a label a fourth or fifth from the true key. A
+blues in dominant sevenths contradicts `major` and agrees with `mixolydian`. A line in the wrong
+key passes under a thick texture; `--track` checks the line alone.
+""".format(
+    limit=f"{KEY_OUTSIDE_LIMIT:.0%}",
+    little=f"{TOO_LITTLE_BEATS:g}",
+    between=f"{BETWEEN_SHARE:.0%}",
+)
 
 
 @dataclass(frozen=True)
@@ -301,6 +334,26 @@ class KeyMark:
 
     def describe(self) -> str:
         return self.name
+
+    @property
+    def allowed(self) -> frozenset[int]:
+        """The pitch classes the key allows."""
+        return frozenset(
+            (self.tonic + step) % 12 for name in KEY_SCALES[self.mode] for step in SCALES[name]
+        )
+
+    def check(self, tally: PitchTally) -> Agrees | Contradicts | Unchecked:
+        """Compare the key with what sounds in its span: which notes sound, not which is home."""
+        if obstacle := twelve_tone_obstacle(tally):
+            return Unchecked(obstacle)
+        outside = set(range(12)) - self.allowed
+        share = tally.share(outside)
+        if share <= KEY_OUTSIDE_LIMIT:
+            return Agrees()
+        return Contradicts(
+            f"{percent_above(share, KEY_OUTSIDE_LIMIT)}% of the sounding time is outside "
+            f"{self.name}, most on {tally.loudest(outside)}"
+        )
 
 
 class KeyVocabulary:

@@ -284,17 +284,61 @@ def _identifier(owner: str, value: object) -> None:
 
 
 @dataclass(frozen=True)
+class Agrees:
+    """The notes in a mark's span are consistent with its label."""
+
+    TAG: ClassVar[str] = "agrees"
+
+
+@dataclass(frozen=True)
+class Contradicts:
+    """The notes in a mark's span contradict its label; `detail` is a sentence saying how."""
+
+    TAG: ClassVar[str] = "contradicts"
+    detail: str
+
+    def __post_init__(self) -> None:
+        if problems := line_problems(self.detail, "Contradicts.detail"):
+            raise ValueError("\n".join(problems))
+
+
+@dataclass(frozen=True)
+class Unchecked:
+    """A mark's label could not be compared with the notes in its span, for the stated reason."""
+
+    TAG: ClassVar[str] = "unchecked"
+    reason: str
+
+    def __post_init__(self) -> None:
+        if problems := line_problems(self.reason, "Unchecked.reason"):
+            raise ValueError("\n".join(problems))
+
+
+type Check = Agrees | Contradicts | Unchecked
+
+
+@dataclass(frozen=True)
 class ParsedMark:
-    """An authored mark, after clipping to the song's end, and the value its label names."""
+    """An authored mark, after clipping to the song's end, the value its label names, and the
+    result of checking that value against the notes in the mark's span.
+
+    `check` is None when the value makes no claim about the notes.
+    """
 
     mark: Mark
     value: ReadingValue
+    check: Check | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.mark, Mark):
             raise ValueError(f"ParsedMark.mark must be a Mark, got {self.mark!r}")
         if not isinstance(self.value, ReadingValue):
             raise ValueError(f"ParsedMark.value must be a ReadingValue, got {self.value!r}")
+        if not (self.check is None or isinstance(self.check, Agrees | Contradicts | Unchecked)):
+            raise ValueError(
+                f"ParsedMark.check must be Agrees, Contradicts, Unchecked, or None, got "
+                f"{self.check!r}"
+            )
 
 
 @dataclass(frozen=True)
@@ -398,8 +442,28 @@ def _mark_data(mark: Mark) -> dict[str, JsonValue]:
     return {"beat": plain_number(mark.beat), "end": plain_number(mark.end), "text": mark.text}
 
 
+def _flag_data(mark: Mark) -> dict[str, JsonValue]:
+    return {"deliberate": True} if mark.deliberate else {}
+
+
+def _check_data(check: Check | None) -> dict[str, JsonValue]:
+    match check:
+        case None:
+            return {}
+        case Agrees():
+            return {"check": Agrees.TAG}
+        case Contradicts(detail=detail):
+            return {"check": Contradicts.TAG, "detail": detail}
+        case Unchecked(reason=reason):
+            return {"check": Unchecked.TAG, "detail": reason}
+
+
 def marks_to_data(authored: AuthoredMarks) -> JsonValue:
-    """Return the layers' JSON form, in authored order; each value is written by its `to_data`."""
+    """Return the layers' JSON form, in authored order; each value is written by its `to_data`.
+
+    A checked mark carries `check`, with `detail` unless it agrees, and a mark that sets its
+    `deliberate` flag carries it.
+    """
     layers: dict[str, JsonValue] = {}
     for name, layer in authored.layers.items():
         match layer:
@@ -407,12 +471,18 @@ def marks_to_data(authored: AuthoredMarks) -> JsonValue:
                 layers[name] = {
                     "vocabulary": vocabulary,
                     "marks": [
-                        _mark_data(parsed.mark) | {"value": parsed.value.to_data()}
+                        _mark_data(parsed.mark)
+                        | {"value": parsed.value.to_data()}
+                        | _check_data(parsed.check)
+                        | _flag_data(parsed.mark)
                         for parsed in marks
                     ],
                 }
             case TextLayer(marks=marks):
-                layers[name] = {"vocabulary": None, "marks": [_mark_data(mark) for mark in marks]}
+                layers[name] = {
+                    "vocabulary": None,
+                    "marks": [_mark_data(mark) | _flag_data(mark) for mark in marks],
+                }
             case LayerError(vocabulary=vocabulary, detail=detail):
                 layers[name] = {"vocabulary": vocabulary, "error": detail}
     return layers

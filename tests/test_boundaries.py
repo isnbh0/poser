@@ -208,6 +208,15 @@ def test_core_layers() -> None:
     assert not refused
 
 
+def test_the_tally_and_the_readings_import_no_port() -> None:
+    for name in ("evidence", "reading"):
+        path = CORE / f"{name}.py"
+        assert layer(module_name(path)) == "model"
+        assert PORTS not in edges(path)
+    assert "poser.core.evidence" in edges(ADAPTERS / "tonal.py")
+    assert "poser.core.evidence" in edges(CORE / "interpreting.py")
+
+
 def test_no_import_cycles() -> None:
     graph = {module_name(path): edges(path) for path in source_files()}
     cycle = find_cycle(graph)
@@ -413,7 +422,7 @@ def test_the_showcase_states_its_chords() -> None:
     from poser.adapters.chords import Chord, create_chords
     from poser.core.interpreting import interpret_marks
     from poser.core.ports import AdapterContext
-    from poser.core.reading import ParsedLayer
+    from poser.core.reading import ParsedLayer, ScoreRequest
     from poser.reference_setups.surge.showcase import build
 
     song = build()
@@ -422,7 +431,7 @@ def test_the_showcase_states_its_chords() -> None:
     assert (chords[0].beat, chords[-1].end) == (0, 64)
     root = Path()
     layer = interpret_marks(
-        song.graph(), [create_chords({}, AdapterContext(root, root, root))]
+        ScoreRequest.default(song.graph()), [create_chords({}, AdapterContext(root, root, root))]
     ).layers["chords"]
     assert isinstance(layer, ParsedLayer)
     values = [parsed.value for parsed in layer.marks]
@@ -440,7 +449,7 @@ def test_the_showcase_states_its_key() -> None:
     from poser.adapters.tonal import KeyMark, create_key
     from poser.core.interpreting import interpret_marks
     from poser.core.ports import AdapterContext
-    from poser.core.reading import ParsedLayer
+    from poser.core.reading import ParsedLayer, ScoreRequest
     from poser.reference_setups.surge.showcase import build
 
     song = build()
@@ -448,7 +457,7 @@ def test_the_showcase_states_its_key() -> None:
     assert (mark.beat, mark.end, mark.text) == (0, 64, "A minor")
     root = Path()
     layer = interpret_marks(
-        song.graph(), [create_key({}, AdapterContext(root, root, root))]
+        ScoreRequest.default(song.graph()), [create_key({}, AdapterContext(root, root, root))]
     ).layers["key"]
     assert isinstance(layer, ParsedLayer)
     assert [parsed.value for parsed in layer.marks] == [KeyMark(9, "minor")]
