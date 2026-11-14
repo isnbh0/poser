@@ -18,6 +18,7 @@ PORTS = "poser.core.ports"
 USE_CASES = (
     "poser.core.session",
     "poser.core.loading",
+    "poser.core.planning",
     "poser.core.rendering",
     "poser.core.checking",
     "poser.core.capturing",

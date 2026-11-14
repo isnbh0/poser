@@ -15,6 +15,14 @@ uv run check-instruments
 If a command fails after the upgrade, find its message below, newest change first, and apply the
 fix. A change listed here applies to every studio that pinned a poser commit from before it.
 
+## Render keys digest render inputs
+
+- **Symptom:** every track renders again on the first `render` after upgrading.
+  **Cause:** a node's `node_key` is now the digest of exactly what its render receives, so every
+  stored key stops matching once. Nodes in one cycle group share one key, and a report's
+  `node_key` is null for a node that cannot render and its `sound_key` null for a delay.
+  **Fix:** nothing; the renders after the first are cached as before.
+
 ## Typed graph nodes
 
 - **Symptom:** a script song fails with `cannot import name 'Node' from 'poser'`.

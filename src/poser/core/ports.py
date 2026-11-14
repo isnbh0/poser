@@ -182,7 +182,12 @@ class AdviceProvider(Protocol):
 
 @dataclass(frozen=True)
 class ResolvedSound:
-    """A sound an instrument found, ready to render."""
+    """A sound an instrument found, ready to render.
+
+    `identity` is all the core knows of the sound: `sound_key` digests it with the adapter's id
+    and version into every render key, so it must cover everything that changes the audio the
+    instrument renders for the same request, such as preset bytes and parameters.
+    """
 
     ref: SoundRef
     identity: str  # A recipe: equal when the render inputs are equal. Samples may still differ.
@@ -272,7 +277,7 @@ class Instrument(Protocol):
       identical samples. It covers every input the adapter controls and can read cheaply.
     - `adapter_version` rises whenever the adapter's own code renders one identity differently.
     - An instrument declaring `pitches` as anything but `PitchSupport.CONTINUOUS` receives only
-      performances whose pitches are all whole: the core's render path builds every track's
+      performances whose pitches are all whole: the core's render plan builds every track's
       performance through `perform_for` and fails a track it cannot play as
       `unsupported_pitch`. `Performance` is public, so code outside the render path could still
       build a fractional one.
@@ -298,7 +303,11 @@ class Instrument(Protocol):
         ...
 
     def resolve(self, ref: SoundRef) -> ResolvedSound | SoundFailure:
-        """Find the sound `ref` names, or say why it cannot be used."""
+        """Find the sound `ref` names, or say why it cannot be used.
+
+        Resolution reads configuration and files only: it loads no plugin and starts no process,
+        so the core resolves every node before it renders any.
+        """
         ...
 
     def render(self, request: RenderRequest, timeout_s: float) -> RenderFailure | None:
@@ -323,7 +332,12 @@ class Instrument(Protocol):
 
 @dataclass(frozen=True)
 class ResolvedEffect:
-    """An effect recipe an adapter resolved, ready to render."""
+    """An effect recipe an adapter resolved, ready to render.
+
+    `identity` is all the core knows of the recipe: `sound_key` digests it with the adapter's id
+    and version into every render key, so it must cover everything that changes the audio the
+    recipe renders for the same request, such as plugin state and parameters.
+    """
 
     recipe: str  # The configured recipe name the adapter resolved.
     identity: str  # A recipe: equal when the render inputs are equal. Samples may still differ.
@@ -388,7 +402,11 @@ class Effect(Protocol):
         ...
 
     def resolve(self, recipe: str) -> ResolvedEffect | SoundFailure:
-        """Return the recipe ready to render, or say why it cannot be used."""
+        """Return the recipe ready to render, or say why it cannot be used.
+
+        Resolution reads configuration and files only: it loads no plugin and starts no process,
+        so the core resolves every node before it renders any.
+        """
         ...
 
     def render(self, request: EffectRenderRequest, timeout_s: float) -> RenderFailure | None:

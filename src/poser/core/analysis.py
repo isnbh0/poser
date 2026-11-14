@@ -19,6 +19,14 @@ from poser.core.cache import StampProblem
 from poser.core.graph import Graph, GraphNode
 from poser.core.loading import LoadedSong
 from poser.core.names import Identifier, NodeName, SongId
+from poser.core.planning import (
+    EMPTY_EFFECTS,
+    ResolvedEffectNode,
+    ResolvedInstrument,
+    Unplanned,
+    plan,
+    resolve_all,
+)
 from poser.core.ports import (
     AudioFileError,
     AudioFiles,
@@ -33,19 +41,9 @@ from poser.core.ports import (
     SectionInput,
     SectionResult,
     SongStore,
-    SoundFailure,
     Visualizer,
 )
-from poser.core.rendering import (
-    EMPTY_EFFECTS,
-    ResolvedDelay,
-    ResolvedEffectNode,
-    ResolvedInstrument,
-    cycle_groups,
-    node_cache_key,
-    require_stem_format,
-    resolve_node,
-)
+from poser.core.rendering import require_stem_format
 from poser.core.report import (
     BAR_BEATS,
     MIX_NAME,
@@ -115,23 +113,25 @@ class StaleStemError(Exception):
 def read_stem(
     store: SongStore,
     node: NodeName,
-    keys: tuple[str, str],
+    key: str,
+    sound_key: str | None,
     audio_files: AudioFiles,
     frames: int,
 ) -> Audio:
     """Read a node's stem and confirm it matches the song. Raises StaleStemError when it does not.
 
-    `keys` are the node's current `node_key` and `sound_key`. Its stamp must still describe the
-    stem file and record both.
+    `key` is the key of the node's render unit in the current plan, and `sound_key` its resolved
+    sound or recipe, or None for a node without one. Its stamp must still describe the stem file
+    and record both.
     """
     stamp = store.read_stamp(node)
     if isinstance(stamp, StampProblem):
         raise StaleStemError(stamp.value)
-    # The sound is checked first, because the node key digests it and would mask which input
+    # The sound is checked first, because the unit key digests it and would mask which input
     # changed.
-    if stamp.sound_key != keys[1]:
+    if sound_key is not None and stamp.sound_key != sound_key:
         raise StaleStemError("sound changed since this stem was rendered")
-    if stamp.track_key != keys[0]:
+    if stamp.track_key != key:
         raise StaleStemError("song changed since this stem was rendered")
     try:
         return audio_files.read(store.stem_path(node), frames)
@@ -186,71 +186,44 @@ def _analyze(
     loaded.check_effects([*effects])
     graph = loaded.graph
     frames = stem_samples(graph)
-    keys: dict[NodeName, str] = {}
-    sound_keys: dict[NodeName, str] = {}
+    resolutions = resolve_all(graph, instruments, effects)
+    planned = plan(graph, resolutions)
+    keys: dict[NodeName, str | None] = {}
+    sound_keys: dict[NodeName, str | None] = {}
     stems: dict[NodeName, Audio] = {}
     failures: dict[NodeName, NodeReport] = {}
-    groups = cycle_groups(graph)
-    resolved_of: dict[
-        str, ResolvedInstrument | ResolvedEffectNode | ResolvedDelay | SoundFailure
-    ] = {}
-    identity_of: dict[str, str | None] = {}
     for node in graph.nodes:
-        resolved = resolve_node(node, instruments, effects)
-        resolved_of[node.name] = resolved
-        identity_of[node.name] = (
-            None
-            if isinstance(resolved, SoundFailure)
-            else (resolved.identity if isinstance(resolved, ResolvedDelay) else resolved.sound_key)
-        )
-    # Keys are computed in the graph's cycle-group order, because a node's key digests its
-    # upstream keys and a cycle group's digest reads the identities of every member. Report rows
-    # stay positionally aligned with the graph's nodes, which compilation sets to song order.
-    for node in [member for group in graph.groups() for member in group]:
         name = NodeName(node.name)
-        resolved = resolved_of[node.name]
-        identity = identity_of[node.name]
-        upstream = tuple(wire.from_name for wire in graph.incoming(node.name))
-        keys[name] = node_cache_key(graph, node, identity_of, keys, groups.get(node.name))
+        unit, _ = planned.place(name)
+        resolved = resolutions[node.name]
+        sound = (
+            resolved.sound_key
+            if isinstance(resolved, ResolvedInstrument | ResolvedEffectNode)
+            else None
+        )
+        key = None if isinstance(unit, Unplanned) else unit.key
+        keys[name], sound_keys[name] = key, sound
+        detail: str | None = None
         if not store.stem_path(name).is_file():
-            failures[name] = NodeReport(
-                node.name,
-                AnalysisStatus.MISSING_STEM,
-                keys[name],
-                identity,
-                node.kind,
-                upstream,
-                gain_db=node.gain_db,
-            )
-            continue
-        if isinstance(resolved, SoundFailure):
-            failures[name] = NodeReport(
-                node.name,
-                AnalysisStatus.STALE_STEM,
-                keys[name],
-                None,
-                node.kind,
-                upstream,
-                gain_db=node.gain_db,
-                detail=resolved.detail,
-            )
-            continue
-        sound_keys[name] = cast("str", identity)
-        try:
-            stems[name] = read_stem(
-                store, name, (keys[name], cast("str", identity)), audio_files, frames
-            )
-        except StaleStemError as error:
-            failures[name] = NodeReport(
-                node.name,
-                AnalysisStatus.STALE_STEM,
-                keys[name],
-                identity,
-                node.kind,
-                upstream,
-                gain_db=node.gain_db,
-                detail=str(error),
-            )
+            status = AnalysisStatus.MISSING_STEM
+        elif isinstance(unit, Unplanned):
+            status, detail = AnalysisStatus.STALE_STEM, unit.detail
+        else:
+            try:
+                stems[name] = read_stem(store, name, unit.key, sound, audio_files, frames)
+                continue
+            except StaleStemError as error:
+                status, detail = AnalysisStatus.STALE_STEM, str(error)
+        failures[name] = NodeReport(
+            node.name,
+            status,
+            key,
+            sound,
+            node.kind,
+            tuple(wire.from_name for wire in graph.incoming(node.name)),
+            gain_db=node.gain_db,
+            detail=detail,
+        )
 
     # Results from older audio must not survive a run that cannot replace them.
     store.clear_latest()

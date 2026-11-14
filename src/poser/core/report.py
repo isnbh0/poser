@@ -183,12 +183,13 @@ def _no_sections() -> Mapping[str, SectionReport]:
 @dataclass(frozen=True)
 class NodeReport:
     """One node's analysis. The keys are the ones a fresh stem of the node would carry, so two
-    reports show which nodes changed between song versions. `sound_key` is None when the sound is
-    not resolved, and `node_key` then digests no sound."""
+    reports show which nodes changed between song versions. `node_key` is the key of the node's
+    render unit, None when the unit cannot be planned. `sound_key` is None when the node has no
+    resolved sound or recipe: its sound does not resolve, or it is a delay."""
 
     name: str
     status: AnalysisStatus
-    node_key: str
+    node_key: str | None
     sound_key: str | None
     kind: NodeKind
     upstream: tuple[str, ...]

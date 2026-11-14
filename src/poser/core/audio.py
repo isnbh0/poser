@@ -35,11 +35,6 @@ def song_duration_s(graph: Graph) -> float:
     return graph.seconds(last_beat(graph.track_nodes)) + TAIL_S
 
 
-def graph_duration_s(graph: Graph) -> float:
-    """Return the length shared by every stem of a graph: its last beat plus the tail."""
-    return song_duration_s(graph)
-
-
 def expected_samples(duration_s: float) -> int:
     """Return the sample count Pedalboard renders, which truncates rather than rounds."""
     return int(duration_s * SAMPLE_RATE)

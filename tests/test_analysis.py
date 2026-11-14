@@ -26,11 +26,12 @@ from fakes import (
 
 from poser.core.analysis import AnalysisTools, analyze_song, measure
 from poser.core.audio import Audio, measure_peak_dbfs, stem_samples, write_raw_audio
-from poser.core.cache import Stamp, node_key
+from poser.core.cache import Stamp
 from poser.core.graph import DelayNode, EffectNode, Graph, TrackNode, Wire
 from poser.core.jsonvalue import Json
 from poser.core.loading import LoadedSong
 from poser.core.names import Identifier, SongId, TrackName
+from poser.core.planning import Unplanned, plan, resolve_all
 from poser.core.ports import (
     Effect,
     Instrument,
@@ -39,9 +40,8 @@ from poser.core.ports import (
     ReportSection,
     SectionInput,
     SectionResult,
-    SoundFailure,
 )
-from poser.core.rendering import ResolvedDelay, render_song, resolve_node
+from poser.core.rendering import render_song
 from poser.core.report import (
     BANDS,
     AnalysisStatus,
@@ -147,20 +147,14 @@ def tree(directory: Path) -> list[str]:
     return sorted(path.relative_to(directory).as_posix() for path in directory.rglob("*"))
 
 
-def node_key_of(song: Song, index: int, setup: Setup) -> str:
-    """The key the report records for the song's index'th node: its resolved sound, digested
-    even when the stem itself is missing, which is what a render would stamp."""
+def node_key_of(song: Song, index: int, setup: Setup) -> str | None:
+    """The key the report records for the song's index'th node: its unit's key in the render
+    plan, even when the stem itself is missing, or None when the unit cannot be planned."""
     graph = song.graph()
-    node = graph.nodes[index]
-    resolved = resolve_node(node, setup.instruments)
-    identity = (
-        None
-        if isinstance(resolved, SoundFailure)
-        else resolved.identity
-        if isinstance(resolved, ResolvedDelay)
-        else resolved.sound_key
+    unit, _ = plan(graph, resolve_all(graph, setup.instruments, setup.effects)).place(
+        graph.nodes[index].name
     )
-    return node_key(graph, node, identity, ())
+    return None if isinstance(unit, Unplanned) else unit.key
 
 
 # Measuring
@@ -762,9 +756,10 @@ def test_a_feedback_graph_analyzes_through_its_group_keys(tmp_path: Path) -> Non
     assert nodes["late"].kind == "delay"
     assert nodes["late"].upstream == ("loop",)
     assert nodes["loop"].upstream == ("track", "loop.drive")
-    # One digest per member, carrying the member's name: equal nowhere, changed together.
+    # The members render as one unit, so they share its key.
     keys = [nodes[name].node_key for name in ("loop", "late", "loop.drive")]
-    assert len(set(keys)) == 3
+    assert len(set(keys)) == 1
+    assert keys[0] is not None
 
     render_song(
         LoadedSong(graph),

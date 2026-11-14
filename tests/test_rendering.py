@@ -22,10 +22,10 @@ from fakes import (
     NpyAudioFiles,
 )
 
-from poser.core import cache, rendering
+from poser.core import cache, planning, rendering
 from poser.core.analysis import AnalysisTools, analyze_song
 from poser.core.audio import NUM_CHANNELS, SAMPLE_RATE, Audio
-from poser.core.cache import Stamp, StampProblem, node_key, sound_key
+from poser.core.cache import Stamp, StampProblem, sound_key
 from poser.core.graph import BUFFER_SIZE, DelayNode, EffectNode, Graph, GraphNode, TrackNode, Wire
 from poser.core.loading import LoadedSong
 from poser.core.marks import Mark, Marks
@@ -38,6 +38,15 @@ from poser.core.performance import (
     PitchSupport,
     perform,
 )
+from poser.core.planning import (
+    Plan,
+    ResolvedInstrument,
+    TrackUnit,
+    Unplanned,
+    plan,
+    resolve_all,
+    resolve_node,
+)
 from poser.core.ports import (
     Effect,
     EffectRenderRequest,
@@ -47,7 +56,7 @@ from poser.core.ports import (
     SongBusyError,
     SoundFailure,
 )
-from poser.core.rendering import ResolvedInstrument, TrackResult, render_song, resolve_node
+from poser.core.rendering import TrackResult, render_song
 from poser.core.report import AnalysisStatus, NodeReport, Report
 from poser.core.song import ControlChange, Note, Song, Track
 from poser.core.statuses import (
@@ -130,6 +139,17 @@ class Setup:
             notify=self.progress.append,
         )
 
+    def plan(self, song: Song | Graph) -> Plan:
+        """The plan a render of the song on these fakes builds."""
+        graph = LoadedSong(song).graph
+        return plan(graph, resolve_all(graph, self.instruments, self.effects))
+
+    def key(self, song: Song | Graph, name: str) -> str:
+        """The key of the named node's unit in the song's plan."""
+        unit, _ = self.plan(song).place(name)
+        assert not isinstance(unit, Unplanned)
+        return unit.key
+
     def analyze(self, song: Song | Graph) -> Report:
         tools = AnalysisTools(FakeMixer(), FakeMeasurer(), FakeVisualizer())
         return analyze_song(
@@ -193,40 +213,14 @@ def test_sound_key_changes_with_adapter_id_version_and_identity() -> None:
     assert key() == keys[0]
 
 
-def test_sound_identity_is_in_the_node_key() -> None:
+def test_sound_identity_is_in_the_track_key(tmp_path: Path) -> None:
     """The audit's counterexample: a changed preset changes the key with no song input touched."""
-    graph = make_song().graph()
-    node = graph.nodes[0]
 
     def key(identity: str) -> str:
         instrument = FakeInstrument("fake", {None: FakeSound(identity=identity)})
-        resolved = resolve_node(node, {instrument.name: instrument})
-        assert isinstance(resolved, ResolvedInstrument)
-        return node_key(graph, node, resolved.sound_key, ())
+        return Setup(tmp_path, instrument).key(make_song(), "lead")
 
     assert key("one") != key("two")
-
-
-def test_upstream_keys_are_in_the_node_key() -> None:
-    """Forward contract for P3+: an upstream entry changes the key of every node it feeds."""
-    graph = make_song().graph()
-    node = graph.nodes[0]
-    base = node_key(graph, node, None, ())
-
-    fed = node_key(graph, node, None, ((base, "audio", 0.0),))
-
-    assert fed != base
-    assert fed != node_key(graph, node, None, ((base, "control", 0.0),))
-    assert fed != node_key(graph, node, None, ((base, "audio", -6.0),))
-
-
-def test_a_gain_only_edit_changes_no_node_key() -> None:
-    quiet = make_song().graph()
-    loud = make_song(gain=-6.0).graph()
-
-    assert [node_key(quiet, node, None, ()) for node in quiet.nodes] == [
-        node_key(loud, node, None, ()) for node in loud.nodes
-    ]
 
 
 def test_render_writes_stamped_stems_and_reports_their_peaks(tmp_path: Path) -> None:
@@ -242,10 +236,7 @@ def test_render_writes_stamped_stems_and_reports_their_peaks(tmp_path: Path) -> 
     assert not lead.cached
     stamp = setup.store.read_stamp(LEAD)
     assert isinstance(stamp, Stamp)
-    graph = song.graph()
-    resolved = resolve_node(graph.nodes[0], setup.instruments)
-    assert isinstance(resolved, ResolvedInstrument)
-    assert stamp.track_key == node_key(graph, graph.nodes[0], resolved.sound_key, ())
+    assert stamp.track_key == setup.key(song, LEAD)
     assert stamp.status is StemStatus.RENDERED
     audio = setup.audio_files.read(
         setup.store.stem_path(BASS), perform(song.graph(), song.tracks[1]).samples
@@ -612,17 +603,17 @@ def test_requests_carry_the_performance_to_a_path_that_is_gone_afterwards(tmp_pa
     ]
 
 
-def test_perform_runs_before_the_old_stem_is_discarded(
+def test_planning_runs_before_the_old_stem_is_discarded(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     setup = Setup(tmp_path)
     setup.render(make_song())
     stamp = setup.store.read_stamp(LEAD)
 
-    def refuse(song: Song, track: Track, pitches: PitchSupport) -> None:
+    def refuse(graph: Graph, timed: object, pitches: PitchSupport) -> None:
         raise RuntimeError("perform failed")
 
-    monkeypatch.setattr(rendering, "perform_for", refuse)
+    monkeypatch.setattr(planning, "perform_for", refuse)
     with pytest.raises(RuntimeError, match="perform failed"):
         setup.render(make_song(), force=True)
 
@@ -1414,101 +1405,17 @@ def pinned_song() -> Song:
     )
 
 
-def test_integer_pitch_node_keys_are_pinned() -> None:
-    """These digests pin whole-pitch node keys, so stems already rendered stay current."""
-    graph = pinned_song().graph()
-
-    assert [(node.name, node_key(graph, node, None, ())) for node in graph.nodes] == [
-        ("chord", "e0dbc5b150e2e4a1b57074736bc424d9528449c1ebca643d0b0ce28675230cbc"),
-        ("line", "16fb96053a9f6ed6dbe849904065436d74719a046abcccc0c9f74f4a8a55e6f6"),
-    ]
-
-
-def rendered_keys(setup: Setup, song: Song | Graph) -> list[tuple[str, str]]:
-    """Render a song and return each node's stamped key, sorted by node name."""
-    results = setup.render(song)
-    assert all(result.status is StemStatus.RENDERED for result in results)
-    keys: list[tuple[str, str]] = []
-    for result in results:
-        stamp = setup.store.read_stamp(result.track)
-        assert isinstance(stamp, Stamp)
-        keys.append((result.track, stamp.track_key))
-    return sorted(keys)
-
-
-def test_song_render_keys_are_pinned(tmp_path: Path) -> None:
-    """A two-track song with notes, cc, an effect chain, and marks keeps its rendered keys."""
-    chain = (Note(0, 60, 1, 100), Note(1, 62, 0.5, 90))
-    song = Song(
-        bpm=96,
-        tracks=(
-            Track(
-                "lead",
-                "fake",
-                chain,
-                gain=-3,
-                cc=(ControlChange(0, 74, 10, "linear"), ControlChange(2, 74, 120)),
-                effects=("drive", "sum"),
-            ),
-            Track("bass", "fake:pad", NOTE, cc=(ControlChange(1, 1, 64),)),
-        ),
-        marks=KEY_MARKS,
-    )
-    setup = Setup(
-        tmp_path,
-        effects=(FakeEffect("drive", identity="drive"), FakeEffect("sum", identity="sum")),
-    )
-
-    assert rendered_keys(setup, song) == [
-        ("bass", "62c578156609e4aee275cefc7b13b9b3533830897d1c6c25fa91e85ad181ec4b"),
-        ("lead", "fb4b39687bfec5c9d155eecfb5f32e6de7b919623f5e34104460ed6a36428d75"),
-        ("lead.drive", "bf5828be8ed480828c3712fe184d6b1604725f318fe093c66ef97d1b7beb9caa"),
-        ("lead.sum", "361d561de326f2d27d568345faecda649283b1d9780af9907623b9052b29cbb1"),
-    ]
-
-
-def test_graph_render_keys_are_pinned(tmp_path: Path) -> None:
-    """A script-style graph of a track, an effect, and wires keeps its rendered keys."""
-    graph = Graph(
-        110,
-        (
-            TrackNode("lead", sound="fake", notes=NOTE, cc=(ControlChange(0, 7, 90),)),
-            EffectNode("room", effect="drive", gain_db=-6),
-        ),
-        (Wire("lead", "room", "audio", gain_db=-2),),
-    )
-    setup = Setup(tmp_path, effects=(FakeEffect("drive", identity="drive"),))
-
-    assert rendered_keys(setup, graph) == [
-        ("lead", "2d559a5c084a9b036e43d501796f534b0749a9859e6d0041aa9be91e7d51ac88"),
-        ("room", "d2359ed4511f2563bc88d1c1ce502afc729023b749bd8405e3e59240993097f5"),
-    ]
-
-
-def test_cycle_render_keys_are_pinned(tmp_path: Path) -> None:
-    """A feedback cycle with an effect and a delay keeps the keys `cycle_key` gives it."""
-    setup, _, _ = loop_setup(tmp_path)
-
-    assert rendered_keys(setup, loop_graph()) == [
-        ("bass", "375ec47b880af6e0d00204dc38ede8d703a4ebfe2d7fc717588b0794fa8da574"),
-        ("late", "099a6ec06c8453a6a5326655cc54ba69be224e46f44b3c34e2d5f5a9a9ca15f7"),
-        ("loop", "bd89503f2907fd40e698cffd3bae841317e37f39e22a8d58c197b449b3625e94"),
-        ("loop.drive", "588808ec631bf214c733c180fd2cd492ae1d583ae93b87eefbf4e16251f4ebfd"),
-        ("out", "d3f4d79e392df30b46a592b350f5bf8f25aed94d949295646966e29a22504d53"),
-        ("track", "dcc0eb2b43d69efccfb42fafa667afe480d5d42daab878b146bd277e198313a5"),
-    ]
-
-
-def pitch_key(pitch: float, *, pitched: bool = True) -> str:
+def pitch_key(tmp_path: Path, pitch: float, *, pitched: bool = True) -> str:
     note = (Note(beat=0, pitch=pitch, length=1, velocity=100),)
-    graph = Song(120, (Track("lead", "fake", note, pitched=pitched),)).graph()
-    return node_key(graph, graph.nodes[0], None, ())
+    song = Song(120, (Track("lead", "fake", note, pitched=pitched),))
+    instrument = FakeInstrument("fake", {None: FakeSound()}, pitches=PitchSupport.CONTINUOUS)
+    return Setup(tmp_path, instrument).key(song, LEAD)
 
 
-def test_node_key_is_one_for_a_whole_pitch_and_distinct_for_a_fraction() -> None:
-    assert pitch_key(60) == pitch_key(60.0)
-    assert pitch_key(60.5) != pitch_key(60)
-    assert pitch_key(60, pitched=True) == pitch_key(60, pitched=False)
+def test_track_key_is_one_for_a_whole_pitch_and_distinct_for_a_fraction(tmp_path: Path) -> None:
+    assert pitch_key(tmp_path, 60) == pitch_key(tmp_path, 60.0)
+    assert pitch_key(tmp_path, 60.5) != pitch_key(tmp_path, 60)
+    assert pitch_key(tmp_path, 60, pitched=True) == pitch_key(tmp_path, 60, pitched=False)
 
 
 QUARTER = (Note(beat=0, pitch=60, length=1, velocity=100), Note(4, 60.5, 1, 100))
@@ -1570,36 +1477,106 @@ KEY_MARKS = Marks(
 )
 
 
-def test_marks_cannot_change_a_node_key() -> None:
-    """Fails if a change routes marks into `node_key`: the pinned digests stay pinned."""
-    marked = dataclasses.replace(pinned_song().graph(), marks=KEY_MARKS)
+def plan_keys(setup: Setup, graph: Graph) -> list[tuple[str, str | None]]:
+    """Each node's unit key in the graph's plan, in node order."""
+    planned = setup.plan(graph)
+    keys: list[tuple[str, str | None]] = []
+    for node in graph.nodes:
+        unit, _ = planned.place(node.name)
+        keys.append((node.name, None if isinstance(unit, Unplanned) else unit.key))
+    return keys
+
+
+def test_marks_cannot_change_a_track_key(tmp_path: Path) -> None:
+    """Fails if a change routes marks into a track's render input."""
+    graph = pinned_song().graph()
+    marked = dataclasses.replace(graph, marks=KEY_MARKS)
+    setup = Setup(tmp_path)
 
     assert marked.marks == KEY_MARKS
-    assert [(node.name, node_key(marked, node, None, ())) for node in marked.nodes] == [
-        ("chord", "e0dbc5b150e2e4a1b57074736bc424d9528449c1ebca643d0b0ce28675230cbc"),
-        ("line", "16fb96053a9f6ed6dbe849904065436d74719a046abcccc0c9f74f4a8a55e6f6"),
+    assert plan_keys(setup, marked) == plan_keys(setup, graph)
+
+
+def test_marks_cannot_change_a_cycle_key(tmp_path: Path) -> None:
+    """Fails if a change routes marks into a cycle group's render input."""
+    marked = dataclasses.replace(loop_graph(), marks=KEY_MARKS)
+    setup, _, _ = loop_setup(tmp_path)
+
+    keys = plan_keys(setup, marked)
+    assert all(key is not None for _, key in keys)
+    assert keys == plan_keys(setup, loop_graph())
+
+
+# The plan is the render's source of truth.
+
+
+def plan_songs() -> list[Song | Graph]:
+    return [make_song(), chain_song(), loop_graph()]
+
+
+@pytest.mark.parametrize("song", plan_songs(), ids=["song", "chain", "loop"])
+def test_a_render_stamps_the_keys_of_its_plan(tmp_path: Path, song: Song | Graph) -> None:
+    setup, _, _ = loop_setup(tmp_path)
+    results = setup.render(song)
+
+    assert all(result.status is StemStatus.RENDERED for result in results)
+    for name, key in plan_keys(setup, LoadedSong(song).graph):
+        stamp = setup.store.read_stamp(NodeName(name))
+        assert isinstance(stamp, Stamp)
+        assert stamp.track_key == key
+
+
+def test_an_instrument_receives_the_performance_its_unit_holds(tmp_path: Path) -> None:
+    setup = Setup(tmp_path)
+    song = make_song()
+    planned = setup.plan(song)
+
+    setup.render(song)
+
+    # The lead plays the default sound and the bass the pad.
+    performances = {
+        request.sound.ref.name: request.performance for request in setup.instrument.renders
+    }
+    assert len(setup.instrument.renders) == len(performances) == 2
+    for sound, name in ((None, LEAD), ("pad", BASS)):
+        unit, _ = planned.place(name)
+        assert isinstance(unit, TrackUnit)
+        assert performances[sound] == unit.input.performance
+
+
+@pytest.mark.parametrize("song", plan_songs(), ids=["song", "chain", "loop"])
+def test_analysis_after_a_render_finds_every_stem_fresh(tmp_path: Path, song: Song | Graph) -> None:
+    setup, _, _ = loop_setup(tmp_path)
+    setup.render(song)
+
+    report = setup.analyze(song)
+
+    assert all(node.status is AnalysisStatus.ANALYZED for node in report.nodes)
+    assert [node.node_key for node in report.nodes] == [
+        key for _, key in plan_keys(setup, LoadedSong(song).graph)
     ]
 
 
-def test_marks_cannot_change_a_cycle_key() -> None:
-    """Fails if a change routes marks into `cycle_key`."""
-    note = (Note(0, 60, 1, 100),)
-    lead = TrackNode("lead", sound="fake", notes=note)
-    loop = EffectNode("lead.loop", effect="crush")
-    late = DelayNode("lead.late", delay_samples=BUFFER_SIZE)
-    wires = (
-        Wire("lead", "lead.loop", "audio"),
-        Wire("lead.loop", "lead.late", "audio"),
-        Wire("lead.late", "lead.loop", "audio"),
+def test_a_cycle_of_delays_alone_fails_load_failed(tmp_path: Path) -> None:
+    graph = Graph(
+        120,
+        (
+            TrackNode("track", sound="fake", notes=NOTE),
+            DelayNode("one", delay_samples=BUFFER_SIZE),
+            DelayNode("two", delay_samples=BUFFER_SIZE),
+        ),
+        (
+            Wire("track", "one", "audio"),
+            Wire("one", "two", "audio"),
+            Wire("two", "one", "audio", gain_db=-6),
+        ),
+        "feedback",
     )
-    graph = Graph(120, (lead, loop, late), wires, mode="feedback")
-    marked = dataclasses.replace(graph, marks=KEY_MARKS)
-    members = (late, loop)
-    identities = {"lead.loop": "crush-identity", "lead.late": None}
-    inside = wires[1:]
-    upstream = (("lead", "lead.loop", "audio", 0.0),)
+    setup = Setup(tmp_path)
 
-    def key(on: Graph) -> str:
-        return cache.cycle_key(on, loop, members, identities, inside, upstream)
+    found = by_name(setup.render(graph))
 
-    assert key(marked) == key(graph)
+    assert found[NodeName("track")].status is StemStatus.RENDERED
+    for name in ("one", "two"):
+        assert found[NodeName(name)].status is RenderFailureStatus.LOAD_FAILED
+        assert "only delay nodes" in (found[NodeName(name)].detail or "")
