@@ -9,6 +9,7 @@ The module also holds the `key` vocabulary, which reads stated keys such as `A m
 song's `key` mark layer.
 """
 
+import dataclasses
 import math
 import re
 from collections.abc import Mapping
@@ -18,6 +19,8 @@ from typing import Literal
 from poser.core.evidence import (
     BETWEEN,
     BETWEEN_SHARE,
+    FLAT_NAMES,
+    SILENCE,
     TOO_LITTLE_BEATS,
     PitchTally,
     percent_above,
@@ -65,7 +68,6 @@ MIN_WINDOW_BARS = 1
 DEFAULT_WINDOW_BEATS = 16.0
 MIN_WINDOW_BEATS = 1.0
 
-SILENCE = "no selected notes sound"
 TOO_FEW = "too few pitch classes to imply a key"
 EVEN = "pitch classes are close to evenly weighted"
 NO_FIT = "no key fits"
@@ -81,9 +83,9 @@ window. Where it declares none, a window is `window_beats` beats ({DEFAULT_WINDO
 unless configured, at least 1), counted from the start of the unmetered stretch. A last window
 shorter than half a window is read together with the one before it. A stretch shorter than half
 a window, such as a pickup bar given its own meter span, is read alone as one short window and
-usually reads
-`unknowable`. The printed beats of each span are the window that was read. Set the options
-with `frameworks = [{{ use = "tonal", window_bars = 8, window_beats = 32 }}]` in `[adapters]`.
+usually reads `unknowable`. The printed beats of each span are the window that was read. Set
+the options with `frameworks = [{{ use = "tonal", window_bars = 8, window_beats = 32 }}]` in
+`[adapters]`.
 
 A window shorter than the song's chord cycle can catch only part of the cycle and read
 `ambiguous` or `unknowable` where a longer window reads the key. An unclear span in a song with
@@ -350,14 +352,21 @@ KEY_GUIDE = """\
 The `key` layer states the author's key, written as a tonic `A` to `G` with an optional `#` or
 `b`, a space, and a mode, such as `A minor`, `F# major`, or `D dorian`. The modes are `major`,
 `minor`, `dorian`, `phrygian`, `lydian`, `mixolydian`, and `locrian`. `read-song` shows it above
-the readings, as written. It never changes `tonal`'s reading.
+the readings, as written. It never changes `tonal`'s reading. A `warning` names the key as
+written and spells notes with flats when the tonic is written with a flat, and with sharps
+otherwise.
 
 `read-song` checks each key mark against the notes inside its span, counting each note for the
 beats it sounds there under its nearest twelve-tone pitch class. The mark is contradicted, with
 a `warning`, when more than {limit} of the sounding time is outside the mode's scale on the
 stated tonic. `minor` also allows the raised sixth and seventh. The mark is `unchecked` when
-nothing sounds in its span, when less than {little} beats of sound do, or when more than
+no selected notes sound in its span, when less than {little} beats of sound do, or when more than
 {between} of the sounding time lies between twelve-tone pitch classes.
+
+A passing check is weak evidence. The mark is contradicted only when more than {limit} of the
+sounding time is outside the scale, so a label one scale degree off usually passes: over a C
+major scale `C lydian`, `C mixolydian`, and `C minor` all pass, and over C, F, and G triads
+`C lydian` and `C mixolydian` still pass while `C minor` is contradicted.
 
 The check tests which notes sound, never which note is home, so `C major`, `A minor`, and
 `D dorian` all pass over the same passage. `minor` allows nine of the twelve pitch classes, so
@@ -373,10 +382,15 @@ key passes under a thick texture; `--track` checks the line alone.
 
 @dataclass(frozen=True)
 class KeyMark:
-    """A key an author states in a `key` mark."""
+    """A key an author states in a `key` mark.
+
+    `label` is the key as its author wrote it, which check sentences echo; it is empty for a key
+    built from a pitch class, and two keys that differ only in it are equal.
+    """
 
     tonic: int  # 0 is C, 11 is B.
     mode: KeyMode
+    label: str = dataclasses.field(default="", compare=False)
 
     def __post_init__(self) -> None:
         if not (is_int(self.tonic) and 0 <= self.tonic <= 11):
@@ -409,9 +423,11 @@ class KeyMark:
         share = tally.share(outside)
         if share <= KEY_OUTSIDE_LIMIT:
             return Agrees()
+        written = self.label or self.name
+        names = FLAT_NAMES if written[1:2] == "b" else NAMES
         return Contradicts(
             f"{percent_above(share, KEY_OUTSIDE_LIMIT)}% of the sounding time is outside "
-            f"{self.name}, most on {tally.loudest(outside)}"
+            f"{written}, most on {tally.loudest(outside, names)}"
         )
 
 
@@ -432,7 +448,7 @@ class KeyVocabulary:
             return Rejected(KEY_REJECTION)
         letter, accidental, mode = match.groups()
         tonic = (LETTER_SEMITONES[letter] + ACCIDENTALS[accidental]) % 12
-        return KeyMark(tonic, KEY_MODES_BY_NAME[mode])
+        return KeyMark(tonic, KEY_MODES_BY_NAME[mode], text)
 
 
 def create_key(options: Mapping[str, JsonValue], _context: AdapterContext) -> KeyVocabulary:

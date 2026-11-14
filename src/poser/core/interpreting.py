@@ -4,7 +4,7 @@ authored marks through each configured vocabulary."""
 import dataclasses
 from collections.abc import Sequence
 
-from poser.core.evidence import tally_pitches
+from poser.core.evidence import SILENCE, tally_pitches
 from poser.core.marks import NO_MARKS, LayerName, Mark
 from poser.core.names import Identifier
 from poser.core.ports import Claim, Framework, Vocabulary
@@ -79,9 +79,6 @@ def read_song(request: ScoreRequest, frameworks: Sequence[Framework]) -> SongRea
     return SongReadings(request.end, request.tracks, readings)
 
 
-NOTHING_SOUNDS = "nothing sounds"
-
-
 def _check(
     parsed: ParsedMark, request: ScoreRequest, vocabulary: Identifier
 ) -> Check | LayerError | None:
@@ -91,7 +88,7 @@ def _check(
         return None
     tally = tally_pitches(request, parsed.mark.beat, min(parsed.mark.end, request.end))
     if tally.total <= 0:
-        return Unchecked(NOTHING_SOUNDS)
+        return Unchecked(SILENCE)
     try:
         result: object = value.check(tally)
     except Exception as error:  # noqa: BLE001 -- a claim's failure is reported, not raised.
@@ -149,7 +146,7 @@ def interpret_marks(request: ScoreRequest, vocabularies: Sequence[Vocabulary]) -
     Rejected, makes its layer a LayerError, and the other layers proceed.
 
     A value that is a Claim is checked against the request's notes inside its mark's span: a
-    span where nothing sounds is Unchecked, and otherwise the result is the value's own. A
+    span where no selected notes sound is Unchecked, and otherwise the result is the value's own. A
     check that raises, or returns no check result, makes its layer a LayerError.
     """
     end = request.end

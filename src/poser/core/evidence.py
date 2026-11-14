@@ -2,17 +2,19 @@
 claims are checked against."""
 
 import math
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 
 from poser.core.reading import ScoreRequest
 
 CLASS_NAMES = ("C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B")
+FLAT_NAMES = ("C", "Db", "D", "Eb", "E", "F", "Gb", "G", "Ab", "A", "Bb", "B")
 
 BETWEEN_SEMITONES = 0.4  # A note farther than 40 cents from its nearest class lies between two.
 BETWEEN_SHARE = 0.25  # More than this share of sounding time between classes cannot be judged.
 TOO_LITTLE_BEATS = 0.25  # Less sounding time than this cannot be judged.
 
+SILENCE = "no selected notes sound"
 TOO_LITTLE = "too little sounds"
 BETWEEN = "pitches lie between twelve-tone pitch classes"
 
@@ -47,20 +49,20 @@ class PitchTally:
             raise ValueError("PitchTally.share needs sounding time, and nothing sounds")
         return math.fsum(self.weights[pc % 12] for pc in {pc % 12 for pc in classes}) / self.total
 
-    def loudest(self, classes: Iterable[int]) -> str:
+    def loudest(self, classes: Iterable[int], names: Sequence[str] = CLASS_NAMES) -> str:
         """The sounding classes among `classes`, as `F#`, `F# and A#`, or `F#, A# and C#`.
 
-        Longest sounding first, ties in pitch-class order from C, at most three, spelled with
-        sharps. Empty when none of them sounds.
+        Longest sounding first, ties in pitch-class order from C, at most three, each spelled
+        as `names` spells its class. Empty when none of them sounds.
         """
         sounding = sorted(
             (pc for pc in {pc % 12 for pc in classes} if self.weights[pc] > 0),
             key=lambda pc: (-self.weights[pc], pc),
         )
-        names = [CLASS_NAMES[pc] for pc in sounding[:LISTED_CLASSES]]
-        if len(names) < 2:
-            return "".join(names)
-        return f"{', '.join(names[:-1])} and {names[-1]}"
+        listed = [names[pc] for pc in sounding[:LISTED_CLASSES]]
+        if len(listed) < 2:
+            return "".join(listed)
+        return f"{', '.join(listed[:-1])} and {listed[-1]}"
 
 
 def tally_pitches(request: ScoreRequest, start: float, end: float) -> PitchTally:

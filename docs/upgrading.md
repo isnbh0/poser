@@ -28,8 +28,10 @@ fix. A change listed here applies to every studio that last ran a poser from bef
 - **Symptom:** a script reading `report.json` finds no `bar_dbfs` under `measurements`.
   **Cause:** levels are `span_dbfs`, one per entry of the report's `spans`, which gives each
   level's beats and, where the song declares a meter, its bar number.
-  **Fix:** read `span_dbfs`. For a song without a meter the values are the old `bar_dbfs` values,
-  except that the last one stops at the song's last beat and no longer includes the tail.
+  **Fix:** read `span_dbfs`. For a song without a meter the spans are the old 4-beat bars, except
+  that the last one stops at the song's last beat and no longer includes the tail. Each span's
+  bounds are computed from its own beats, so a bound can move by one sample and a value can
+  differ slightly from the old `bar_dbfs` value.
 
 ## No initialization journal
 

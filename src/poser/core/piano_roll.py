@@ -73,5 +73,5 @@ def project_piano_roll(graph: Graph) -> PianoRoll:
     return PianoRoll(
         graph.bpm,
         tuple(PianoRollPanel(node.name, node.notes) for node in graph.track_nodes),
-        tuple(bar.beat for bar in graph.meter.bars(last)) if last > 0 else (),
+        tuple(bar.beat for bar in graph.meter.bars(last)),
     )

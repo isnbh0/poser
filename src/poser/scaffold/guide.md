@@ -274,8 +274,9 @@ frameworks, and each framework's own section says what it reads.
 `uv run read-song <song>` first prints the song's meter, when it declares one: a `meter` block
 with a line for each metered stretch up to the song's end, such as `beats 0-84: 7-beat bars`.
 Every range of beats it then prints, for marks and for readings, names its bars when it starts on
-a bar's start and ends on a bar's end, as in `beats 84-112 (bars 13-19)` or
-`beats 112-116 (bar 20)`; any other range prints beats only.
+a bar's start, ends on a bar's end, and every beat between lies in a bar, as in
+`beats 84-112 (bars 13-19)` or `beats 112-116 (bar 20)`; any other range, such as one that
+crosses beats with no meter, prints beats only.
 
 It next prints each of the song's mark layers, up to the song's end, with
 each mark's text as written. A layer named like a configured vocabulary shows that vocabulary's
@@ -295,13 +296,15 @@ checks, says so on its `deliberate` line.
 It then prints each framework's reading, without loading plugins or touching renders. Repeat
 `--track <name>` to read only those pitched tracks (the default is every pitched track), and
 `--framework <name>` to use only those configured frameworks (the default is all). Every mark
-is still shown, and `--track` narrows the notes a claim is checked against. `--json` prints the readings as JSON, with a `marks` object when the song has
-marks and, when it declares a meter, a `meter` list of the metered stretches, such as
-`{"beat": 0, "end": 84, "bar": 7}`; JSON carries no bar numbers. `--config` selects a workspace explicitly. Exit codes: 0 when every framework returned
-a reading, whatever its outcomes; 1 when a framework failed, printed as `<name>: error: <detail>`,
-or a vocabulary failed, printed as `<layer> marks: error: <detail>`; 2 when the song or
-`poser.toml` cannot be read, a `--track` or `--framework` name is unknown or the track is
-unpitched, or a vocabulary rejects a label, naming the mark, such as `marks.chords[0]`.
+is still shown, and `--track` narrows the notes a claim is checked against. `--json` prints the
+readings as JSON, with a `marks` object when the song has marks and, when it declares a meter, a
+`meter` list of the metered stretches, such as `{"beat": 0, "end": 84, "bar": 7}`; JSON carries
+no bar numbers. `--config` selects a workspace explicitly. Exit codes: 0 when every framework
+returned a reading, whatever its outcomes; 1 when a framework failed, printed as
+`<name>: error: <detail>`, or a vocabulary failed, printed as `<layer> marks: error: <detail>`;
+2 when the song or `poser.toml` cannot be read, a `--track` or `--framework` name is unknown or
+the track is unpitched, or a vocabulary rejects a label, naming the mark, such as
+`marks.chords[0]`.
 
 `[adapters] frameworks` in `poser.toml` takes a preset name or a list of frameworks. The
 `western` preset, Western tonal harmony, is the default; `neutral` turns readings off. A preset

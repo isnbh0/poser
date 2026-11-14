@@ -112,10 +112,11 @@ class Meter:
 
         Each starts where the previous one ended. A span is cut at `end`, a span starting at or
         after `end` is dropped, and beats no span covers form unmetered stretches. Stretches are
-        never merged, since bars count from each span's own `beat`.
+        never merged, since bars count from each span's own `beat`. A song ending at beat 0 has
+        no beats, so no stretches.
         """
-        if not (is_number(end) and end > 0):
-            raise ValueError(f"Meter.stretches needs a positive finite end, got {end!r}")
+        if not (is_number(end) and end >= 0):
+            raise ValueError(f"Meter.stretches needs a finite end of 0 or more, got {end!r}")
         last = float(end)
         stretches: list[Stretch] = []
         position = 0.0

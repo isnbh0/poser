@@ -3,7 +3,9 @@ and read its score through the configured frameworks, without loading plugins.""
 
 import argparse
 import json
+import math
 from collections.abc import Sequence
+from itertools import pairwise
 from pathlib import Path
 
 from poser.cli.common import (
@@ -51,14 +53,24 @@ def _beat(value: float) -> str:
     return str(int(value)) if float(value).is_integer() else repr(round(float(value), 6))
 
 
+def _same_beat(first: float, second: float) -> bool:
+    """Whether two beats are one beat: beats that differ only by float noise print the same."""
+    return math.isclose(first, second, rel_tol=0.0, abs_tol=1e-9)
+
+
 def _span(start: float, end: float, bars: Sequence[Bar]) -> str:
-    """A range of beats, naming its bars when it starts on a bar's start and ends on a bar's end."""
+    """A range of beats, naming its bars when it starts on a bar's start, ends on a bar's end,
+    and every beat between lies in a bar."""
     beats = f"beats {_beat(start)}-{_beat(end)}"
-    first = next((bar.number for bar in bars if bar.beat == start), None)
-    last = next((bar.number for bar in bars if bar.end == end), None)
-    if first is None or last is None:
+    first = next((i for i, bar in enumerate(bars) if _same_beat(bar.beat, start)), None)
+    last = next((i for i, bar in enumerate(bars) if _same_beat(bar.end, end)), None)
+    if first is None or last is None or last < first:
         return beats
-    return f"{beats} (bar {first})" if first == last else f"{beats} (bars {first}-{last})"
+    covered = bars[first : last + 1]
+    if not all(_same_beat(bar.end, following.beat) for bar, following in pairwise(covered)):
+        return beats
+    low, high = covered[0].number, covered[-1].number
+    return f"{beats} (bar {low})" if low == high else f"{beats} (bars {low}-{high})"
 
 
 def format_meter(stretches: Sequence[Stretch]) -> str:
@@ -208,10 +220,8 @@ def main(argv: list[str] | None = None) -> int:
         return EXIT_BAD_CONFIG
 
     readings = read_song(request, frameworks)
-    # A song that declares no meter has no stretches to show and no bars to name.
-    metered = bool(song.meter) and request.end > 0
-    stretches = song.meter.stretches(request.end) if metered else ()
-    bars = song.meter.bars(request.end) if metered else ()
+    stretches = song.meter.stretches(request.end)
+    bars = song.meter.bars(request.end)
     if args.json:
         data = readings_to_data(readings)
         if isinstance(data, dict):

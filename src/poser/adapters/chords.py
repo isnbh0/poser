@@ -1,12 +1,14 @@
 """The `chords` vocabulary: chord symbols such as `Am7` or `C/G` in a song's `chords` marks."""
 
+import dataclasses
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
 from poser.core.evidence import (
     BETWEEN_SHARE,
     CLASS_NAMES,
+    FLAT_NAMES,
     TOO_LITTLE_BEATS,
     PitchTally,
     percent_above,
@@ -50,6 +52,8 @@ REASON = (
 CHORD_TONE_FLOOR = 0.4  # Chord tones sounding for less than this share contradict the label.
 CHORD_CLASH_LIMIT = 0.15  # Clashing tones sounding for more than this share contradict it.
 PERFECT_FIFTH = 7
+MINOR_THIRD = 3
+MINOR_SEVENTH = 10
 # Each pair of intervals of which a quality holds one: the other would change the quality.
 ALTERNATIVES = ((3, 4), (10, 11))
 # What an interval from the root makes of a chord that does not hold it.
@@ -70,20 +74,26 @@ The qualities are none (major), `m`, `dim`, `aug`, `sus2`, `sus4`, `7`, `maj7`, 
 and `dim7`. Spelling is strict: no spaces, no lowercase roots, and no other qualities. For
 example, `Am7` is A minor seventh and `C/G` is C major over G.
 
-`read-song` shows the chords marks above the framework readings, with each label as written.
+`read-song` shows the chords marks above the framework readings, with each label as written. A
+`warning` names the chord as written and spells notes the way its root is spelled: with flats
+under a flat root such as `Db`, with sharps under a sharp root such as `F#`, and under a natural
+root with sharps, except a clashing minor third or minor seventh, such as `Eb` against `C`.
 
 `read-song` checks each chord mark against the notes inside its span, counting each note for the
 beats it sounds there under its nearest twelve-tone pitch class. The chord's tones are its root,
 its quality's intervals, and its bass. The mark is contradicted, with a `warning`, when its
 tones sound for less than {floor} of the sounding time, or when the tones that would change its
 quality sound for more than {limit}: the other third, the other seventh, or the perfect fifth of
-a chord without one. The mark is `unchecked` when nothing sounds in its span, when less than
-{little} beats of sound do, or when more than {between} of the sounding time lies between
+a chord without one. The mark is `unchecked` when no selected notes sound in its span, when less
+than {little} beats of sound do, or when more than {between} of the sounding time lies between
 twelve-tone pitch classes.
 
-Not every chord tone has to sound, and the root need not stand out. A label that shares most of
-its tones with the notes passes, such as `Am` or `Em` over a C major triad. An unaccompanied
-scale run can contradict a true label. The bass is not checked for being the lowest note.
+A passing check is weak evidence: it tests only the share of the sounding time on the chord's
+tones and on its clashing tones. Not every chord tone has to sound. Neither the root nor a slash
+bass has to sound, so `C/F#` passes over a C major triad, and the bass is not checked for being
+the lowest note. `sus` and a triad are not told apart: `Csus4` passes over a C major triad, and
+`C` passes over C, F, and G. A label that shares most of its tones with the notes passes, such
+as `Am` or `Em` over a C major triad. An unaccompanied scale run can contradict a true label.
 """.format(
     floor=f"{CHORD_TONE_FLOOR:.0%}",
     limit=f"{CHORD_CLASH_LIMIT:.0%}",
@@ -94,11 +104,16 @@ scale run can contradict a true label. The bass is not checked for being the low
 
 @dataclass(frozen=True)
 class Chord:
-    """A chord symbol: a root, a quality from `CHORDS`, and a bass, each pitch class 0 (C) to 11."""
+    """A chord symbol: a root, a quality from `CHORDS`, and a bass, each pitch class 0 (C) to 11.
+
+    `label` is the symbol as its author wrote it, which check sentences echo; it is empty for a
+    chord built from pitch classes, and two chords that differ only in it are equal.
+    """
 
     root: int
     quality: str
     bass: int
+    label: str = dataclasses.field(default="", compare=False)
 
     def __post_init__(self) -> None:
         for field in ("root", "bass"):
@@ -147,17 +162,35 @@ class Chord:
             if (self.root + step) % 12 not in self.tones
         }
 
+    def _spelling(self, written: str) -> Sequence[str]:
+        """The name of each pitch class in a sentence about this chord, written as `written`.
+
+        Flats under a flat root and sharps under a sharp one. Under a natural root, sharps,
+        except a clashing minor third or minor seventh, which is flat.
+        """
+        accidental = written[1:2]
+        if accidental == "b":
+            return FLAT_NAMES
+        if accidental == "#":
+            return CLASS_NAMES
+        flat = {(self.root + step) % 12 for step in (MINOR_THIRD, MINOR_SEVENTH)} & set(
+            self.clashes
+        )
+        return tuple(FLAT_NAMES[pc] if pc in flat else CLASS_NAMES[pc] for pc in range(12))
+
     def check(self, tally: PitchTally) -> Agrees | Contradicts | Unchecked:
         """Compare the chord with what sounds in its span."""
         if obstacle := twelve_tone_obstacle(tally):
             return Unchecked(obstacle)
+        written = self.label or self.name
+        names = self._spelling(written)
         tones = self.tones
         on_tones = tally.share(tones)
         if on_tones < CHORD_TONE_FLOOR:
             return Contradicts(
                 f"{percent_below(on_tones, CHORD_TONE_FLOOR)}% of the sounding time is on the "
-                f"tones of {self.name}, most of the rest on "
-                f"{tally.loudest(set(range(12)) - tones)}"
+                f"tones of {written}, most of the rest on "
+                f"{tally.loudest(set(range(12)) - tones, names)}"
             )
         clashes = self.clashes
         on_clashes = tally.share(clashes)
@@ -166,7 +199,7 @@ class Chord:
         largest = min(clashes, key=lambda pc: (-tally.weights[pc], pc))
         return Contradicts(
             f"{percent_above(on_clashes, CHORD_CLASH_LIMIT)}% of the sounding time is on "
-            f"{tally.loudest(clashes)}, which {clashes[largest]}, not {self.name}"
+            f"{tally.loudest(clashes, names)}, which {clashes[largest]}, not {written}"
         )
 
 
@@ -182,7 +215,7 @@ def parse_chord(text: str) -> Chord | Rejected:
     letter, accidental, suffix, bass_letter, bass_accidental = match.groups()
     root = _pitch_class(letter, accidental)
     bass = root if bass_letter is None else _pitch_class(bass_letter, bass_accidental)
-    return Chord(root, SUFFIXES[suffix], bass)
+    return Chord(root, SUFFIXES[suffix], bass, text)
 
 
 class ChordsVocabulary:

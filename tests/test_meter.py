@@ -160,11 +160,17 @@ def test_equal_adjacent_stretches_are_not_merged() -> None:
     assert [(bar.beat, bar.end) for bar in meter.bars(14)] == [(0, 4), (4, 6), (6, 10), (10, 14)]
 
 
-@pytest.mark.parametrize("end", [0, -1, math.inf, math.nan, "4", None, True])
-def test_stretches_need_a_positive_finite_end(end: object) -> None:
+@pytest.mark.parametrize("end", [-1, -0.5, math.inf, math.nan, "4", None, True])
+def test_stretches_need_a_finite_end_of_0_or_more(end: object) -> None:
     for resolve in (Meter([MeterSpan(0, 4)]).stretches, NO_METER.bars):
-        with pytest.raises(ValueError, match="positive finite end"):
+        with pytest.raises(ValueError, match="finite end of 0 or more"):
             resolve(end)  # ty: ignore[invalid-argument-type]
+
+
+@pytest.mark.parametrize("meter", [NO_METER, Meter([MeterSpan(0, 4)]), Meter([MeterSpan(2, 3)])])
+def test_a_song_ending_at_beat_0_has_no_stretches_and_no_bars(meter: Meter) -> None:
+    assert meter.stretches(0) == ()
+    assert meter.bars(0) == ()
 
 
 def eighths(rng: random.Random, low: int, high: int) -> float:

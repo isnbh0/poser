@@ -149,8 +149,6 @@ def level_spans(graph: Graph) -> tuple[LevelSpan, ...]:
     end. A graph with no notes or controller changes has none.
     """
     last = song_last_beat(graph)
-    if last <= 0:
-        return ()
     numbered = iter(graph.meter.bars(last))
     spans: list[LevelSpan] = []
     for stretch in graph.meter.stretches(last):

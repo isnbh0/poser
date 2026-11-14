@@ -7,7 +7,6 @@ from dataclasses import dataclass
 
 import pytest
 from generated_songs import chord_labels, tonal_song
-from helpers import SURGE_DIR
 
 from poser.adapters.chords import (
     CHORD_CLASH_LIMIT,
@@ -16,7 +15,6 @@ from poser.adapters.chords import (
     ChordsVocabulary,
     parse_chord,
 )
-from poser.adapters.song_formats import SONG_FORMATS
 from poser.adapters.tonal import KEY_OUTSIDE_LIMIT, KeyMark, KeyVocabulary
 from poser.core.evidence import (
     BETWEEN,
@@ -27,10 +25,8 @@ from poser.core.evidence import (
     tally_pitches,
     twelve_tone_obstacle,
 )
-from poser.core.graph import Graph
 from poser.core.interpreting import interpret_marks
 from poser.core.jsonvalue import JsonValue
-from poser.core.loading import load_song
 from poser.core.marks import Mark, Marks
 from poser.core.names import Identifier, NodeName
 from poser.core.ports import Claim, Vocabulary
@@ -239,17 +235,81 @@ def test_the_other_third_contradicts_a_chord() -> None:
         "34% of the sounding time is on E, which makes this chord major, not Cm"
     )
     assert chord("C").check(evenly(C, DS, G)) == Contradicts(
-        "34% of the sounding time is on D#, which makes this chord minor, not C"
+        "34% of the sounding time is on Eb, which makes this chord minor, not C"
     )
 
 
 def test_the_other_seventh_contradicts_a_chord() -> None:
     assert chord("Cmaj7").check(evenly(C, E, G, AS)) == Contradicts(
-        "25% of the sounding time is on A#, which makes this chord a dominant seventh, not Cmaj7"
+        "25% of the sounding time is on Bb, which makes this chord a dominant seventh, not Cmaj7"
     )
     assert chord("C7").check(evenly(C, E, G, B)) == Contradicts(
         "25% of the sounding time is on B, which makes this chord a major seventh, not C7"
     )
+
+
+def test_a_chord_warning_echoes_the_label_and_spells_notes_as_its_root_is_spelled() -> None:
+    far = evenly(D, E, FS, A, B)
+    rest = "0% of the sounding time is on the tones of {}, most of the rest on {}"
+
+    assert chord("Db").check(far) == Contradicts(rest.format("Db", "D, E and Gb"))
+    assert chord("C#").check(far) == Contradicts(rest.format("C#", "D, E and F#"))
+    assert chord("Db/Ab").check(evenly(D, E, FS)) == Contradicts(
+        rest.format("Db/Ab", "D, E and Gb")
+    )
+    assert chord("Bbmaj7").check(evenly(AS, D, F, GS)) == Contradicts(
+        "25% of the sounding time is on Ab, which makes this chord a dominant seventh, not Bbmaj7"
+    )
+    assert chord("F#").check(evenly(FS, A, CS)) == Contradicts(
+        "34% of the sounding time is on A, which makes this chord minor, not F#"
+    )
+    # A natural root spells only a clashing minor third or minor seventh with a flat.
+    assert chord("C").check(held({C: 1, DS: 1, FS: 1, GS: 1, AS: 1})) == Contradicts(
+        "20% of the sounding time is on the tones of C, most of the rest on Eb, F# and G#"
+    )
+    assert Chord(1, "maj", 1).check(far) == Contradicts(rest.format("C#", "D, E and F#"))
+
+
+def test_a_key_warning_echoes_the_label_and_spells_notes_as_its_tonic_is_spelled() -> None:
+    vocabulary = KeyVocabulary()
+    tally = evenly(CS, DS, F, FS, GS, AS, C, D, E, A)
+    outside = "30% of the sounding time is outside {}, most on {}"
+    flat, sharp = vocabulary.parse("Db major"), vocabulary.parse("C# major")
+
+    assert isinstance(flat, KeyMark)
+    assert isinstance(sharp, KeyMark)
+    assert flat == sharp
+    assert flat.check(tally) == Contradicts(outside.format("Db major", "D, E and A"))
+    assert sharp.check(tally) == Contradicts(outside.format("C# major", "D, E and A"))
+    assert flat.check(evenly(CS, DS, F, GS, AS, B, D)) == Contradicts(
+        "29% of the sounding time is outside Db major, most on D and B"
+    )
+    flat_f, natural_f = vocabulary.parse("Bb major"), vocabulary.parse("F major")
+    assert isinstance(flat_f, KeyMark)
+    assert isinstance(natural_f, KeyMark)
+    black = evenly(AS, D, F, CS, FS, GS)
+    assert flat_f.check(black) == Contradicts(
+        "50% of the sounding time is outside Bb major, most on Db, Gb and Ab"
+    )
+    assert natural_f.check(evenly(F, A, C, CS, FS, GS)) == Contradicts(
+        "50% of the sounding time is outside F major, most on C#, F# and G#"
+    )
+
+
+def test_the_guides_examples_of_wrong_labels_that_pass_behave_as_stated() -> None:
+    scale = evenly(C, D, E, F, G, A, B, C + 12)
+    triads = held({C: 8, E: 8, G: 8, F: 4, A: 4, C + 12: 4, B: 4, D: 4, G + 12: 4})
+    keys = {mode: KeyMark(0, mode) for mode in ("lydian", "mixolydian", "minor")}
+
+    assert [key.check(scale) for key in keys.values()] == [Agrees()] * 3
+    assert keys["lydian"].check(triads) == keys["mixolydian"].check(triads) == Agrees()
+    assert keys["minor"].check(triads) == Contradicts(
+        "17% of the sounding time is outside C minor, most on E"
+    )
+    for label in ("C/F#", "Csus4", "Csus2"):
+        assert chord(label).check(evenly(C, E, G)) == Agrees(), label
+    assert chord("C").check(evenly(C, F, G)) == Agrees()
+    assert chord("C").check(evenly(E, G)) == Agrees()
 
 
 def test_the_chord_clash_limit_is_pinned() -> None:
@@ -358,23 +418,15 @@ def test_generated_chords_agree_with_their_labels_and_not_with_altered_ones() ->
 VOCABULARIES: tuple[Vocabulary, ...] = (KeyVocabulary(), ChordsVocabulary())
 
 
-def packaged_songs() -> dict[str, Graph]:
-    return {
-        "showcase": build_showcase().graph(),
-        "demo": load_song(SURGE_DIR / "demo.yaml", SONG_FORMATS).graph,
-    }
+def test_every_showcase_key_and_chord_mark_agrees_with_its_notes() -> None:
+    authored = interpret_marks(ScoreRequest.default(build_showcase().graph()), VOCABULARIES)
 
-
-@pytest.mark.parametrize("name", ["showcase", "demo"])
-def test_the_packaged_songs_marks_are_never_contradicted(name: str) -> None:
-    authored = interpret_marks(ScoreRequest.default(packaged_songs()[name]), VOCABULARIES)
-
+    assert set(authored.layers) == {"chords", "key"}
     for layer in authored.layers.values():
         assert isinstance(layer, ParsedLayer)
+        assert layer.marks
         for parsed in layer.marks:
-            assert isinstance(parsed.check, Agrees | Unchecked), parsed
-    if name == "showcase":
-        assert set(authored.layers) == {"chords", "key"}
+            assert parsed.check == Agrees(), parsed
 
 
 # `interpret_marks` checking claims
@@ -456,7 +508,7 @@ def test_interpreting_checks_each_claim_in_its_own_span() -> None:
         Contradicts(
             "0% of the sounding time is on the tones of F#, most of the rest on C, E and G"
         ),
-        Unchecked("nothing sounds"),
+        Unchecked("no selected notes sound"),
         Agrees(),
     ]
     assert checks(authored.layers["key"]) == [Agrees()]
@@ -484,7 +536,7 @@ def test_a_silent_span_is_unchecked_without_calling_the_claim() -> None:
 
     authored = interpret_marks(ScoreRequest.default(song.graph()), [Fixed("probe", Probe(fail))])
 
-    assert checks(authored.layers["probe"]) == [Unchecked("nothing sounds")]
+    assert checks(authored.layers["probe"]) == [Unchecked("no selected notes sound")]
 
 
 def test_a_mark_past_the_song_s_end_is_tallied_up_to_the_end() -> None:

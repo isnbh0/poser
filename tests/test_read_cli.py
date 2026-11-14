@@ -11,6 +11,7 @@ from workspaces import CommandWorkspace, make_workspace
 from poser.cli import read
 from poser.compose import PRESETS
 from poser.core.jsonvalue import json_object
+from poser.core.meter import Meter, MeterSpan
 from poser.core.reading import OUTCOME_TAGS
 
 CADENCE = [(i, p, 1) for i, p in enumerate([60, 62, 64, 65, 67, 69, 71])] + [(7, 72, 4)]
@@ -172,6 +173,27 @@ def test_a_song_of_unpitched_tracks_reads_no_track(
 def test_span_boundaries_print_without_float_noise() -> None:
     assert read._beat(3 * 1.1) == "3.3"
     assert read._beat(16.0) == "16"
+
+
+def test_a_range_names_bars_only_when_every_beat_in_it_lies_in_a_bar() -> None:
+    gapped = Meter([MeterSpan(0, 4, 8), MeterSpan(12, 3)]).bars(18)
+    changed = Meter([MeterSpan(0, 4, 8), MeterSpan(8, 3)]).bars(14)
+
+    assert read._span(4, 15, gapped) == "beats 4-15"
+    assert read._span(0, 18, gapped) == "beats 0-18"
+    assert read._span(0, 8, gapped) == "beats 0-8 (bars 1-2)"
+    assert read._span(12, 18, gapped) == "beats 12-18 (bars 3-4)"
+    assert read._span(8, 12, gapped) == "beats 8-12"
+    assert read._span(4, 11, changed) == "beats 4-11 (bars 2-3)"
+    assert read._span(4, 10, changed) == "beats 4-10"
+
+
+def test_a_range_matches_bars_whose_beats_print_the_same() -> None:
+    bars = Meter([MeterSpan(0, 1.1)]).bars(11)
+
+    assert read._span(3.3, 6.6, bars) == "beats 3.3-6.6 (bars 4-6)"
+    assert read._span(3.3, 4.4, bars) == "beats 3.3-4.4 (bar 4)"
+    assert read._span(3.31, 6.6, bars) == "beats 3.31-6.6"
 
 
 # Marks
@@ -428,7 +450,7 @@ def test_a_failing_vocabulary_exits_1(
 
 # Claim checks: one line at most under a mark, by its check and its `deliberate` flag.
 
-NOTHING_SOUNDS = "nothing sounds"
+NOTHING_SOUNDS = "no selected notes sound"
 
 
 @pytest.mark.parametrize(
@@ -532,7 +554,7 @@ def test_a_track_selection_narrows_the_notes_a_claim_is_checked_against(
     assert read.main([str(song)]) == 0
     assert capsys.readouterr().out.startswith(
         header + "    warning: 37% of the sounding time is on the tones of C, most of the rest on "
-        "C#, D# and F#\n"
+        "C#, Eb and F#\n"
     )
 
     assert read.main([str(song), "--track", "keys"]) == 0
