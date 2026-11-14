@@ -24,10 +24,10 @@ def write_yaml(path: Path, effects: list[str]) -> Path:
 
 def write_graph_script(path: Path) -> Path:
     path.write_text(
-        "from poser import Graph, Node, Note, Wire\n\n\n"
+        "from poser import EffectNode, Graph, Note, TrackNode, Wire\n\n\n"
         "def build() -> Graph:\n"
-        "    lead = Node('lead', 'track', sound='synth', notes=(Note(0, 60, 1, 100),))\n"
-        "    room = Node('room', 'effect', effect='reverb')\n"
+        "    lead = TrackNode('lead', sound='synth', notes=(Note(0, 60, 1, 100),))\n"
+        "    room = EffectNode('room', effect='reverb')\n"
         "    return Graph(120, (lead, room), (Wire('lead', 'room', 'audio'),))\n"
     )
     return path

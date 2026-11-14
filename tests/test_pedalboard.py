@@ -75,8 +75,9 @@ from poser.core.ports import (
     CaptureFailure,
     CaptureRequest,
     ConfigError,
+    DelayMember,
+    EffectMember,
     EffectRenderRequest,
-    GroupMember,
     GroupRenderRequest,
     RenderFailure,
     RenderRequest,
@@ -2136,19 +2137,15 @@ def group_request(tmp_path: Path, frames: int = 1200) -> GroupRenderRequest:
     return GroupRenderRequest(
         frames=frames,
         members=(
-            GroupMember(NodeName("late"), None, BUFFER_SIZE, silent, None),
-            GroupMember(
+            DelayMember(NodeName("late"), BUFFER_SIZE, silent),
+            EffectMember(
                 NodeName("loop"),
                 ResolvedEffect(
                     "sum", "sum", Json.of({"path": None, "builtin": "sum", "parameters": {}})
                 ),
-                None,
                 track,
-                None,
             ),
-            GroupMember(
-                NodeName("loop.drive"), resolved_recipe(make_effect(tmp_path)), None, silent, None
-            ),
+            EffectMember(NodeName("loop.drive"), resolved_recipe(make_effect(tmp_path)), silent),
         ),
         wires=(
             Wire("loop", "late", "audio"),
@@ -2264,12 +2261,10 @@ def test_the_group_adapter_refuses_a_payload_that_is_not_its_own(tmp_path: Path)
     stranger = dataclasses.replace(
         request,
         members=(
-            GroupMember(
+            EffectMember(
                 NodeName("late"),
                 ResolvedEffect("late", "x", Json.of({"state": "x"})),
-                None,
                 request.members[0].audio,
-                None,
             ),
             *request.members[1:],
         ),

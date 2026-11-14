@@ -226,10 +226,10 @@ def test_outside_direct_graph(
 ) -> None:
     outside = workspace.parent / f"{workspace.name}-outside.py"
     outside.write_text(
-        "from poser.core.graph import Graph, Node\n"
+        "from poser.core.graph import Graph, TrackNode\n"
         "from poser.core.song import Note\n"
         "def build():\n"
-        "    return Graph(120, (Node('lead', 'track', sound='synth', "
+        "    return Graph(120, (TrackNode('lead', sound='synth', "
         "notes=(Note(0, 60, 2, 100),)),))\n"
     )
     rolls: list[PianoRoll] = []

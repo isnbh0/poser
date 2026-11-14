@@ -57,5 +57,6 @@ class PianoRoll:
 
 def project_piano_roll(graph: Graph) -> PianoRoll:
     """Project the track nodes' authored notes without consulting instruments."""
-    tracks = (node for node in graph.nodes if node.kind == "track")
-    return PianoRoll(graph.bpm, tuple(PianoRollPanel(node.name, node.notes) for node in tracks))
+    return PianoRoll(
+        graph.bpm, tuple(PianoRollPanel(node.name, node.notes) for node in graph.track_nodes)
+    )

@@ -25,6 +25,8 @@ from poser.core.ports import (
     Captured,
     CaptureFailure,
     CaptureRequest,
+    DelayMember,
+    EffectMember,
     EffectRenderRequest,
     GroupRenderRequest,
     MixInput,
@@ -361,12 +363,12 @@ class FakeEffect:
                 )
             )
             for member in request.members
-            if member.recipe is not None
+            if isinstance(member, EffectMember)
         }
         delayed = {
-            str(member.name): int(member.delay_samples)
+            str(member.name): member.delay_samples
             for member in request.members
-            if member.delay_samples is not None
+            if isinstance(member, DelayMember)
         }
         order = instantaneous_order(
             [str(member.name) for member in request.members],

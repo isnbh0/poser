@@ -21,7 +21,7 @@ from poser.adapters.song_formats import (
     _UniqueKeyLoader,
     write_yaml_song,
 )
-from poser.core.graph import Graph, Node, Wire
+from poser.core.graph import DelayNode, EffectNode, Graph, TrackNode, Wire
 from poser.core.loading import load_song
 from poser.core.marks import Mark, Marks
 from poser.core.song import Note, Song, SongError, Track
@@ -254,12 +254,12 @@ def build():
 
 def test_script_song_may_return_a_graph_the_author_wired(tmp_path: Path) -> None:
     """C14: the direct frontend. The author names every node; a track node stays input-less."""
-    header = "from poser import Graph, Node, Note, Wire\n"
+    header = "from poser import DelayNode, EffectNode, Graph, Note, TrackNode, Wire\n"
     path = tmp_path / "tune.py"
     path.write_text(
         header + "def build():\n"
-        '    lead = Node("lead", "track", sound="serum", notes=(Note(0, 60, 1, 100),))\n'
-        '    drive = Node("lead.drive", "effect", effect="crush")\n'
+        '    lead = TrackNode("lead", sound="serum", notes=(Note(0, 60, 1, 100),))\n'
+        '    drive = EffectNode("lead.drive", effect="crush")\n'
         '    return Graph(120, (lead, drive), (Wire("lead", "lead.drive", "audio"),))\n'
     )
 
@@ -278,14 +278,14 @@ def test_script_song_may_return_a_feedback_graph(tmp_path: Path) -> None:
     path = write_script(
         tmp_path,
         """
-from poser import Graph, Node, Note, Wire
+from poser import DelayNode, EffectNode, Graph, Note, TrackNode, Wire
 
 
 def build():
     note = (Note(0, 60, 1, 100),)
-    lead = Node("lead", "track", sound="serum", notes=note)
-    loop = Node("lead.loop", "effect", effect="crush", notes=note)
-    late = Node("lead.late", "delay", delay_samples=512, notes=note)
+    lead = TrackNode("lead", sound="serum", notes=note)
+    loop = EffectNode("lead.loop", effect="crush")
+    late = DelayNode("lead.late", delay_samples=512)
     return Graph(
         120,
         (lead, loop, late),
@@ -309,13 +309,12 @@ def test_a_feedback_graph_whose_instantaneous_graph_is_cyclic_is_a_song_error(
     path = write_script(
         tmp_path,
         """
-from poser import Graph, Node, Note, Wire
+from poser import EffectNode, Graph, Wire
 
 
 def build():
-    note = (Note(0, 60, 1, 100),)
-    a = Node("a", "effect", effect="crush", notes=note)
-    b = Node("b", "effect", effect="crush", notes=note)
+    a = EffectNode("a", effect="crush")
+    b = EffectNode("b", effect="crush")
     return Graph(120, (a, b), (Wire("a", "b", "audio"), Wire("b", "a", "audio")), mode="feedback")
 """,
     )
@@ -330,9 +329,9 @@ def test_the_record_writes_and_keeps_a_graphs_mode(tmp_path: Path) -> None:
     """C17: the record's `mode` round-trips, so the two regimes never share a record text."""
     fmt = YamlSongFormat()
     note = (Note(0, 60, 1, 100),)
-    lead = Node("lead", "track", sound="serum", notes=note)
-    loop = Node("lead.loop", "effect", effect="crush", notes=note)
-    late = Node("lead.late", "delay", delay_samples=512, notes=note)
+    lead = TrackNode("lead", sound="serum", notes=note)
+    loop = EffectNode("lead.loop", effect="crush")
+    late = DelayNode("lead.late", delay_samples=512)
     wires = (
         Wire("lead", "lead.loop", "audio"),
         Wire("lead.loop", "lead.late", "audio"),
@@ -350,11 +349,11 @@ def test_the_record_writes_and_keeps_a_graphs_mode(tmp_path: Path) -> None:
 
 def test_a_misshapen_graph_from_a_script_reports_the_path(tmp_path: Path) -> None:
     """The same constructor laws hold, with the script's path before each problem."""
-    header = "from poser import Graph, Node, Note, Wire\n"
+    header = "from poser import DelayNode, EffectNode, Graph, Note, TrackNode, Wire\n"
     path = tmp_path / "tune.py"
     path.write_text(
         header + "def build():\n"
-        '    lead = Node("lead", "track", sound="serum", notes=(Note(0, 60, 1, 100),))\n'
+        '    lead = TrackNode("lead", sound="serum", notes=(Note(0, 60, 1, 100),))\n'
         '    return Graph(120, (lead,), (Wire("lead", "ghost", "audio"),))\n'
     )
 
@@ -497,8 +496,8 @@ def test_yaml_format_meets_the_record_writer_contract() -> None:
 def test_the_yaml_record_writer_accepts_a_graph() -> None:
     """C17: a graph song's record text is the graph's own data, wiring and mode included."""
     fmt = YamlSongFormat()
-    lead = Node("lead", "track", sound="serum", notes=(Note(0, 60, 1, 100),))
-    drive = Node("lead.drive", "effect", effect="crush")
+    lead = TrackNode("lead", sound="serum", notes=(Note(0, 60, 1, 100),))
+    drive = EffectNode("lead.drive", effect="crush")
     graph = Graph(120, (lead, drive), (Wire("lead", "lead.drive", "audio"),))
 
     text = fmt.dump(graph)

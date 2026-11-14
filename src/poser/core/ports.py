@@ -14,7 +14,7 @@ from typing import Protocol, cast, runtime_checkable
 
 from poser.core.audio import Audio
 from poser.core.cache import Stamp, StampProblem
-from poser.core.graph import Graph, Node, Wire
+from poser.core.graph import DelayNode, EffectNode, Graph, GraphNode, TrackNode, Wire
 from poser.core.jsonvalue import Json
 from poser.core.names import Identifier, NodeName, SongId, Suffix
 from poser.core.performance import Performance, PitchSupport
@@ -409,26 +409,42 @@ class Effect(Protocol):
 
 
 @dataclass(frozen=True)
-class GroupMember:
-    """One member of a cycle group: an effect recipe, or a delay with its declared samples,
-    together with the audio and control the group is fed from outside itself."""
+class EffectMember:
+    """An effect member of a cycle group: its resolved recipe, together with the audio and control
+    the group is fed from outside itself."""
 
     name: NodeName
-    recipe: ResolvedEffect | None  # None exactly when the member is a delay node.
-    delay_samples: int | None  # None exactly when the member is an effect node.
+    recipe: ResolvedEffect
     audio: Audio  # The member's summed external audio, whole horizon; silence when it has none.
     control: Audio | None = None  # The member's one external control stem, or None.
 
     def __post_init__(self) -> None:
-        _require("GroupMember", "name", self.name, NodeName)
-        if (self.recipe is None) == (self.delay_samples is None):
-            raise ValueError(
-                "GroupMember needs exactly one of recipe and delay_samples, got "
-                f"{self.recipe!r} and {self.delay_samples!r}"
-            )
-        _require("GroupMember", "audio", self.audio, Audio)
+        _require("EffectMember", "name", self.name, NodeName)
+        _require("EffectMember", "recipe", self.recipe, ResolvedEffect)
+        _require("EffectMember", "audio", self.audio, Audio)
         if self.control is not None:
-            _require("GroupMember", "control", self.control, Audio)
+            _require("EffectMember", "control", self.control, Audio)
+
+
+@dataclass(frozen=True)
+class DelayMember:
+    """A delay member of a cycle group: its declared samples, together with the audio and control
+    the group is fed from outside itself."""
+
+    name: NodeName
+    delay_samples: int
+    audio: Audio  # The member's summed external audio, whole horizon; silence when it has none.
+    control: Audio | None = None  # The member's one external control stem, or None.
+
+    def __post_init__(self) -> None:
+        _require("DelayMember", "name", self.name, NodeName)
+        if not (is_int(self.delay_samples) and self.delay_samples > 0):
+            raise ValueError(
+                f"DelayMember.delay_samples must be a positive integer, got {self.delay_samples!r}"
+            )
+        _require("DelayMember", "audio", self.audio, Audio)
+        if self.control is not None:
+            _require("DelayMember", "control", self.control, Audio)
 
 
 @dataclass(frozen=True)
@@ -441,7 +457,7 @@ class GroupRenderRequest:
     """
 
     frames: int  # Every member's input, control, and output hold exactly this many frames.
-    members: tuple[GroupMember, ...]
+    members: tuple[EffectMember | DelayMember, ...]
     wires: tuple[Wire, ...]  # Wires whose ends are both members; nothing else.
     outputs: tuple[tuple[NodeName, Path], ...]  # One output path per member.
 
@@ -450,8 +466,17 @@ class GroupRenderRequest:
             raise ValueError(
                 f"GroupRenderRequest.frames must be a positive integer, got {self.frames!r}"
             )
-        members = _tuple_of("GroupRenderRequest", "members", self.members, GroupMember)
-        object.__setattr__(self, "members", members)
+        if not isinstance(self.members, Sequence) or isinstance(self.members, str):
+            raise ValueError(f"GroupRenderRequest.members must be a sequence, got {self.members!r}")
+        members: list[EffectMember | DelayMember] = []
+        for member in cast("Sequence[object]", self.members):
+            if not isinstance(member, EffectMember | DelayMember):
+                raise ValueError(
+                    "GroupRenderRequest.members must hold only EffectMember or DelayMember, "
+                    f"got {member!r}"
+                )
+            members.append(member)
+        object.__setattr__(self, "members", tuple(members))
         if not members:
             raise ValueError("GroupRenderRequest.members must hold at least one member")
         names = [member.name for member in members]
@@ -462,7 +487,7 @@ class GroupRenderRequest:
                 member.control is not None and member.control.frames != self.frames
             ):
                 raise ValueError(
-                    f"GroupMember {member.name!r}'s audio must hold the request's "
+                    f"group member {member.name!r}'s audio must hold the request's "
                     f"{self.frames} frames"
                 )
         wires = _tuple_of("GroupRenderRequest", "wires", self.wires, Wire)
@@ -645,14 +670,14 @@ class SectionInput:
     """What a report section sees for one node or the mix."""
 
     song: Graph
-    node: Node | None  # None for the mix.
+    node: GraphNode | None  # None for the mix.
     audio: Audio  # The node's stem before gain, or the mix.
     measurements: Measurements
 
     def __post_init__(self) -> None:
         _require("SectionInput", "song", self.song, Graph)
         if self.node is not None:
-            _require("SectionInput", "node", self.node, Node)
+            _require("SectionInput", "node", self.node, (TrackNode, EffectNode, DelayNode))
         _require("SectionInput", "audio", self.audio, Audio)
         _require("SectionInput", "measurements", self.measurements, Measurements)
 

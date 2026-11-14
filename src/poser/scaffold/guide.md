@@ -168,9 +168,10 @@ for manifest details, portability, and reproducibility limits.
 
 ## Routing
 
-With the script format enabled, `build()` may return a `Graph` of named `Node`s joined by `Wire`s.
-An effect node names a recipe from `poser.toml`; a track node is a source and takes no incoming
-wires. A node may feed many nodes. A wire carries `audio`, scaled by its `gain_db`, or `control`.
+With the script format enabled, `build()` may return a `Graph` of named nodes joined by `Wire`s.
+A `TrackNode` plays a sound and is a source, taking no incoming wires. An `EffectNode` names a
+recipe from `poser.toml`. A `DelayNode` delays its summed inputs by `delay_samples`, with no dry
+signal. A node may feed many nodes. A wire carries `audio`, scaled by its `gain_db`, or `control`.
 A node accepts at most one control wire, and only if its recipe documents a control input (a
 sidechain duck, for example).
 
@@ -185,26 +186,28 @@ authored. This example assumes recipes named `reverb` and `sum` in `poser.toml`,
 passthrough:
 
 ```python
-from poser import Graph, Node, Wire, notes
+from poser import DelayNode, EffectNode, Graph, TrackNode, Wire, notes
 
 
 def build() -> Graph:
     return Graph(
         bpm=100,
         nodes=(
-            Node("lead", "track", sound="{first_instrument}", notes=notes([60], 0, 1, 100)),
-            Node("wet", "effect", effect="reverb", gain_db=-6),
-            Node("dry", "effect", effect="sum", gain_db=-3),
+            TrackNode("lead", sound="{first_instrument}", notes=notes([60], 0, 1, 100)),
+            DelayNode("pre", delay_samples=2400),
+            EffectNode("wet", effect="reverb", gain_db=-6),
+            EffectNode("dry", effect="sum", gain_db=-3),
         ),
         wires=(
-            Wire("lead", "wet", "audio", gain_db=-12),
+            Wire("lead", "pre", "audio", gain_db=-12),
+            Wire("pre", "wet", "audio"),
             Wire("lead", "dry", "audio"),
         ),
     )
 ```
 
-Only `wet` and `dry` enter the mix. The wet recipe receives the lead at -12 dB; its output
-enters the mix at -6 dB. The dry branch receives the unscaled lead and enters at -3 dB.
+Only `wet` and `dry` enter the mix. The wet recipe receives the lead at -12 dB and 2400 samples
+(50 ms) late; its output enters the mix at -6 dB. The dry branch receives the unscaled lead and enters at -3 dB.
 
 ## Feedback
 

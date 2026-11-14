@@ -11,12 +11,16 @@ from poser.core.audio import Audio
 from poser.core.capturing import SaveRequest
 from poser.core.checking import CheckResult
 from poser.core.checks import CheckStatus
+from poser.core.graph import Wire
 from poser.core.jsonvalue import Json
-from poser.core.names import Identifier, TrackName
+from poser.core.names import Identifier, NodeName, TrackName
 from poser.core.ports import (
     AdapterContext,
     CaptureFailure,
+    DelayMember,
+    EffectMember,
     EffectRenderRequest,
+    GroupRenderRequest,
     MixInput,
     Record,
     RenderFailure,
@@ -172,3 +176,31 @@ def test_effect_types_refuse_what_their_rules_forbid() -> None:
     request = EffectRenderRequest(AUDIO, RECIPE, Path("out.npy"), control=AUDIO)
     assert request.control is not None
     assert request.control.frames == request.audio.frames
+
+
+def test_cycle_members_hold_only_their_own_kinds_payload() -> None:
+    name = NodeName("loop")
+    assert EffectMember(name, RECIPE, AUDIO).recipe == RECIPE
+    assert DelayMember(name, 512, AUDIO).delay_samples == 512
+    with pytest.raises(ValueError, match="recipe"):
+        EffectMember(name, "drive", AUDIO)  # ty: ignore[invalid-argument-type]
+    for samples in (512.0, "512", True, 0):
+        with pytest.raises(ValueError, match="delay_samples"):
+            DelayMember(name, samples, AUDIO)  # ty: ignore[invalid-argument-type]
+    with pytest.raises(TypeError):
+        EffectMember(name, RECIPE, AUDIO, delay_samples=512)  # ty: ignore[unknown-argument]
+    with pytest.raises(TypeError):
+        DelayMember(name, 512, AUDIO, recipe=RECIPE)  # ty: ignore[unknown-argument]
+
+
+def test_a_group_request_holds_only_cycle_members(tmp_path: Path) -> None:
+    members = (
+        EffectMember(NodeName("loop"), RECIPE, AUDIO),
+        DelayMember(NodeName("late"), 512, AUDIO),
+    )
+    outputs = tuple((member.name, tmp_path / f"{member.name}.npy") for member in members)
+    wires = (Wire("loop", "late", "audio"), Wire("late", "loop", "audio"))
+    request = GroupRenderRequest(AUDIO.frames, members, wires, outputs)
+    assert request.members == members
+    with pytest.raises(ValueError, match="EffectMember or DelayMember"):
+        GroupRenderRequest(AUDIO.frames, (*members, "late"), wires, outputs)  # ty: ignore[invalid-argument-type]

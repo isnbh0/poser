@@ -5,7 +5,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from poser.core.graph import Graph
+from poser.core.graph import EffectNode, Graph
 from poser.core.ports import SongFormat
 from poser.core.song import Song, SongError
 
@@ -28,7 +28,7 @@ def check_effect_recipes(source: Song | Graph, effects: Sequence[str]) -> None:
         problems = [
             f"nodes[{index}]: no effect recipe {node.effect!r} in poser.toml"
             for index, node in enumerate(source.nodes)
-            if node.kind == "effect" and node.effect not in known
+            if isinstance(node, EffectNode) and node.effect not in known
         ]
     if problems:
         raise SongError(problems)

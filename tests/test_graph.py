@@ -3,6 +3,7 @@
 import math
 import re
 from collections.abc import Callable, Sequence
+from dataclasses import replace
 from itertools import combinations, permutations
 from typing import cast
 
@@ -10,12 +11,16 @@ import pytest
 import yaml
 from helpers import SURGE_DIR
 
+import poser
 from poser.core.graph import (
     ACCEPTS_WIRES,
     BUFFER_SIZE,
+    DelayNode,
+    EffectNode,
     Graph,
     GraphError,
-    Node,
+    GraphNode,
+    TrackNode,
     Wire,
     instantaneous_order,
 )
@@ -31,31 +36,30 @@ def construct[T](cls: type[T], **values: object) -> T:
 NOTE: tuple[Note, ...] = (Note(0, 60, 1, 100),)
 
 
-def make_node(**changes: object) -> Node:
+def make_node(**changes: object) -> TrackNode:
     """A track node like every song track compiles to, with the changes applied."""
     values: dict[str, object] = {
         "name": "lead",
-        "kind": "track",
         "gain_db": 0.0,
         "sound": "serum",
         "notes": NOTE,
         "cc": (),
     }
-    return construct(Node, **(values | changes))
+    return construct(TrackNode, **(values | changes))
 
 
-def named_nodes(*names: str) -> tuple[Node, ...]:
+def named_nodes(*names: str) -> tuple[GraphNode, ...]:
     return tuple(make_node(name=name) for name in names)
 
 
-def effect_nodes(*names: str) -> tuple[Node, ...]:
+def effect_nodes(*names: str) -> tuple[GraphNode, ...]:
     """Effect nodes, which accept audio wires, for the wiring fixtures."""
-    return tuple(make_node(name=name, kind="effect", effect="drive") for name in names)
+    return tuple(EffectNode(name, effect="drive") for name in names)
 
 
-def delay_node(name: str, delay_samples: int) -> Node:
+def delay_node(name: str, delay_samples: int) -> DelayNode:
     """A delay node, whose one payload is the sample count its line delays by."""
-    return make_node(name=name, kind="delay", delay_samples=delay_samples)
+    return DelayNode(name, delay_samples=delay_samples)
 
 
 def make_graph(**changes: object) -> Graph:
@@ -113,7 +117,7 @@ def cycle_in(problem: str) -> tuple[str, ...] | None:
     return None
 
 
-def table_accepts(wire: Wire, wires: tuple[Wire, ...], nodes: tuple[Node, ...]) -> bool:
+def table_accepts(wire: Wire, wires: tuple[Wire, ...], nodes: tuple[GraphNode, ...]) -> bool:
     """Whether the acceptance table lets the wire into its target."""
     kinds = {node.name: node.kind for node in nodes}
     limit = ACCEPTS_WIRES[kinds[wire.to_name]].get(wire.kind, 0)
@@ -322,7 +326,6 @@ def test_to_data_separates_graphs_that_differ_and_joins_equal_ones() -> None:
 @pytest.mark.parametrize(
     ("build", "location"),
     [
-        (lambda: construct(Node, name="lead", kind="mixer"), "Node.kind:"),
         (lambda: make_node(gain_db=13), "Node.gain_db:"),
         (lambda: make_node(gain_db="loud"), "Node.gain_db:"),
         (lambda: make_node(sound=None), "Node.sound:"),
@@ -335,12 +338,16 @@ def test_to_data_separates_graphs_that_differ_and_joins_equal_ones() -> None:
             "Node.cc[1].beat:",
         ),
         (lambda: make_node(cc=(ControlChange(0, 1, 0, "linear"),)), "Node.cc[0].shape:"),
-        (lambda: construct(Node, name="wet", kind="effect"), "Node.effect:"),
-        (lambda: construct(Node, name="late", kind="delay"), "Node.delay_samples:"),
+        (lambda: construct(EffectNode, name="wet", effect=""), "Node.effect:"),
+        (lambda: construct(EffectNode, name="wet", effect=None), "Node.effect:"),
+        (lambda: construct(EffectNode, name="wet", effect="drive", gain_db=13), "Node.gain_db:"),
+        (lambda: construct(DelayNode, name="late", delay_samples=0), "Node.delay_samples:"),
+        (lambda: construct(DelayNode, name="late", delay_samples=-5), "Node.delay_samples:"),
         (
-            lambda: construct(Node, name="late", kind="delay", delay_samples=1.5),
+            lambda: construct(DelayNode, name="late", delay_samples=1.5),
             "Node.delay_samples:",
         ),
+        (lambda: construct(DelayNode, name="a b", delay_samples=5), "Node.name:"),
         (lambda: Wire("a b", "b", "audio"), "Wire.from_name:"),
         (lambda: Wire("a", "b/c", "audio"), "Wire.to_name:"),
         (lambda: construct(Wire, from_name="a", to_name="b", kind="midi"), "Wire.kind:"),
@@ -365,8 +372,8 @@ def test_invalid_graph_object_raises_with_its_location(
 
 
 def test_effect_and_delay_nodes_carry_their_field() -> None:
-    assert Node("wet", "effect", effect="plate").effect == "plate"
-    assert Node("late", "delay", delay_samples=240).delay_samples == 240
+    assert EffectNode("wet", effect="plate").effect == "plate"
+    assert DelayNode("late", delay_samples=240).delay_samples == 240
 
 
 # Node identity (L-names): names become file names.
@@ -389,8 +396,8 @@ def test_node_name_must_be_safe_as_a_file_name(name: str) -> None:
 
 
 def test_a_chain_instance_name_is_a_legal_node_name() -> None:
-    assert Node("lead.drive", "effect", effect="drive").name == "lead.drive"
-    assert Node("lead.drive.2", "effect", effect="drive").name == "lead.drive.2"
+    assert EffectNode("lead.drive", effect="drive").name == "lead.drive"
+    assert EffectNode("lead.drive.2", effect="drive").name == "lead.drive.2"
     assert Wire("lead", "lead.drive", "audio").to_name == "lead.drive"
     with pytest.raises(GraphError) as raised:
         make_node(name="lead..drive")
@@ -447,7 +454,7 @@ def test_song_graph_is_one_isolated_node_per_track(song: Song) -> None:
     assert graph.seconds(1) == song.seconds(1)
     assert [node.name for node in graph.nodes] == [track.name for track in song.tracks]
     for node, track in zip(graph.nodes, song.tracks, strict=True):
-        assert node.kind == "track"
+        assert isinstance(node, TrackNode)
         assert node.gain_db == track.gain
         assert node.sound == track.sound
         assert node.notes == track.notes
@@ -475,9 +482,9 @@ def test_a_feedback_loop_through_a_delay_is_admitted() -> None:
     loop's instantaneous graph is the straight line drive -> sum -> delay."""
     nodes = (
         make_node(name="track"),
-        make_node(name="loop", kind="effect", effect="sum"),
+        EffectNode("loop", effect="sum"),
         delay_node("late", BUFFER_SIZE),
-        make_node(name="loop.drive", kind="effect", effect="drive"),
+        EffectNode("loop.drive", effect="drive"),
     )
     wires = loop_wires(
         ("track", "loop"),
@@ -534,7 +541,7 @@ def test_an_instantaneous_cycle_naming_no_delay_still_names_its_members() -> Non
 FEEDBACK_NODES = ("a", "b", "c")
 
 
-def feedback_nodes() -> tuple[Node, ...]:
+def feedback_nodes() -> tuple[GraphNode, ...]:
     """One delay and two effects, so every wire set meets both kinds."""
     return (delay_node("a", BUFFER_SIZE), *effect_nodes("b", "c"))
 
@@ -578,7 +585,7 @@ def test_the_instantaneous_law_admits_more_than_the_acyclic_one() -> None:
 
 
 def test_an_in_cycle_delay_under_one_block_is_refused_naming_the_bound() -> None:
-    nodes = (make_node(name="track"), make_node(name="loop", kind="effect", effect="sum"))
+    nodes = (make_node(name="track"), EffectNode("loop", effect="sum"))
     wires = loop_wires(("track", "loop"), ("loop", "late"), ("late", "loop"))
 
     with pytest.raises(GraphError) as raised:
@@ -595,13 +602,13 @@ def test_an_in_cycle_delay_under_one_block_is_refused_naming_the_bound() -> None
 def test_an_in_cycle_delay_of_one_block_is_accepted() -> None:
     nodes = (
         make_node(name="track"),
-        make_node(name="loop", kind="effect", effect="sum"),
+        EffectNode("loop", effect="sum"),
         delay_node("late", BUFFER_SIZE),
     )
     wires = loop_wires(("track", "loop"), ("loop", "late"), ("late", "loop"))
     graph = Graph(120, nodes, wires, "feedback")
 
-    assert graph.nodes[2].delay_samples == BUFFER_SIZE
+    assert graph.nodes[2] == DelayNode("late", BUFFER_SIZE)
 
 
 def test_a_standalone_delay_may_declare_one_sample() -> None:
@@ -609,7 +616,7 @@ def test_a_standalone_delay_may_declare_one_sample() -> None:
     graph = Graph(120, nodes, loop_wires(("track", "late")))
 
     assert graph.mode == "acyclic"
-    assert graph.nodes[1].delay_samples == 1
+    assert graph.nodes[1] == DelayNode("late", 1)
 
 
 def test_a_delay_node_takes_audio_wires_and_no_control_wire() -> None:
@@ -628,10 +635,10 @@ def test_a_delay_node_takes_audio_wires_and_no_control_wire() -> None:
 # Mode isolation (C19): the same value flips acceptance with the mode; acyclic messages hold.
 
 
-def loopish_nodes() -> tuple[Node, ...]:
+def loopish_nodes() -> tuple[GraphNode, ...]:
     return (
         make_node(name="track"),
-        make_node(name="loop", kind="effect", effect="sum"),
+        EffectNode("loop", effect="sum"),
         delay_node("late", BUFFER_SIZE),
     )
 
@@ -725,3 +732,107 @@ def test_to_data_writes_marks_only_when_there_are_any() -> None:
     assert list(marked.to_data()) == ["bpm", "mode", "nodes", "wires", "marks"]
     assert marked.to_data()["marks"] == {"parts": [{"beat": 0, "end": 4.5, "text": "intro"}]}
     assert {k: v for k, v in marked.to_data().items() if k != "marks"} == plain.to_data()
+
+
+# Typed nodes: one type per kind, so no node carries another kind's payload.
+
+
+def test_a_graph_of_each_node_type_keeps_its_plain_data() -> None:
+    """The record text the single all-optional node gave, recorded before the types split."""
+    graph = Graph(
+        120,
+        (
+            TrackNode(
+                "lead",
+                sound="synth",
+                notes=(Note(0, 60.5, 1, 100),),
+                cc=(ControlChange(0, 1, 64),),
+                gain_db=-3,
+            ),
+            TrackNode("kit", sound="kit", notes=(Note(0, 36, 1, 90),), pitched=False),
+            EffectNode("wet", effect="reverb", gain_db=-6.0),
+            DelayNode("late", delay_samples=240),
+        ),
+        (
+            Wire("lead", "wet", "audio", -3),
+            Wire("kit", "wet", "audio"),
+            Wire("wet", "late", "audio"),
+        ),
+    )
+
+    assert graph.to_data() == {
+        "bpm": 120,
+        "mode": "acyclic",
+        "nodes": [
+            {
+                "name": "lead",
+                "kind": "track",
+                "gain_db": -3,
+                "sound": "synth",
+                "notes": [{"beat": 0, "pitch": 60.5, "length": 1, "velocity": 100}],
+                "cc": [{"beat": 0, "control": 1, "value": 64}],
+            },
+            {
+                "name": "kit",
+                "kind": "track",
+                "gain_db": 0,
+                "sound": "kit",
+                "notes": [{"beat": 0, "pitch": 36, "length": 1, "velocity": 90}],
+                "pitched": False,
+            },
+            {"name": "wet", "kind": "effect", "gain_db": -6, "effect": "reverb"},
+            {"name": "late", "kind": "delay", "gain_db": 0, "delay_samples": 240},
+        ],
+        "wires": [
+            {"from_name": "lead", "to_name": "wet", "kind": "audio", "gain_db": -3},
+            {"from_name": "kit", "to_name": "wet", "kind": "audio", "gain_db": 0},
+            {"from_name": "wet", "to_name": "late", "kind": "audio", "gain_db": 0},
+        ],
+    }
+
+
+def test_a_node_type_takes_no_other_kinds_payload() -> None:
+    with pytest.raises(TypeError):
+        construct(EffectNode, name="wet", effect="reverb", sound="surge", notes=NOTE)
+    with pytest.raises(TypeError):
+        construct(DelayNode, name="late", delay_samples=5, effect="reverb")
+    with pytest.raises(TypeError):
+        construct(TrackNode, name="lead", sound="serum", notes=NOTE, delay_samples=5)
+    assert (TrackNode.kind, EffectNode.kind, DelayNode.kind) == ("track", "effect", "delay")
+
+
+def test_a_graph_refuses_what_is_not_a_graph_node() -> None:
+    with pytest.raises(GraphError) as raised:
+        make_graph(nodes=(make_node(), Track("bass", "serum", NOTE)))
+    assert raised.value.problems[0].startswith("Graph.nodes[1]: must be a graph node, got ")
+
+
+def test_the_composer_api_has_no_untyped_node() -> None:
+    assert not hasattr(poser, "Node")
+    assert {"TrackNode", "EffectNode", "DelayNode", "GraphNode"} <= set(poser.__all__)
+
+
+def test_incoming_returns_the_wires_into_a_node_in_declaration_order() -> None:
+    nodes = (make_node(name="lead"), make_node(name="kick"), *effect_nodes("wet", "duck"))
+    wires = (
+        Wire("kick", "duck", "control"),
+        Wire("kick", "wet", "audio", -6),
+        Wire("lead", "duck", "audio"),
+        Wire("lead", "wet", "audio"),
+    )
+    graph = Graph(120, nodes, wires)
+
+    assert graph.incoming("wet") == (wires[1], wires[3])
+    assert graph.incoming("duck") == (wires[0], wires[2])
+    assert graph.incoming("lead") == ()
+
+
+def test_graphs_equal_whatever_their_construction_history() -> None:
+    nodes = (make_node(name="lead"), *effect_nodes("wet"))
+    wires = (Wire("lead", "wet", "audio"),)
+    queried = Graph(120, nodes, wires)
+    queried.incoming("wet")
+    rebuilt = replace(Graph(120, nodes), wires=list(wires))
+
+    assert queried == rebuilt
+    assert repr(queried) == repr(rebuilt)

@@ -27,7 +27,7 @@ from fakes import (
 from poser.core.analysis import AnalysisTools, analyze_song, measure
 from poser.core.audio import Audio, measure_peak_dbfs, stem_samples, write_raw_audio
 from poser.core.cache import Stamp, node_key
-from poser.core.graph import Graph, Node, Wire
+from poser.core.graph import DelayNode, EffectNode, Graph, TrackNode, Wire
 from poser.core.jsonvalue import Json
 from poser.core.loading import LoadedSong
 from poser.core.names import Identifier, SongId, TrackName
@@ -664,9 +664,9 @@ def test_visualizer_error_propagates_and_leaves_the_record_unfinished(tmp_path: 
 
 def graph_song(*, rewired: bool = False) -> Graph:
     """A lead through one drive, wired by hand, and an untouched bass."""
-    lead = Node("lead", "track", sound="fake", notes=BAR)
-    drive = Node("lead.drive", "effect", effect="drive", gain_db=-6.0)
-    bass = Node("bass", "track", sound="fake:pad", notes=BAR)
+    lead = TrackNode("lead", sound="fake", notes=BAR)
+    drive = EffectNode("lead.drive", effect="drive", gain_db=-6.0)
+    bass = TrackNode("bass", sound="fake:pad", notes=BAR)
     send = Wire("lead", "lead.drive", "audio", gain_db=-12.0 if rewired else 0.0)
     return Graph(120, (lead, drive, bass), (send,))
 
@@ -724,12 +724,12 @@ def test_rewiring_changes_the_record_digest_and_reanalysis_keeps_it(tmp_path: Pa
 def loop_graph() -> Graph:
     """RC5: a track into a sum, through a delay and a drive back into the sum, and a leaf."""
     nodes = (
-        Node("track", "track", sound="fake", notes=BAR),
-        Node("bass", "track", sound="fake:pad", notes=BAR),
-        Node("loop", "effect", effect="sum"),
-        Node("late", "delay", delay_samples=512),
-        Node("loop.drive", "effect", effect="drive"),
-        Node("out", "effect", effect="sum"),
+        TrackNode("track", sound="fake", notes=BAR),
+        TrackNode("bass", sound="fake:pad", notes=BAR),
+        EffectNode("loop", effect="sum"),
+        DelayNode("late", delay_samples=512),
+        EffectNode("loop.drive", effect="drive"),
+        EffectNode("out", effect="sum"),
     )
     wires = (
         Wire("track", "loop", "audio"),

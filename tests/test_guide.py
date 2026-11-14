@@ -45,14 +45,17 @@ MUSIC_HELPERS = (
 )
 COMPOSER_API = [
     "ControlChange",
+    "DelayNode",
+    "EffectNode",
     "Graph",
+    "GraphNode",
     "Mark",
     "Marks",
-    "Node",
     "Note",
     "Song",
     "SongError",
     "Track",
+    "TrackNode",
     "Wire",
     "chord",
     "degree",

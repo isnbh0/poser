@@ -26,7 +26,7 @@ from poser.core import cache, rendering
 from poser.core.analysis import AnalysisTools, analyze_song
 from poser.core.audio import NUM_CHANNELS, SAMPLE_RATE, Audio
 from poser.core.cache import Stamp, StampProblem, node_key, sound_key
-from poser.core.graph import BUFFER_SIZE, Graph, Node, Wire
+from poser.core.graph import BUFFER_SIZE, DelayNode, EffectNode, Graph, GraphNode, TrackNode, Wire
 from poser.core.loading import LoadedSong
 from poser.core.marks import Mark, Marks
 from poser.core.names import Identifier, NodeName, SongId, TrackName
@@ -47,7 +47,7 @@ from poser.core.ports import (
     SongBusyError,
     SoundFailure,
 )
-from poser.core.rendering import ResolvedNode, TrackResult, render_song, resolve_node
+from poser.core.rendering import ResolvedInstrument, TrackResult, render_song, resolve_node
 from poser.core.report import AnalysisStatus, NodeReport, Report
 from poser.core.song import ControlChange, Note, Song, Track
 from poser.core.statuses import (
@@ -161,7 +161,7 @@ def by_name(results: list[TrackResult]) -> dict[NodeName, TrackResult]:
 
 
 def test_node_of_an_unconfigured_instrument_is_unknown_sound() -> None:
-    node = Node("lead", "track", sound="other", notes=NOTE)
+    node = TrackNode("lead", sound="other", notes=NOTE)
     result = resolve_node(node, {Identifier("fake"): make_instrument()})
     assert result == SoundFailure(
         SoundFailureStatus.UNKNOWN_SOUND, "no instrument 'other' in poser.toml"
@@ -171,20 +171,20 @@ def test_node_of_an_unconfigured_instrument_is_unknown_sound() -> None:
 def test_sound_failure_passes_through_resolve_node() -> None:
     failure = SoundFailure(SoundFailureStatus.LOAD_FAILED, "the preset is corrupt")
     instrument = make_instrument(broken=FakeSound(sound_failure=failure))
-    node = Node("lead", "track", sound="fake:broken", notes=NOTE)
+    node = TrackNode("lead", sound="fake:broken", notes=NOTE)
     result = resolve_node(node, {instrument.name: instrument})
     assert result is failure
 
 
 def test_sound_key_changes_with_adapter_id_version_and_identity() -> None:
-    node = Node("lead", "track", sound="fake", notes=NOTE)
+    node = TrackNode("lead", sound="fake", notes=NOTE)
 
     def key(adapter_id: str = "fake", version: str = "1", identity: str = "one") -> str:
         instrument = FakeInstrument(
             "fake", {None: FakeSound(identity=identity)}, version, adapter_id
         )
         resolved = resolve_node(node, {instrument.name: instrument})
-        assert isinstance(resolved, ResolvedNode)
+        assert isinstance(resolved, ResolvedInstrument)
         assert resolved.sound_key == sound_key(adapter_id, version, identity)
         return resolved.sound_key
 
@@ -201,7 +201,7 @@ def test_sound_identity_is_in_the_node_key() -> None:
     def key(identity: str) -> str:
         instrument = FakeInstrument("fake", {None: FakeSound(identity=identity)})
         resolved = resolve_node(node, {instrument.name: instrument})
-        assert isinstance(resolved, ResolvedNode)
+        assert isinstance(resolved, ResolvedInstrument)
         return node_key(graph, node, resolved.sound_key, ())
 
     assert key("one") != key("two")
@@ -244,7 +244,7 @@ def test_render_writes_stamped_stems_and_reports_their_peaks(tmp_path: Path) -> 
     assert isinstance(stamp, Stamp)
     graph = song.graph()
     resolved = resolve_node(graph.nodes[0], setup.instruments)
-    assert isinstance(resolved, ResolvedNode)
+    assert isinstance(resolved, ResolvedInstrument)
     assert stamp.track_key == node_key(graph, graph.nodes[0], resolved.sound_key, ())
     assert stamp.status is StemStatus.RENDERED
     audio = setup.audio_files.read(
@@ -933,7 +933,7 @@ def test_an_effect_refusing_an_instrument_reports_load_failed(tmp_path: Path) ->
 FRAMES = lead_frames(make_song())
 
 
-def graph_of(nodes: tuple[Node, ...], wires: tuple[Wire, ...]) -> Graph:
+def graph_of(nodes: tuple[GraphNode, ...], wires: tuple[Wire, ...]) -> Graph:
     """A direct-frontend graph at one tempo, as a script's `build()` returns one."""
     return Graph(120, nodes, wires)
 
@@ -951,10 +951,10 @@ def test_a_bus_is_a_leaf_whose_sends_scale_and_sum_into_the_mix(tmp_path: Path) 
 
     def bus_graph(hat_send_db: float, hat_gain_db: float = 0.0) -> Graph:
         nodes = (
-            Node("kick", "track", sound="fake:pad", notes=NOTE),
-            Node("snare", "track", sound="fake:pad", notes=NOTE),
-            Node("hat", "track", sound="fake:pad", notes=NOTE, gain_db=hat_gain_db),
-            Node("drums", "effect", effect="sum", gain_db=-6.0),
+            TrackNode("kick", sound="fake:pad", notes=NOTE),
+            TrackNode("snare", sound="fake:pad", notes=NOTE),
+            TrackNode("hat", sound="fake:pad", notes=NOTE, gain_db=hat_gain_db),
+            EffectNode("drums", effect="sum", gain_db=-6.0),
         )
         wires = (
             Wire("kick", "drums", "audio"),
@@ -1006,9 +1006,9 @@ def test_a_control_edge_keys_the_duck_on_both_sides(tmp_path: Path) -> None:
 
     def sidechain_graph(kick_notes: tuple[Note, ...], pad_notes: tuple[Note, ...]) -> Graph:
         nodes = (
-            Node("pad", "track", sound="fake", notes=pad_notes),
-            Node("kick", "track", sound="fake:pad", notes=kick_notes),
-            Node("duck", "effect", effect="duck"),
+            TrackNode("pad", sound="fake", notes=pad_notes),
+            TrackNode("kick", sound="fake:pad", notes=kick_notes),
+            EffectNode("duck", effect="duck"),
         )
         wires = (Wire("pad", "duck", "audio"), Wire("kick", "duck", "control"))
         return graph_of(nodes, wires)
@@ -1044,9 +1044,9 @@ def test_fan_out_splits_into_two_independently_cached_leaves(tmp_path: Path) -> 
     right_effect = FakeEffect("right", identity="right", amount=1.0)
     setup = Setup(tmp_path, effects=(left_effect, right_effect))
     nodes = (
-        Node("lead", "track", sound="fake", notes=NOTE),
-        Node("lead.left", "effect", effect="left"),
-        Node("lead.right", "effect", effect="right"),
+        TrackNode("lead", sound="fake", notes=NOTE),
+        EffectNode("lead.left", effect="left"),
+        EffectNode("lead.right", effect="right"),
     )
     wires = (Wire("lead", "lead.left", "audio"), Wire("lead", "lead.right", "audio"))
 
@@ -1074,9 +1074,9 @@ def test_an_effect_that_takes_no_control_wire_reports_load_failed(tmp_path: Path
     """C13's checked rule at the fake level: the refusal names the effect and the capability."""
     setup = Setup(tmp_path, effect=FakeEffect("drive"))
     nodes = (
-        Node("pad", "track", sound="fake", notes=NOTE),
-        Node("kick", "track", sound="fake:pad", notes=NOTE),
-        Node("wettened", "effect", effect="drive"),
+        TrackNode("pad", sound="fake", notes=NOTE),
+        TrackNode("kick", sound="fake:pad", notes=NOTE),
+        EffectNode("wettened", effect="drive"),
     )
     wires = (Wire("pad", "wettened", "audio"), Wire("kick", "wettened", "control"))
 
@@ -1104,12 +1104,12 @@ def loop_graph(*, delay_samples: int = BUFFER_SIZE, notes: tuple[Note, ...] = NO
     """RC5: a track feeds a sum, the sum runs through a delay and a drive back into itself, and
     the loop also feeds a leaf. A pad stands apart from the loop."""
     nodes = (
-        Node("track", "track", sound="fake", notes=notes),
-        Node("bass", "track", sound="fake:pad", notes=NOTE),
-        Node("loop", "effect", effect="sum"),
-        Node("late", "delay", delay_samples=delay_samples),
-        Node("loop.drive", "effect", effect="drive"),
-        Node("out", "effect", effect="sum"),
+        TrackNode("track", sound="fake", notes=notes),
+        TrackNode("bass", sound="fake:pad", notes=NOTE),
+        EffectNode("loop", effect="sum"),
+        DelayNode("late", delay_samples=delay_samples),
+        EffectNode("loop.drive", effect="drive"),
+        EffectNode("out", effect="sum"),
     )
     wires = (
         Wire("track", "loop", "audio"),
@@ -1258,8 +1258,8 @@ def test_a_standalone_delay_is_a_sample_exact_shift(tmp_path: Path) -> None:
     before the third sample, and cached like any stem."""
     setup = Setup(tmp_path)
     nodes = (
-        Node("track", "track", sound="fake", notes=NOTE),
-        Node("late", "delay", delay_samples=3),
+        TrackNode("track", sound="fake", notes=NOTE),
+        DelayNode("late", delay_samples=3),
     )
     graph = Graph(120, nodes, (Wire("track", "late", "audio"),))
 
@@ -1282,9 +1282,9 @@ def test_a_group_whose_external_upstream_fails_fails_whole(tmp_path: Path) -> No
         effects=FakeEffect("sum", identity="sum", amount=1.0),
     )
     nodes = (
-        Node("track", "track", sound="fake:dead", notes=NOTE),
-        Node("loop", "effect", effect="sum"),
-        Node("late", "delay", delay_samples=BUFFER_SIZE),
+        TrackNode("track", sound="fake:dead", notes=NOTE),
+        EffectNode("loop", effect="sum"),
+        DelayNode("late", delay_samples=BUFFER_SIZE),
     )
     graph = Graph(
         120,
@@ -1472,8 +1472,8 @@ def test_graph_render_keys_are_pinned(tmp_path: Path) -> None:
     graph = Graph(
         110,
         (
-            Node("lead", "track", sound="fake", notes=NOTE, cc=(ControlChange(0, 7, 90),)),
-            Node("room", "effect", effect="drive", gain_db=-6),
+            TrackNode("lead", sound="fake", notes=NOTE, cc=(ControlChange(0, 7, 90),)),
+            EffectNode("room", effect="drive", gain_db=-6),
         ),
         (Wire("lead", "room", "audio", gain_db=-2),),
     )
@@ -1584,9 +1584,9 @@ def test_marks_cannot_change_a_node_key() -> None:
 def test_marks_cannot_change_a_cycle_key() -> None:
     """Fails if a change routes marks into `cycle_key`."""
     note = (Note(0, 60, 1, 100),)
-    lead = Node("lead", "track", sound="fake", notes=note)
-    loop = Node("lead.loop", "effect", effect="crush")
-    late = Node("lead.late", "delay", delay_samples=BUFFER_SIZE)
+    lead = TrackNode("lead", sound="fake", notes=note)
+    loop = EffectNode("lead.loop", effect="crush")
+    late = DelayNode("lead.late", delay_samples=BUFFER_SIZE)
     wires = (
         Wire("lead", "lead.loop", "audio"),
         Wire("lead.loop", "lead.late", "audio"),

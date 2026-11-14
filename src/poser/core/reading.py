@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import ClassVar, Protocol, cast, runtime_checkable
 
-from poser.core.graph import Graph
+from poser.core.graph import Graph, TrackNode
 from poser.core.jsonvalue import JsonValue
 from poser.core.marks import LAYER_PATTERN, LayerName, Mark
 from poser.core.names import Identifier, NodeName
@@ -156,11 +156,6 @@ class Reading[V: ReadingValue]:
         object.__setattr__(self, "spans", typed)
 
 
-def _track_notes(graph: Graph) -> dict[str, tuple[bool, bool, tuple[Note, ...]]]:
-    """Each node's name, with whether it is a track, whether it is pitched, and its notes."""
-    return {node.name: (node.kind == "track", node.pitched, node.notes) for node in graph.nodes}
-
-
 @dataclass(frozen=True)
 class ScoreRequest:
     """A reading of the score, the authored notes, of some of a song's pitched tracks.
@@ -177,15 +172,15 @@ class ScoreRequest:
             raise ValueError(f"ScoreRequest.song must be a Graph, got {self.song!r}")
         if not isinstance(self.tracks, Sequence) or isinstance(self.tracks, str):
             raise ValueError(f"ScoreRequest.tracks must be a sequence, got {self.tracks!r}")
-        known = _track_notes(self.song)
+        known = {node.name: node for node in self.song.nodes}
         names: list[NodeName] = []
         for name in cast("Sequence[object]", self.tracks):
             if not isinstance(name, str) or name not in known:
                 raise ValueError(f"no track {name!r} in the song")
-            is_track, pitched, _ = known[name]
-            if not is_track:
+            node = known[name]
+            if not isinstance(node, TrackNode):
                 raise ValueError(f"{name!r} is not a track; readings take pitched tracks only")
-            if not pitched:
+            if not node.pitched:
                 raise ValueError(f"track {name!r} is unpitched; readings take pitched tracks only")
             if name in names:
                 raise ValueError(f"track {name!r} is selected twice")
@@ -195,12 +190,7 @@ class ScoreRequest:
     @classmethod
     def default(cls, song: Graph) -> "ScoreRequest":
         """Select every pitched track, in source order."""
-        names = [
-            name
-            for name, (is_track, pitched, _) in _track_notes(song).items()
-            if is_track and pitched
-        ]
-        return cls(song, tuple(NodeName(name) for name in names))
+        return cls(song, tuple(NodeName(node.name) for node in song.track_nodes if node.pitched))
 
     @property
     def end(self) -> float:
@@ -209,8 +199,8 @@ class ScoreRequest:
 
     def notes(self) -> tuple[Note, ...]:
         """The selected tracks' notes, track by track in selection order."""
-        known = _track_notes(self.song)
-        return tuple(note for name in self.tracks for note in known[name][2])
+        known = {node.name: node for node in self.song.track_nodes}
+        return tuple(note for name in self.tracks for note in known[name].notes)
 
 
 @dataclass(frozen=True)

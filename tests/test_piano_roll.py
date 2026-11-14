@@ -13,7 +13,7 @@ from matplotlib.figure import Figure
 from matplotlib.patches import Rectangle
 
 from poser.adapters import piano_roll
-from poser.core.graph import Graph, Node, Wire
+from poser.core.graph import DelayNode, EffectNode, Graph, Wire
 from poser.core.piano_roll import PianoRoll, PianoRollPanel, project_piano_roll
 from poser.core.rules import ControlChange, Note
 from poser.core.song import Song, Track
@@ -57,18 +57,13 @@ def test_graph_filtering_order_and_routing_independence() -> None:
     tracks = song().graph().nodes
     graph = Graph(
         123.5,
-        (tracks[2], Node("delay", "delay", delay_samples=512), tracks[1], tracks[0]),
+        (tracks[2], DelayNode("delay", delay_samples=512), tracks[1], tracks[0]),
         (Wire("lead", "delay", "audio"),),
     )
     roll = project_piano_roll(graph)
     assert tuple(p.name for p in roll.panels) == ("bass", "lead")
     assert roll == project_piano_roll(replace(graph, wires=()))
-    assert (
-        project_piano_roll(
-            Graph(120, (Node("fx", "effect", effect="unknown", cc=(ControlChange(0, 1, 0),)),))
-        ).panels
-        == ()
-    )
+    assert project_piano_roll(Graph(120, (EffectNode("fx", effect="unknown"),))).panels == ()
 
 
 @pytest.mark.parametrize("tempo", [0, -1, float("nan"), float("inf"), -float("inf"), True, "120"])

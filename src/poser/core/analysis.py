@@ -16,7 +16,7 @@ import numpy as np
 
 from poser.core.audio import Audio, measure_peak_dbfs, stem_samples
 from poser.core.cache import StampProblem
-from poser.core.graph import Graph, Node
+from poser.core.graph import Graph, GraphNode
 from poser.core.loading import LoadedSong
 from poser.core.names import Identifier, NodeName, SongId
 from poser.core.ports import (
@@ -39,7 +39,8 @@ from poser.core.ports import (
 from poser.core.rendering import (
     EMPTY_EFFECTS,
     ResolvedDelay,
-    ResolvedNode,
+    ResolvedEffectNode,
+    ResolvedInstrument,
     cycle_groups,
     node_cache_key,
     require_stem_format,
@@ -190,7 +191,9 @@ def _analyze(
     stems: dict[NodeName, Audio] = {}
     failures: dict[NodeName, NodeReport] = {}
     groups = cycle_groups(graph)
-    resolved_of: dict[str, ResolvedDelay | ResolvedNode | SoundFailure] = {}
+    resolved_of: dict[
+        str, ResolvedInstrument | ResolvedEffectNode | ResolvedDelay | SoundFailure
+    ] = {}
     identity_of: dict[str, str | None] = {}
     for node in graph.nodes:
         resolved = resolve_node(node, instruments, effects)
@@ -207,6 +210,7 @@ def _analyze(
         name = NodeName(node.name)
         resolved = resolved_of[node.name]
         identity = identity_of[node.name]
+        upstream = tuple(wire.from_name for wire in graph.incoming(node.name))
         keys[name] = node_cache_key(graph, node, identity_of, keys, groups.get(node.name))
         if not store.stem_path(name).is_file():
             failures[name] = NodeReport(
@@ -215,7 +219,7 @@ def _analyze(
                 keys[name],
                 identity,
                 node.kind,
-                _upstream(graph, node),
+                upstream,
                 gain_db=node.gain_db,
             )
             continue
@@ -226,7 +230,7 @@ def _analyze(
                 keys[name],
                 None,
                 node.kind,
-                _upstream(graph, node),
+                upstream,
                 gain_db=node.gain_db,
                 detail=resolved.detail,
             )
@@ -243,7 +247,7 @@ def _analyze(
                 keys[name],
                 identity,
                 node.kind,
-                _upstream(graph, node),
+                upstream,
                 gain_db=node.gain_db,
                 detail=str(error),
             )
@@ -276,7 +280,7 @@ def _analyze(
                 keys[name],
                 sound_keys[name],
                 node.kind,
-                _upstream(graph, node),
+                tuple(wire.from_name for wire in graph.incoming(node.name)),
                 gain_db=node.gain_db,
                 peak_dbfs=measurements.peak_dbfs,
                 integrated_lufs=measurements.integrated_lufs,
@@ -340,27 +344,7 @@ def _analyze(
     return report
 
 
-def _upstream(graph: Graph, node: Node) -> tuple[str, ...]:
-    """Return the names of the nodes whose wires feed this node, in wire order."""
-    return tuple(wire.from_name for wire in graph.wires if wire.to_name == node.name)
-
-
-def _upstream_keys(
-    graph: Graph, node: Node, keys: Mapping[NodeName, str]
-) -> tuple[tuple[str, str, float], ...]:
-    """Return each feeding wire's upstream key, wire kind, and wire gain, in wire order.
-
-    Keys are computed in the graph's topological order, so every upstream's key exists when this
-    node's is computed.
-    """
-    return tuple(
-        (keys[NodeName(wire.from_name)], wire.kind, wire.gain_db)
-        for wire in graph.wires
-        if wire.to_name == node.name
-    )
-
-
-def _leaves(graph: Graph) -> tuple[Node, ...]:
+def _leaves(graph: Graph) -> tuple[GraphNode, ...]:
     """Return the nodes no wire feeds from: the ones whose stems the mix sums, each at its own
     `gain_db`. Without wires, every node is a leaf, so the mix is the song's stems as before."""
     fed = {wire.from_name for wire in graph.wires}

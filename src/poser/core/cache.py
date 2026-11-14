@@ -13,7 +13,7 @@ from poser.core.audio import (
     TAIL_S,
     graph_duration_s,
 )
-from poser.core.graph import Graph, Node, Wire
+from poser.core.graph import DelayNode, Graph, GraphNode, TrackNode, Wire
 from poser.core.jsonvalue import digest
 from poser.core.statuses import StemStatus
 
@@ -26,7 +26,7 @@ _KEY = re.compile(r"[0-9a-f]{64}")
 
 def node_key(
     graph: Graph,
-    node: Node,
+    node: GraphNode,
     resolved_identity: str | None,
     upstream_keys: Sequence[tuple[str, str, float]],
 ) -> str:
@@ -39,8 +39,10 @@ def node_key(
     changed input changes every key downstream of it; the list is empty while no node accepts
     wires. Numbers are normalized so that `1` and `1.0` give the same key; a pitch is already
     normalized, an integral one stored as an int, so a whole pitch digests as the int it
-    equals. `pitched` is left out, because it does not change the audio.
+    equals. `pitched` is left out, because it does not change the audio. Only a track node has
+    notes and changes; any other node digests none.
     """
+    notes, cc = (node.notes, node.cc) if isinstance(node, TrackNode) else ((), ())
     return digest(
         {
             "format": RENDER_FORMAT,
@@ -54,11 +56,11 @@ def node_key(
             "sound": resolved_identity,
             "notes": [
                 [float(note.beat), note.pitch, float(note.length), int(note.velocity)]
-                for note in node.notes
+                for note in notes
             ],
             "cc": [
                 [float(change.beat), int(change.control), int(change.value), change.shape]
-                for change in node.cc
+                for change in cc
             ],
             "upstream": [[key, kind, float(gain_db)] for key, kind, gain_db in upstream_keys],
         }
@@ -79,8 +81,8 @@ def delay_identity(delay_samples: int) -> str:
 
 def cycle_key(
     graph: Graph,
-    node: Node,
-    members: Sequence[Node],
+    node: GraphNode,
+    members: Sequence[GraphNode],
     identities: Mapping[str, str | None],
     inside_wires: Sequence[Wire],
     upstream_keys: Sequence[tuple[str, str, str, float]],
@@ -108,7 +110,9 @@ def cycle_key(
                     "name": member.name,
                     "kind": member.kind,
                     "identity": identities.get(member.name),
-                    "delay_samples": member.delay_samples,
+                    "delay_samples": (
+                        member.delay_samples if isinstance(member, DelayNode) else None
+                    ),
                 }
                 for member in members
             ],

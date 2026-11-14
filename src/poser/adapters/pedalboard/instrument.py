@@ -65,6 +65,8 @@ from poser.core.ports import (
     CaptureFailure,
     CaptureRequest,
     ConfigError,
+    DelayMember,
+    EffectMember,
     EffectRenderRequest,
     GroupRenderRequest,
     RenderFailure,
@@ -441,28 +443,32 @@ class PedalboardEffect:
         members: list[JsonValue] = []
         for member in request.members:
             recipe: JsonValue = None
-            if member.recipe is not None:
-                fields = json_object(member.recipe.payload.value())
-                if fields is None or set(fields) != {"path", "builtin", "parameters"}:
-                    raise ValueError(
-                        f"not a Pedalboard effect payload: {member.recipe.payload.text}"
-                    )
-                if member.control is not None and fields["builtin"] != DUCK:
-                    # Whether a recipe takes a control wire is a render-time fact: build time
-                    # loads no plugin and promises no plugin surface, so poser promises a
-                    # sidechain input only for its own duck, and every other recipe refuses the
-                    # control edge here, naming itself.
-                    return RenderFailure(
-                        RenderFailureStatus.LOAD_FAILED,
-                        f"effect {member.recipe.recipe!r} has no sidechain input, so it takes no "
-                        "control wire",
-                    )
-                recipe = member.recipe.payload.value()
+            delay_samples: int | None = None
+            match member:
+                case DelayMember():
+                    delay_samples = member.delay_samples
+                case EffectMember():
+                    fields = json_object(member.recipe.payload.value())
+                    if fields is None or set(fields) != {"path", "builtin", "parameters"}:
+                        raise ValueError(
+                            f"not a Pedalboard effect payload: {member.recipe.payload.text}"
+                        )
+                    if member.control is not None and fields["builtin"] != DUCK:
+                        # Whether a recipe takes a control wire is a render-time fact: build time
+                        # loads no plugin and promises no plugin surface, so poser promises a
+                        # sidechain input only for its own duck, and every other recipe refuses
+                        # the control edge here, naming itself.
+                        return RenderFailure(
+                            RenderFailureStatus.LOAD_FAILED,
+                            f"effect {member.recipe.recipe!r} has no sidechain input, so it takes "
+                            "no control wire",
+                        )
+                    recipe = member.recipe.payload.value()
             members.append(
                 {
                     "name": str(member.name),
                     "recipe": recipe,
-                    "delay_samples": member.delay_samples,
+                    "delay_samples": delay_samples,
                     "input_path": "",
                     "control_path": None,
                     "output_path": "",

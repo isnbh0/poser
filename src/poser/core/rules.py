@@ -371,8 +371,9 @@ def duplicate_name_problems(
 
 
 def last_beat(values: Sequence[Timed]) -> float:
+    """Return the latest note end or controller change, or 0 when the values hold neither."""
     note_ends = [note.beat + note.length for value in values for note in value.notes]
-    return max([*note_ends, *(change.beat for value in values for change in value.cc)])
+    return max([*note_ends, *(change.beat for value in values for change in value.cc)], default=0)
 
 
 def length_problems(bpm: float, values: Sequence[Timed], where: str) -> list[str]:

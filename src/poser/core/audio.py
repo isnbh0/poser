@@ -32,7 +32,7 @@ def song_duration_s(graph: Graph) -> float:
     """Return the length shared by every stem: the song's last beat plus the tail. Pedalboard
     ignores messages after the end, so changes must fall within.
     """
-    return graph.seconds(last_beat(graph.nodes)) + TAIL_S
+    return graph.seconds(last_beat(graph.track_nodes)) + TAIL_S
 
 
 def graph_duration_s(graph: Graph) -> float:

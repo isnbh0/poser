@@ -3,7 +3,7 @@
 import heapq
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Literal, NotRequired, TypedDict, cast
+from typing import ClassVar, Literal, NotRequired, TypedDict
 
 from poser.core.marks import NO_MARKS, Marks, MarksData, layers_to_data, marks_field_problems
 from poser.core.rules import (
@@ -64,28 +64,87 @@ class GraphError(Exception):
 # Every graph object is valid: its constructor raises `GraphError` listing every problem.
 
 
-@dataclass(frozen=True)
-class Node:
-    """One node of the graph: a track, an effect, or a delay, with its output fader."""
+def _node_problems(name: object, gain_db: object) -> list[str]:
+    """Check the name and fader every kind of node carries."""
+    # A node's name becomes a file name under stems/ and images/, where `[mix]` names the mix.
+    # Chain nodes carry their track's name and recipe with dots between, so dots are legal here
+    # where a track's own name forbids them.
+    problems: list[str] = []
+    if not (isinstance(name, str) and NODE_NAME.fullmatch(name)):
+        problems.append(
+            f"Node.name: must contain only letters, digits, '_', '-', and '.', got {name!r}"
+        )
+    return problems + _gain_problems(gain_db, "Node.gain_db")
 
+
+@dataclass(frozen=True)
+class TrackNode:
+    """A source node: an instrument's sound playing notes and controller changes."""
+
+    kind: ClassVar[NodeKind] = "track"
     name: str
-    kind: NodeKind
+    sound: str
+    notes: tuple[Note, ...]
     gain_db: float = 0.0
-    sound: str | None = None
-    notes: tuple[Note, ...] = ()
     cc: tuple[ControlChange, ...] = ()
-    effect: str | None = None
-    delay_samples: int | None = None
-    # A track node's `pitched`, compiled from its track; only a track node can be unpitched.
+    # Compiled from its track: False when the pitches select keys of the sound, such as drums.
     pitched: bool = True
 
     def __post_init__(self) -> None:
-        if problems := _node_problems(self):
+        problems = _node_problems(self.name, self.gain_db)
+        problems += track_problems(
+            {"sound": self.sound, "notes": self.notes, "cc": self.cc, "pitched": self.pitched},
+            "Node",
+        )
+        if problems:
             raise GraphError(problems)
         # A list becomes a tuple, so a node built from lists equals one compiled from a song.
         object.__setattr__(self, "notes", tuple(self.notes))
         object.__setattr__(self, "cc", tuple(self.cc))
         object.__setattr__(self, "gain_db", float(self.gain_db))
+
+
+@dataclass(frozen=True)
+class EffectNode:
+    """An effect node: a recipe processing the audio its wires carry in."""
+
+    kind: ClassVar[NodeKind] = "effect"
+    name: str
+    effect: str
+    gain_db: float = 0.0
+
+    def __post_init__(self) -> None:
+        problems = _node_problems(self.name, self.gain_db)
+        # Recipes resolve at compose time, so an unknown reference cannot be checked here yet.
+        if not (isinstance(self.effect, str) and self.effect):
+            problems.append(f"Node.effect: must name a recipe, got {self.effect!r}")
+        if problems:
+            raise GraphError(problems)
+        object.__setattr__(self, "gain_db", float(self.gain_db))
+
+
+@dataclass(frozen=True)
+class DelayNode:
+    """A delay node: its summed inputs, delayed by a declared number of samples."""
+
+    kind: ClassVar[NodeKind] = "delay"
+    name: str
+    delay_samples: int
+    gain_db: float = 0.0
+
+    def __post_init__(self) -> None:
+        problems = _node_problems(self.name, self.gain_db)
+        if not (is_int(self.delay_samples) and self.delay_samples > 0):
+            problems.append(
+                "Node.delay_samples: must be a positive number of samples, "
+                f"got {self.delay_samples!r}"
+            )
+        if problems:
+            raise GraphError(problems)
+        object.__setattr__(self, "gain_db", float(self.gain_db))
+
+
+type GraphNode = TrackNode | EffectNode | DelayNode
 
 
 @dataclass(frozen=True)
@@ -122,7 +181,7 @@ class Graph:
     """A whole song as nodes and wires; the constructor enforces the graph's laws."""
 
     bpm: float
-    nodes: tuple[Node, ...]
+    nodes: tuple[GraphNode, ...]
     wires: tuple[Wire, ...] = ()
     mode: Mode = "acyclic"
     # The author's marks, which no render, key, or reading uses.
@@ -133,6 +192,15 @@ class Graph:
             raise GraphError(problems)
         object.__setattr__(self, "nodes", tuple(self.nodes))
         object.__setattr__(self, "wires", tuple(self.wires))
+
+    @property
+    def track_nodes(self) -> tuple[TrackNode, ...]:
+        """The graph's track nodes, in node order."""
+        return tuple(node for node in self.nodes if isinstance(node, TrackNode))
+
+    def incoming(self, name: str) -> tuple[Wire, ...]:
+        """Return the wires into the named node, in declaration order."""
+        return tuple(wire for wire in self.wires if wire.to_name == name)
 
     def seconds(self, beat: float) -> float:
         return beat * 60 / self.bpm
@@ -164,7 +232,7 @@ class Graph:
             data["marks"] = layers_to_data(self.marks)
         return data
 
-    def groups(self) -> tuple[tuple[Node, ...], ...]:
+    def groups(self) -> tuple[tuple[GraphNode, ...], ...]:
         """Return the graph's strongly connected components, every upstream component first.
 
         The order is the condensation's, Kahn's algorithm always taking the ready component whose
@@ -184,7 +252,7 @@ class Graph:
                 incoming[target] += 1
         ready = [(components[index][0], index) for index, count in enumerate(incoming) if not count]
         heapq.heapify(ready)
-        ordered: list[tuple[Node, ...]] = []
+        ordered: list[tuple[GraphNode, ...]] = []
         while ready:
             _, index = heapq.heappop(ready)
             ordered.append(tuple(by_name[name] for name in components[index]))
@@ -194,7 +262,7 @@ class Graph:
                     heapq.heappush(ready, (components[target][0], target))
         return tuple(ordered)
 
-    def topological(self) -> tuple[Node, ...]:
+    def topological(self) -> tuple[GraphNode, ...]:
         """Return the nodes so each follows the nodes its wires come from, ties broken by name.
 
         Kahn's algorithm, always taking the ready node whose name sorts first, so the order is
@@ -209,7 +277,7 @@ class Graph:
             outgoing[wire.from_name].append(wire.to_name)
         ready = [name for name, count in incoming.items() if count == 0]
         heapq.heapify(ready)
-        ordered: list[Node] = []
+        ordered: list[GraphNode] = []
         while ready:
             name = heapq.heappop(ready)
             ordered.append(by_name[name])
@@ -236,37 +304,6 @@ def _gain_problems(gain_db: object, where: str) -> list[str]:
     ]
 
 
-def _node_problems(node: Node) -> list[str]:
-    """Check a node's name, fader, and the payload its kind carries."""
-    # A node's name becomes a file name under stems/ and images/, where `[mix]` names the mix.
-    # Chain nodes carry their track's name and recipe with dots between, so dots are legal here
-    # where a track's own name forbids them.
-    problems: list[str] = []
-    if not (isinstance(node.name, str) and NODE_NAME.fullmatch(node.name)):
-        problems.append(
-            f"Node.name: must contain only letters, digits, '_', '-', and '.', got {node.name!r}"
-        )
-    if node.kind not in NODE_KINDS:
-        problems.append(f"Node.kind: must be track, effect, or delay, got {node.kind!r}")
-    problems += _gain_problems(node.gain_db, "Node.gain_db")
-    if node.kind != "track" and node.pitched is not True:
-        problems.append(f"Node.pitched: only a track node can be unpitched, got {node.pitched!r}")
-    if node.kind == "track":
-        problems += track_problems(
-            {"sound": node.sound, "notes": node.notes, "cc": node.cc, "pitched": node.pitched},
-            "Node",
-        )
-    elif node.kind == "effect":
-        # Recipes resolve at compose time, so an unknown reference cannot be checked here yet.
-        if not (isinstance(node.effect, str) and node.effect):
-            problems.append(f"Node.effect: must name a recipe, got {node.effect!r}")
-    elif node.kind == "delay" and not (is_int(node.delay_samples) and node.delay_samples > 0):
-        problems.append(
-            f"Node.delay_samples: must be a positive number of samples, got {node.delay_samples!r}"
-        )
-    return problems
-
-
 def _listed(value: object) -> list[object]:
     """Return a list or tuple's items, or none of them when it is neither."""
     return list(value) if isinstance(value, list | tuple) else []
@@ -282,15 +319,16 @@ def _graph_problems(graph: Graph) -> list[str]:
     problems += marks_field_problems(graph.marks, "Graph")
     node_items = _listed(graph.nodes)
     problems += [
-        f"Graph.nodes[{index}]: must be a Node, got {node!r}"
+        f"Graph.nodes[{index}]: must be a graph node, got {node!r}"
         for index, node in enumerate(node_items)
-        if not isinstance(node, Node)
+        if not isinstance(node, TrackNode | EffectNode | DelayNode)
     ]
-    nodes = [node for node in node_items if isinstance(node, Node)]
+    nodes = [node for node in node_items if isinstance(node, TrackNode | EffectNode | DelayNode)]
     problems += duplicate_name_problems(nodes, "Graph", group="nodes", noun="node")
     # The timeline rule needs a valid bpm and valid nodes, so other problems are reported first.
     if not problems and is_number(graph.bpm):
-        problems += length_problems(graph.bpm, nodes, "Graph")
+        tracks = [node for node in nodes if isinstance(node, TrackNode)]
+        problems += length_problems(graph.bpm, tracks, "Graph")
     wire_items = _listed(graph.wires)
     problems += [
         f"Graph.wires[{index}]: must be a Wire, got {wire!r}"
@@ -303,14 +341,14 @@ def _graph_problems(graph: Graph) -> list[str]:
     if graph.mode == "acyclic":
         problems += _cycle_problems(nodes, wires, "wires")
     else:
-        kinds = {node.name: node.kind for node in nodes}
-        instantaneous = [wire for wire in wires if kinds.get(wire.from_name) != "delay"]
+        delays = {node.name for node in nodes if isinstance(node, DelayNode)}
+        instantaneous = [wire for wire in wires if wire.from_name not in delays]
         problems += _cycle_problems(nodes, instantaneous, "instantaneous wires")
         problems += _delay_bound_problems(nodes, wires)
     return problems
 
 
-def _endpoint_problems(wires: Sequence[Wire], nodes: Sequence[Node]) -> list[str]:
+def _endpoint_problems(wires: Sequence[Wire], nodes: Sequence[GraphNode]) -> list[str]:
     """Return one problem per wire end that names no node in the graph."""
     names = {node.name for node in nodes}
     return [
@@ -321,7 +359,7 @@ def _endpoint_problems(wires: Sequence[Wire], nodes: Sequence[Node]) -> list[str
     ]
 
 
-def _acceptance_problems(nodes: Sequence[Node], wires: Sequence[Wire]) -> list[str]:
+def _acceptance_problems(nodes: Sequence[GraphNode], wires: Sequence[Wire]) -> list[str]:
     """Return one problem per wire whose target does not accept its kind of input.
 
     A control wire is also rejected on its own: steering does nothing for a node that hears no
@@ -363,20 +401,21 @@ def _acceptance_problems(nodes: Sequence[Node], wires: Sequence[Wire]) -> list[s
     return problems
 
 
-def _node_to_data(node: Node) -> "NodeData":
+def _node_to_data(node: GraphNode) -> "NodeData":
     """Return a node as plain data: its name, fader, and the payload its kind carries."""
     data: NodeData = {"name": node.name, "kind": node.kind, "gain_db": plain_number(node.gain_db)}
-    if node.kind == "track":
-        data["sound"] = cast("str", node.sound)
-        data["notes"] = [note_to_data(note) for note in node.notes]
-        if node.cc:
-            data["cc"] = [control_to_data(change) for change in node.cc]
-        if not node.pitched:
-            data["pitched"] = False
-    elif node.kind == "effect":
-        data["effect"] = cast("str", node.effect)
-    else:
-        data["delay_samples"] = cast("int", node.delay_samples)
+    match node:
+        case TrackNode():
+            data["sound"] = node.sound
+            data["notes"] = [note_to_data(note) for note in node.notes]
+            if node.cc:
+                data["cc"] = [control_to_data(change) for change in node.cc]
+            if not node.pitched:
+                data["pitched"] = False
+        case EffectNode():
+            data["effect"] = node.effect
+        case DelayNode():
+            data["delay_samples"] = node.delay_samples
     return data
 
 
@@ -413,7 +452,7 @@ class GraphData(TypedDict):
     marks: NotRequired[MarksData]
 
 
-def _cycle_problems(nodes: Sequence[Node], wires: Sequence[Wire], what: str) -> list[str]:
+def _cycle_problems(nodes: Sequence[GraphNode], wires: Sequence[Wire], what: str) -> list[str]:
     """Return one problem naming the first cycle the wires close among the nodes, or none.
 
     `what` names the wire set in the message: all wires, or the instantaneous ones a feedback
@@ -451,7 +490,7 @@ def _cycle_problems(nodes: Sequence[Node], wires: Sequence[Wire], what: str) -> 
     return []
 
 
-def _delay_bound_problems(nodes: Sequence[Node], wires: Sequence[Wire]) -> list[str]:
+def _delay_bound_problems(nodes: Sequence[GraphNode], wires: Sequence[Wire]) -> list[str]:
     """Return one problem per delay node on a cycle declaring less than one render block.
 
     B3: a cycle's granularity is one block, because the effects a loop runs through consume
@@ -468,14 +507,13 @@ def _delay_bound_problems(nodes: Sequence[Node], wires: Sequence[Wire]) -> list[
             f"least the block size {BUFFER_SIZE}, got {node.delay_samples}"
         )
         for node in nodes
-        if node.kind == "delay"
+        if isinstance(node, DelayNode)
         and node.name in on_cycle
-        and is_int(node.delay_samples)
         and node.delay_samples < BUFFER_SIZE
     ]
 
 
-def _sccs(by_name: Mapping[str, Node], wires: Sequence[Wire]) -> tuple[tuple[str, ...], ...]:
+def _sccs(by_name: Mapping[str, GraphNode], wires: Sequence[Wire]) -> tuple[tuple[str, ...], ...]:
     """Return the nodes' strongly connected components, each component's members by name.
 
     Tarjan's algorithm, iterative, walking each node's targets in name order, so the components

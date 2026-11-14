@@ -15,14 +15,28 @@ uv run check-instruments
 If a command fails after the upgrade, find its message below, newest change first, and apply the
 fix. A change listed here applies to every studio that pinned a poser commit from before it.
 
+## Typed graph nodes
+
+- **Symptom:** a script song fails with `cannot import name 'Node' from 'poser'`.
+  **Cause:** each kind of graph node is now its own type, so a node cannot carry another kind's
+  payload.
+  **Fix:** replace `Node("x", "track", ...)` with `TrackNode("x", ...)`, and likewise
+  `Node("x", "effect", ...)` with `EffectNode` and `Node("x", "delay", ...)` with `DelayNode`,
+  dropping the kind argument. For annotations, use `GraphNode`.
+
+- **Symptom:** a custom effect adapter's `render_group` fails with `AttributeError` on
+  `member.recipe` or `member.delay_samples`.
+  **Cause:** a cycle group's members are now `EffectMember` (with `recipe`) or `DelayMember` (with
+  `delay_samples`); `GroupMember` is gone.
+  **Fix:** match on the member's type and read only that type's field.
+
 ## Frameworks read graphs
 
 - **Symptom:** a custom framework fails with `AttributeError: 'Graph' object has no attribute
   'tracks'`, or its `Song` branch never runs.
   **Cause:** a framework's `ScoreRequest.song` is now always a `Graph`, whether the song is a
   YAML file or a script. A YAML song's tracks are its graph's track nodes.
-  **Fix:** read track nodes from `song.nodes` (those whose `kind` is `"track"`), and stop
-  branching on `Song`.
+  **Fix:** read track nodes from `song.track_nodes`, and stop branching on `Song`.
 
 ## Song marks
 

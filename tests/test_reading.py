@@ -12,7 +12,7 @@ import pytest
 from generated_songs import random_song
 
 from poser.adapters.tonal import create_tonal
-from poser.core.graph import Graph, Node, Wire
+from poser.core.graph import EffectNode, Graph, TrackNode, Wire
 from poser.core.interpreting import interpret_marks, read_song
 from poser.core.jsonvalue import JsonValue
 from poser.core.marks import Mark, Marks
@@ -143,9 +143,9 @@ def graph() -> Graph:
     return Graph(
         120,
         (
-            Node("keys", "track", sound="synth", notes=(NOTE,)),
-            Node("drums", "track", sound="kit", notes=(NOTE,), pitched=False),
-            Node("wet", "effect", effect="reverb"),
+            TrackNode("keys", sound="synth", notes=(NOTE,)),
+            TrackNode("drums", sound="kit", notes=(NOTE,), pitched=False),
+            EffectNode("wet", effect="reverb"),
         ),
         (Wire("keys", "wet", "audio"),),
     )

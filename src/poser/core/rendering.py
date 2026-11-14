@@ -34,17 +34,18 @@ from poser.core.audio import (
     stem_samples,
 )
 from poser.core.cache import Stamp, cycle_key, delay_identity, node_key, sound_key
-from poser.core.graph import Graph, Node, Wire
+from poser.core.graph import DelayNode, EffectNode, Graph, GraphNode, TrackNode, Wire
 from poser.core.loading import LoadedSong
 from poser.core.names import Identifier, NodeName, SongId
 from poser.core.performance import NoteOn, Performance, PitchProblem, perform_for
 from poser.core.ports import (
     AudioFileError,
     AudioFiles,
+    DelayMember,
     Effect,
+    EffectMember,
     EffectRenderRequest,
     GroupEffect,
-    GroupMember,
     GroupRenderRequest,
     Instrument,
     RenderFailure,
@@ -96,19 +97,21 @@ def late_start_s(samples: np.ndarray, performance: Performance) -> float | None:
 
 
 @dataclass(frozen=True)
-class ResolvedNode:
-    """A node's adapter, its resolved sound or recipe, and the cache key of that identity."""
+class ResolvedInstrument:
+    """A track node's instrument, its resolved sound, and the cache key of that identity."""
 
-    adapter: Instrument | Effect
-    resolved: ResolvedSound | ResolvedEffect
+    adapter: Instrument
+    resolved: ResolvedSound
     sound_key: str  # `sound_key` of the adapter's id and version and the resolved identity.
 
-    def __post_init__(self) -> None:
-        if not isinstance(self.resolved, ResolvedSound | ResolvedEffect):
-            raise ValueError(
-                "ResolvedNode.resolved must be a ResolvedSound or ResolvedEffect, "
-                f"got {self.resolved!r}"
-            )
+
+@dataclass(frozen=True)
+class ResolvedEffectNode:
+    """An effect node's adapter, its resolved recipe, and the cache key of that identity."""
+
+    adapter: Effect
+    resolved: ResolvedEffect
+    sound_key: str  # `sound_key` of the adapter's id and version and the resolved identity.
 
 
 @dataclass(frozen=True)
@@ -158,17 +161,26 @@ class TrackResult:
 
 
 def resolve_node(
-    node: Node,
+    node: GraphNode,
     instruments: Mapping[Identifier, Instrument],
     effects: Mapping[Identifier, Effect] = EMPTY_EFFECTS,
-) -> ResolvedNode | ResolvedDelay | SoundFailure:
+) -> ResolvedInstrument | ResolvedEffectNode | ResolvedDelay | SoundFailure:
     """Resolve a node's sound, recipe, or declared delay, or return why it cannot be used."""
-    if node.kind == "delay":
-        return ResolvedDelay(delay_identity(cast("int", node.delay_samples)))
-    if node.kind == "effect":
-        return _resolve_effect(node, effects)
-    # The node's constructor checked that a track node's sound parses as a reference.
-    ref = parse_sound_ref(cast("str", node.sound))
+    match node:
+        case DelayNode():
+            return ResolvedDelay(delay_identity(node.delay_samples))
+        case EffectNode():
+            return _resolve_effect(node, effects)
+        case TrackNode():
+            return _resolve_track(node, instruments)
+
+
+def _resolve_track(
+    node: TrackNode, instruments: Mapping[Identifier, Instrument]
+) -> ResolvedInstrument | SoundFailure:
+    """Resolve a track node's sound through its instrument, or return why it cannot be used."""
+    # The node's constructor checked that its sound parses as a reference.
+    ref = parse_sound_ref(node.sound)
     instrument = instruments.get(ref.instrument)
     if instrument is None:
         return SoundFailure(
@@ -178,14 +190,14 @@ def resolve_node(
     if isinstance(sound, SoundFailure):
         return sound
     key = sound_key(instrument.adapter_id, instrument.adapter_version, sound.identity)
-    return ResolvedNode(instrument, sound, key)
+    return ResolvedInstrument(instrument, sound, key)
 
 
 def _resolve_effect(
-    node: Node, effects: Mapping[Identifier, Effect]
-) -> ResolvedNode | SoundFailure:
+    node: EffectNode, effects: Mapping[Identifier, Effect]
+) -> ResolvedEffectNode | SoundFailure:
     """Resolve an effect node's recipe through its adapter, or return why it cannot be used."""
-    recipe = cast("str", node.effect)
+    recipe = node.effect
     if (
         not Identifier.PATTERN.fullmatch(recipe)
         or (effect := effects.get(Identifier(recipe))) is None
@@ -195,7 +207,7 @@ def _resolve_effect(
     if isinstance(resolved, SoundFailure):
         return resolved
     key = sound_key(effect.adapter_id, effect.adapter_version, resolved.identity)
-    return ResolvedNode(effect, resolved, key)
+    return ResolvedEffectNode(effect, resolved, key)
 
 
 def require_stem_format(renders: RenderStore, audio_files: AudioFiles) -> None:
@@ -246,14 +258,14 @@ def delay_signal(line: np.ndarray, start: int, count: int, delay_samples: int) -
     return out
 
 
-def cycle_groups(graph: Graph) -> dict[str, tuple[Node, ...]]:
+def cycle_groups(graph: Graph) -> dict[str, tuple[GraphNode, ...]]:
     """Map each member of a cycle group to its group's members, in name order.
 
     A cycle group is a strongly connected component holding a cycle: more than one node, or one
     node wired to itself. The constructor admits one only in feedback mode, with the group's
     instantaneous graph acyclic, so every loop inside passes a delay member.
     """
-    groups: dict[str, tuple[Node, ...]] = {}
+    groups: dict[str, tuple[GraphNode, ...]] = {}
     for group in graph.groups():
         held = len(group) > 1 or any(
             wire.from_name == group[0].name and wire.to_name == group[0].name
@@ -268,10 +280,10 @@ def cycle_groups(graph: Graph) -> dict[str, tuple[Node, ...]]:
 
 def node_cache_key(
     graph: Graph,
-    node: Node,
+    node: GraphNode,
     identity_of: Mapping[str, str | None],
     keys: Mapping[NodeName, str],
-    group: tuple[Node, ...] | None,
+    group: tuple[GraphNode, ...] | None,
 ) -> str:
     """Return the node's stamp key: the cycle group's digest for a member, the node key otherwise.
 
@@ -381,14 +393,14 @@ def _render(
 
 def _render_node(
     graph: Graph,
-    node: Node,
+    node: GraphNode,
     store: SongStore,
     instruments: Mapping[Identifier, Instrument],
     effects: Mapping[Identifier, Effect],
     audio_files: AudioFiles,
     keys: dict[NodeName, str],
     results: Mapping[NodeName, TrackResult],
-    groups: Mapping[str, tuple[Node, ...]],
+    groups: Mapping[str, tuple[GraphNode, ...]],
     timeout_s: float,
     *,
     force: bool,
@@ -409,7 +421,7 @@ def _render_node(
     # into the node key, so a changed input changes every key downstream of it. Computed before
     # anything is removed, so a failure below keeps the old stem and stamp, and so every node
     # downstream digests this node's key whether this one renders or not.
-    identity = resolved.sound_key if isinstance(resolved, ResolvedNode) else resolved.identity
+    identity = resolved.identity if isinstance(resolved, ResolvedDelay) else resolved.sound_key
     key = node_cache_key(graph, node, {node.name: identity}, keys, groups.get(node.name))
     keys[name] = key
     if not force:
@@ -420,16 +432,15 @@ def _render_node(
             )
 
     store.discard(name)
-    if node.kind == "effect":
-        rendered = _render_effect_node(
-            graph, node, cast("ResolvedNode", resolved), store, audio_files, timeout_s
-        )
-    elif node.kind == "delay":
-        rendered = _render_delay_node(graph, node, store, audio_files)
-    else:
-        rendered = _render_track_node(
-            graph, node, cast("ResolvedNode", resolved), timeout_s, notify
-        )
+    match node, resolved:
+        case EffectNode(), ResolvedEffectNode():
+            rendered = _render_effect_node(graph, node, resolved, store, audio_files, timeout_s)
+        case DelayNode(), ResolvedDelay():
+            rendered = _render_delay_node(graph, node, store, audio_files)
+        case TrackNode(), ResolvedInstrument():
+            rendered = _render_track_node(graph, node, resolved, timeout_s, notify)
+        case _:
+            raise AssertionError(f"node {node.name!r} resolved to another kind's resolution")
     if isinstance(rendered, TrackResult):
         return rendered
     return _write_stem(name, key, identity, store, audio_files, rendered)
@@ -437,13 +448,13 @@ def _render_node(
 
 def _render_group(
     graph: Graph,
-    members: Sequence[Node],
+    members: Sequence[GraphNode],
     store: SongStore,
     effects: Mapping[Identifier, Effect],
     audio_files: AudioFiles,
     keys: dict[NodeName, str],
     results: Mapping[NodeName, TrackResult],
-    groups: Mapping[str, tuple[Node, ...]],
+    groups: Mapping[str, tuple[GraphNode, ...]],
     frames: int,
     timeout_s: float,
     *,
@@ -466,20 +477,23 @@ def _render_group(
     if skips := _group_skips(ordered, external, results, store):
         return skips
 
-    resolved: dict[str, ResolvedNode] = {}
+    resolved: dict[str, ResolvedEffectNode] = {}
     unresolved: dict[str, SoundFailure] = {}
     identity_of: dict[str, str | None] = {}
     for member in ordered:
-        if member.kind == "delay":
-            identity_of[member.name] = delay_identity(cast("int", member.delay_samples))
-            continue
-        found = _resolve_effect(member, effects)
-        if isinstance(found, SoundFailure):
-            unresolved[member.name] = found
-            identity_of[member.name] = None
-        else:
-            resolved[member.name] = found
-            identity_of[member.name] = found.sound_key
+        match member:
+            case DelayNode():
+                identity_of[member.name] = delay_identity(member.delay_samples)
+            case EffectNode():
+                found = _resolve_effect(member, effects)
+                if isinstance(found, SoundFailure):
+                    unresolved[member.name] = found
+                    identity_of[member.name] = None
+                else:
+                    resolved[member.name] = found
+                    identity_of[member.name] = found.sound_key
+            case TrackNode():
+                raise AssertionError(f"track {member.name!r} sits in a cycle group")
     if unresolved:
         name = next(member.name for member in ordered if member.name in unresolved)
         failure = unresolved[name]
@@ -494,7 +508,7 @@ def _render_group(
 
     for member in ordered:
         store.discard(NodeName(member.name))
-    found = _group_runner(ordered, resolved)
+    found = _group_runner(resolved)
     outputs: dict[NodeName, Audio] = {}
     if isinstance(found, RenderFailure):
         failure = found
@@ -520,19 +534,15 @@ def _render_group(
     written: dict[NodeName, TrackResult] = {}
     for member in ordered:
         name = NodeName(member.name)
-        written[name] = _write_stem(
-            name,
-            keys[name],
-            cast("str", identity_of[member.name]),
-            store,
-            audio_files,
-            outputs[name],
-        )
+        identity = identity_of[member.name]
+        if identity is None:
+            raise AssertionError(f"member {member.name!r} rendered without resolving")
+        written[name] = _write_stem(name, keys[name], identity, store, audio_files, outputs[name])
     return written
 
 
 def _group_skips(
-    ordered: tuple[Node, ...],
+    ordered: tuple[GraphNode, ...],
     external: Sequence[Wire],
     results: Mapping[NodeName, TrackResult],
     store: SongStore,
@@ -568,7 +578,7 @@ def _group_skips(
 
 
 def _group_failures(
-    ordered: tuple[Node, ...],
+    ordered: tuple[GraphNode, ...],
     store: SongStore,
     name: str,
     status: RenderFailureStatus | SoundFailureStatus,
@@ -588,7 +598,7 @@ def _group_failures(
 
 
 def _cached_group(
-    ordered: tuple[Node, ...],
+    ordered: tuple[GraphNode, ...],
     keys: Mapping[NodeName, str],
     store: SongStore,
 ) -> dict[NodeName, TrackResult] | None:
@@ -605,15 +615,13 @@ def _cached_group(
     return cached
 
 
-def _group_runner(
-    ordered: tuple[Node, ...], resolved: Mapping[str, ResolvedNode]
-) -> GroupEffect | RenderFailure:
+def _group_runner(resolved: Mapping[str, ResolvedEffectNode]) -> GroupEffect | RenderFailure:
     """Return the adapter that runs the group's job, or why no single adapter can.
 
     Every effect member must resolve through one adapter, and that adapter must render groups; a
     delay member needs no adapter, since its line travels in the job as a declared number.
     """
-    runners = [resolved[member.name].adapter for member in ordered if member.kind == "effect"]
+    runners = [found.adapter for found in resolved.values()]
     ids = sorted({adapter.adapter_id for adapter in runners})
     if len(ids) > 1:
         listed = ", ".join(str(identifier) for identifier in ids)
@@ -632,8 +640,8 @@ def _group_runner(
 
 
 def _run_group(
-    ordered: tuple[Node, ...],
-    resolved: Mapping[str, ResolvedNode],
+    ordered: tuple[GraphNode, ...],
+    resolved: Mapping[str, ResolvedEffectNode],
     inside: Sequence[Wire],
     external: Sequence[Wire],
     store: SongStore,
@@ -648,7 +656,7 @@ def _run_group(
     the outputs are read while the job's temporary directory still holds them; the core alone
     makes them `Audio` and stamps them.
     """
-    members = []
+    members: list[EffectMember | DelayMember] = []
     try:
         for member in ordered:
             audio_wires = [
@@ -657,23 +665,17 @@ def _run_group(
             control_wires = [
                 wire for wire in external if wire.to_name == member.name and wire.kind == "control"
             ]
-            members.append(
-                GroupMember(
-                    name=NodeName(member.name),
-                    recipe=(
-                        None
-                        if member.kind == "delay"
-                        else cast("ResolvedEffect", resolved[member.name].resolved)
-                    ),
-                    delay_samples=(None if member.kind == "effect" else member.delay_samples),
-                    audio=_sum_audio(audio_wires, store, audio_files, frames, member.name),
-                    control=(
-                        _control_audio_of(control_wires, store, audio_files, frames)
-                        if control_wires
-                        else None
-                    ),
-                )
+            name = NodeName(member.name)
+            audio = _sum_audio(audio_wires, store, audio_files, frames, member.name)
+            control = (
+                _control_audio_of(control_wires, store, audio_files, frames)
+                if control_wires
+                else None
             )
+            if isinstance(member, DelayNode):
+                members.append(DelayMember(name, member.delay_samples, audio, control))
+            else:
+                members.append(EffectMember(name, resolved[member.name].resolved, audio, control))
     except AudioFileError as error:
         return {}, RenderFailure(
             RenderFailureStatus.CRASHED, f"upstream wrote unusable audio: {error}"
@@ -706,38 +708,36 @@ def _run_group(
 
 
 def _failed_upstream(
-    graph: Graph, node: Node, results: Mapping[NodeName, TrackResult]
+    graph: Graph, node: GraphNode, results: Mapping[NodeName, TrackResult]
 ) -> str | None:
     """Return why the node is skipped, naming the first upstream that produced no stem.
 
     An upstream has a stem exactly when its result's status is a StemStatus, so a failed or
     already-skipped upstream stops this node here.
     """
-    for wire in graph.wires:
-        if wire.to_name == node.name:
-            upstream = results.get(NodeName(wire.from_name))
-            if upstream is None or not isinstance(upstream.status, StemStatus):
-                return f"upstream {wire.from_name!r} did not render"
+    for wire in graph.incoming(node.name):
+        upstream = results.get(NodeName(wire.from_name))
+        if upstream is None or not isinstance(upstream.status, StemStatus):
+            return f"upstream {wire.from_name!r} did not render"
     return None
 
 
 def _upstream_keys(
-    graph: Graph, node: Node, keys: Mapping[NodeName, str]
+    graph: Graph, node: GraphNode, keys: Mapping[NodeName, str]
 ) -> tuple[tuple[str, str, float], ...]:
     """Return each feeding wire's upstream key, wire kind, and wire gain, in wire order."""
     return tuple(
         (keys[NodeName(wire.from_name)], wire.kind, wire.gain_db)
-        for wire in graph.wires
-        if wire.to_name == node.name
+        for wire in graph.incoming(node.name)
     )
 
 
 def _upstream_audio(
-    graph: Graph, node: Node, store: SongStore, audio_files: AudioFiles, frames: int
+    graph: Graph, node: GraphNode, store: SongStore, audio_files: AudioFiles, frames: int
 ) -> Audio:
     """Return the node's audio input: each upstream audio stem scaled by its wire's gain, summed."""
     return _sum_audio(
-        [wire for wire in graph.wires if wire.to_name == node.name and wire.kind == "audio"],
+        [wire for wire in graph.incoming(node.name) if wire.kind == "audio"],
         store,
         audio_files,
         frames,
@@ -770,14 +770,14 @@ def _sum_audio(
 
 
 def _control_audio(
-    graph: Graph, node: Node, store: SongStore, audio_files: AudioFiles, frames: int
+    graph: Graph, node: GraphNode, store: SongStore, audio_files: AudioFiles, frames: int
 ) -> Audio | None:
     """Return the one control wire's upstream stem, or None when no control wire feeds the node.
 
     The graph's constructor keeps a node to at most one control wire.
     """
     return _control_audio_of(
-        [wire for wire in graph.wires if wire.to_name == node.name and wire.kind == "control"],
+        [wire for wire in graph.incoming(node.name) if wire.kind == "control"],
         store,
         audio_files,
         frames,
@@ -796,7 +796,7 @@ def _control_audio_of(
 
 def _render_delay_node(
     graph: Graph,
-    node: Node,
+    node: DelayNode,
     store: SongStore,
     audio_files: AudioFiles,
 ) -> Audio | TrackResult:
@@ -815,13 +815,13 @@ def _render_delay_node(
             name, RenderFailureStatus.CRASHED, detail=f"upstream wrote unusable audio: {error}"
         )
     empty = np.zeros((NUM_CHANNELS, 0), dtype=np.float32)
-    return Audio(delay_line(empty, audio.samples, cast("int", node.delay_samples)))
+    return Audio(delay_line(empty, audio.samples, node.delay_samples))
 
 
 def _render_track_node(
     graph: Graph,
-    node: Node,
-    resolved: ResolvedNode,
+    node: TrackNode,
+    resolved: ResolvedInstrument,
     timeout_s: float,
     notify: Notify,
 ) -> Audio | TrackResult:
@@ -836,12 +836,10 @@ def _render_track_node(
     render is kept; otherwise the track fails as `late_start`.
     """
     adapter, sound = resolved.adapter, resolved.resolved
-    if not isinstance(adapter, Instrument) or not isinstance(sound, ResolvedSound):
-        raise ValueError(f"a track node resolved to a {type(adapter).__name__}, not an instrument")
     name = NodeName(node.name)
     performance = perform_for(graph, node, adapter.pitches)
     if isinstance(performance, PitchProblem):
-        instrument = parse_sound_ref(cast("str", node.sound)).instrument
+        instrument = parse_sound_ref(node.sound).instrument
         return TrackResult(
             name,
             RenderFailureStatus.UNSUPPORTED_PITCH,
@@ -893,8 +891,8 @@ def _render_track_node(
 
 def _render_effect_node(
     graph: Graph,
-    node: Node,
-    resolved: ResolvedNode,
+    node: EffectNode,
+    resolved: ResolvedEffectNode,
     store: SongStore,
     audio_files: AudioFiles,
     timeout_s: float,
@@ -905,8 +903,6 @@ def _render_effect_node(
     wire's stem travels with the job for the recipe to steer by, its frames matching the audio's.
     """
     adapter, recipe = resolved.adapter, resolved.resolved
-    if not isinstance(adapter, Effect) or not isinstance(recipe, ResolvedEffect):
-        raise ValueError(f"an effect node resolved to a {type(adapter).__name__}, not an effect")
     name = NodeName(node.name)
     # The caller discarded the old stem and stamp, so a failure here leaves the node with neither.
     frames = stem_samples(graph)

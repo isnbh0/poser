@@ -4,7 +4,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import NotRequired, TypedDict, cast
 
-from poser.core.graph import Graph, Node, Wire
+from poser.core.graph import EffectNode, Graph, GraphNode, TrackNode, Wire
 from poser.core.marks import (
     NO_MARKS,
     Mark,
@@ -125,13 +125,12 @@ class Song:
         """
         authored = {track.name for track in self.tracks}
         generated: set[str] = set()
-        nodes: list[Node] = []
+        nodes: list[GraphNode] = []
         wires: list[Wire] = []
         for track in self.tracks:
             nodes.append(
-                Node(
+                TrackNode(
                     name=track.name,
-                    kind="track",
                     gain_db=0.0 if track.effects else track.gain,
                     sound=track.sound,
                     notes=track.notes,
@@ -155,9 +154,7 @@ class Song:
                     )
                 generated.add(name)
                 nodes.append(
-                    Node(
-                        name=name, kind="effect", gain_db=track.gain if last else 0.0, effect=recipe
-                    )
+                    EffectNode(name=name, effect=recipe, gain_db=track.gain if last else 0.0)
                 )
                 wires.append(Wire(previous, name, "audio"))
                 previous = name
@@ -166,7 +163,7 @@ class Song:
 
 def song_last_beat(graph: Graph) -> float:
     """Return the latest note end or controller change across a graph's nodes."""
-    return last_beat(graph.nodes)
+    return last_beat(graph.track_nodes)
 
 
 def _leaf_flags(recipes: Sequence[str]) -> Sequence[tuple[bool, str]]:

@@ -6,7 +6,7 @@ from typing import cast
 
 import pytest
 
-from poser.core.graph import Graph, GraphError, Node, Wire
+from poser.core.graph import EffectNode, Graph, TrackNode, Wire
 from poser.core.loading import check_effect_recipes
 from poser.core.marks import NO_MARKS, Mark, Marks
 from poser.core.music import chord, notes, pitch, scale, swing
@@ -576,7 +576,7 @@ def test_song_graph_compiles_and_is_frozen() -> None:
     assert [node.name for node in graph.nodes] == ["lead", "pad"]
     assert graph.bpm == song.bpm
     assert graph.wires == ()
-    node = graph.nodes[0]
+    node = graph.track_nodes[0]
     assert node.gain_db == song.tracks[0].gain
     assert node.notes == song.tracks[0].notes
     # No mutable state is aliased: the graph holds tuples, and the node refuses assignment.
@@ -651,7 +651,9 @@ def test_an_unknown_recipe_name_is_a_problem_naming_its_track() -> None:
 
 
 def test_compiling_checks_no_recipe_names() -> None:
-    assert [node.effect for node in chain_song("drive").graph().nodes] == [None, "drive"]
+    assert [
+        node.effect for node in chain_song("drive").graph().nodes if isinstance(node, EffectNode)
+    ] == ["drive"]
 
 
 def test_a_chain_compiles_in_series_with_the_fader_on_its_leaf() -> None:
@@ -664,9 +666,11 @@ def test_a_chain_compiles_in_series_with_the_fader_on_its_leaf() -> None:
         ("bass", "bass.drive", "audio", 0.0),
         ("bass.drive", "bass.crush", "audio", 0.0),
     ]
-    (track_node, drive, crush) = graph.nodes
-    assert track_node.sound == "serum"
-    assert (drive.effect, crush.effect) == ("drive", "crush")
+    assert graph.nodes[1:] == (
+        EffectNode("bass.drive", effect="drive"),
+        EffectNode("bass.crush", effect="crush", gain_db=-6.0),
+    )
+    assert graph.track_nodes[0].sound == "serum"
 
 
 def test_a_track_without_effects_compiles_as_before() -> None:
@@ -709,8 +713,8 @@ def test_two_tracks_chains_stay_distinct_and_the_compile_is_deterministic() -> N
 
 def graph_song() -> Graph:
     """A direct-frontend graph: a lead into one drive, as its author named every node."""
-    lead = Node("lead", "track", sound="serum", notes=(Note(0, 60, 1, 100),))
-    drive = Node("lead.drive", "effect", effect="drive")
+    lead = TrackNode("lead", sound="serum", notes=(Note(0, 60, 1, 100),))
+    drive = EffectNode("lead.drive", effect="drive")
     return Graph(120, (lead, drive), (Wire("lead", "lead.drive", "audio"),))
 
 
@@ -844,14 +848,12 @@ def test_a_compiled_graph_carries_pitched_on_the_track_node() -> None:
 
     graph = song.graph()
 
-    assert [(node.name, node.pitched) for node in graph.nodes] == [("lead", True), ("kit", False)]
+    assert [(node.name, node.pitched) for node in graph.track_nodes] == [
+        ("lead", True),
+        ("kit", False),
+    ]
     assert graph.to_data()["nodes"][1].get("pitched") is False
     assert "pitched" not in graph.to_data()["nodes"][0]
-
-
-def test_only_a_track_node_can_be_unpitched() -> None:
-    with pytest.raises(GraphError, match=r"Node\.pitched: only a track node can be unpitched"):
-        Node("wet", "effect", effect="reverb", pitched=False)
 
 
 # Marks: no law ties them to the notes, compiled graphs drop them, and YAML carries them.
