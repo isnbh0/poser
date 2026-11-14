@@ -139,7 +139,7 @@ and images; otherwise it is `incomplete`, with no `mix` key. Every node has `nam
 |---|---|
 | `run` | This analysis's record number |
 | `song_sha256` | Digest of the loaded song as the record writer serializes it; it differs from a hash of the source file |
-| `node_key` | Digest of the node's render input: for a track, its sound and the samples and events it plays; for an effect or delay, its recipe or delay and the stems and gains fed into it; for a cycle group member, the whole group, including its members' names. Renaming a node outside a cycle group or changing its `gain_db` leaves it unchanged, and nodes in one cycle group share it |
+| `node_key` | Digest of the node's render input: for a track, its sound and the samples and events it plays; for an effect or delay, its recipe or delay and the stems and gains fed into it; for a cycle group member, the whole group, including its members' names. Renaming a node outside a cycle group or changing its `gain_db` leaves it unchanged, nodes in one cycle group share it, and nodes with identical render inputs share it and render once |
 | `sound_key` | Digest of the sound or recipe itself; it changes when a preset, saved sound file, or effect parameters change. Null for a delay or a sound that does not resolve |
 | `gain_db` | The node's terminal mix fader, in decibels |
 | `peak_dbfs` | Highest sample level, in dB relative to full scale |
@@ -175,9 +175,10 @@ renders, analyzes, and publishes matching source, audio, report, images, and a h
 on success. Choose a destination that does not exist yet, neither lies inside nor contains the
 render store (`renders/` by default), and contains neither `POSER.md` nor the song's inputs
 (the song, its includes, `poser.toml`, and `uv.lock`). Repeat `--include <source-relative-file>`
-for declared local source dependencies; `uv run export-song --help` lists the other options. Exit code 0 means published; 3 means another run holds the song's lock, so wait
-and rerun; any other code means nothing was published, and the message says why. The manifest
-records `listening: "not_auditioned"`; report any actual audition separately. See the
+for declared local source dependencies; `uv run export-song --help` lists the other options.
+Exit code 0 means published; 3 means another run holds the song's lock, so wait and rerun; any
+other code means nothing was published, and the message says why. The manifest records
+`listening: "not_auditioned"`; report any actual audition separately. See the
 [export contract](https://github.com/isnbh0/poser/blob/main/docs/setup.md#export-contract)
 for manifest details, portability, and reproducibility limits.
 
@@ -222,7 +223,8 @@ def build() -> Graph:
 ```
 
 Only `wet` and `dry` enter the mix. The wet recipe receives the lead at -12 dB and 2400 samples
-(50 ms) late; its output enters the mix at -6 dB. The dry branch receives the unscaled lead and enters at -3 dB.
+(50 ms) late; its output enters the mix at -6 dB. The dry branch receives the unscaled lead and
+enters at -3 dB.
 
 ## Feedback
 

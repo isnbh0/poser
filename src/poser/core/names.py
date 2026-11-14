@@ -28,7 +28,7 @@ class TrackName(NodeName):
 
 
 class Identifier(str):
-    """An instrument, preset source, saved sound, section, or defect name."""
+    """An instrument, preset source, saved sound, or defect name."""
 
     __slots__ = ()
 

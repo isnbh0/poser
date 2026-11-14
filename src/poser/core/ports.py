@@ -57,6 +57,12 @@ def _tuple_of[T](owner: str, field: str, value: object, kind: type[T]) -> tuple[
 class WorkspaceInitializer(Protocol):
     """No-clobber publication with in-process rollback."""
 
+    def leftovers(self, outputs: Mapping[str, bytes]) -> tuple[str, ...]:
+        """Return the targets holding exactly their planned bytes and the temp files beside the
+        targets, as an interrupted run leaves; raise ConfigError for a target holding anything
+        else."""
+        ...
+
     def remove_leftovers(self, outputs: Mapping[str, bytes]) -> tuple[str, ...]:
         """Delete targets holding exactly their planned bytes, and temp files; return them."""
         ...
@@ -861,12 +867,17 @@ class SongStore(Protocol):
         """Delete every published unit whose key is not in `keys`."""
         ...
 
+    def remove_unit(self, key: str) -> None:
+        """Delete the published unit with this key, if there is one."""
+        ...
+
     def write_record(
         self, song_text: str, suffix: Suffix, *, latest: bool
     ) -> AbstractContextManager[RecordDraft]:
         """Write the next record, holding the song text as `song<suffix>`, publishing it when
         the context exits cleanly and deleting it when the context raises. On publishing, the
-        latest record becomes this one if `latest` is true, and none otherwise."""
+        latest record becomes this one if `latest` is true, and none otherwise. A latest record,
+        when there is one, is the newest record and is complete."""
         ...
 
     def record_path(self, run: int) -> Path:

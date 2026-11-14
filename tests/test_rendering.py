@@ -404,6 +404,38 @@ def test_force_replaces_every_object(tmp_path: Path) -> None:
     assert len(setup.instrument.renders) == 4
 
 
+def test_a_failed_forced_render_leaves_no_object_and_the_next_render_renders_again(
+    tmp_path: Path,
+) -> None:
+    setup = Setup(tmp_path)
+    song = make_song()
+    setup.render(song)
+    failure = RenderFailure(RenderFailureStatus.CRASHED, "the worker died")
+    setup.instrument = make_instrument(pad=FakeSound("a pad", "pad", 0.2, render_failure=failure))
+
+    forced = by_name(setup.render(song, force=True))
+
+    assert failed(forced[BASS]).status is RenderFailureStatus.CRASHED
+    assert not setup.has_stem(BASS), "the stale object outlived a failed forced render"
+    setup.instrument = make_instrument()
+    again = by_name(setup.render(song))
+    assert [ok(again[LEAD]).cached, ok(again[BASS]).cached] == [True, False]
+
+
+def test_a_forced_render_renders_identical_nodes_once(tmp_path: Path) -> None:
+    setup = Setup(tmp_path)
+    song = Song(bpm=120, tracks=(Track("a", "fake", NOTE), Track("b", "fake", NOTE)))
+    assert setup.key(song, NodeName("a")) == setup.key(song, NodeName("b"))
+    setup.render(song)
+    before = len(setup.instrument.renders)
+
+    results = setup.render(song, force=True)
+
+    assert len(setup.instrument.renders) == before + 1
+    assert [ok(result).cached for result in results] == [False, True]
+    assert setup.has_stem(NodeName("a"))
+
+
 @pytest.mark.parametrize("status", sorted(set(RenderFailureStatus) - CORE_RENDER_FAILURES))
 def test_render_failure_passes_through_and_leaves_no_stem(
     tmp_path: Path, status: RenderFailureStatus
@@ -421,7 +453,6 @@ def test_render_failure_passes_through_and_leaves_no_stem(
     assert lead.status is StemStatus.RENDERED
     assert bass == NotRendered(BASS, status, "the worker failed")
     assert bass.status is status
-    assert not setup.has_stem(BASS)
     assert not setup.has_stem(BASS)
 
 

@@ -348,6 +348,12 @@ def check_render_store_contract(make: Callable[[Path], object], tmp_path: Path) 
     assert store.find(KEY_B) is None, "keep_units kept a unit outside the keys"
     assert store.find(KEY_C) is not None, "keep_units deleted a kept unit"
 
+    # remove_unit deletes the one unit, and removing an absent unit does nothing.
+    store.remove_unit(KEY_C)
+    assert store.find(KEY_C) is None, "remove_unit kept the unit"
+    assert store.find(KEY_A) is not None, "remove_unit deleted another unit"
+    store.remove_unit(KEY_C)
+
     # Records count up from 1, hold the song text and what the draft wrote, and an exception
     # publishes no record and uses no number.
     records = renders.song(SongId("songs/records.yaml"))

@@ -1,8 +1,6 @@
 """`init-workspace`: initialize a workspace from an explicit reference setup."""
 
 import argparse
-import os
-import stat
 import sys
 from collections.abc import Mapping
 from importlib.resources import files
@@ -12,7 +10,7 @@ from typing import Never, override
 from poser.cli.guide import GUIDE_NAME, workspace_guide
 from poser.cli.workspace import CONFIG_NAME, Workspace
 from poser.compose import Composition, parse_config, workspace_initializer
-from poser.core.ports import AdapterContext, ConfigError
+from poser.core.ports import AdapterContext, ConfigError, WorkspaceInitializer
 from poser.reference_setups.dispatch import SETUPS, prepare
 
 SETUP_GUIDE = "https://github.com/isnbh0/poser/blob/main/docs/setup.md"
@@ -25,25 +23,10 @@ def _scaffold(name: str) -> str:
     return (files("poser") / "scaffold" / name).read_text(encoding="utf-8")
 
 
-def _leftover(path: Path, data: bytes) -> bool:
-    """Whether `path` holds exactly the bytes this run would write, as an interrupted run left.
-
-    Besides itself, it may be linked only from `.poser-tmp-*` files beside it: a run killed
-    between linking a target and unlinking its temp file leaves both.
-    """
-    info = path.lstat()
-    if not stat.S_ISREG(info.st_mode):
-        return False
-    twins = sum(
-        1
-        for temp in path.parent.glob(".poser-tmp-*")
-        if temp != path and os.path.samestat(temp.lstat(), info)
-    )
-    return info.st_nlink == 1 + twins and path.read_bytes() == data
-
-
-def _preflight(directory: Path, planned: Mapping[str, bytes]) -> tuple[str, ...]:
-    """Reject incompatible parents and owned files; return the targets an interrupted run left.
+def _preflight(
+    directory: Path, planned: Mapping[str, bytes], initializer: WorkspaceInitializer
+) -> tuple[str, ...]:
+    """Reject incompatible parents and owned files; return what an interrupted run left.
 
     `planned` holds every output but `.gitignore`, which merging makes idempotent.
     """
@@ -55,27 +38,21 @@ def _preflight(directory: Path, planned: Mapping[str, bytes]) -> tuple[str, ...]
             raise ConfigError(f"{parent} is a dangling symlink")
         if parent.exists() and not parent.is_dir():
             raise ConfigError(f"{parent} is not a directory")
-    leftovers: list[str] = []
-    for target, path in zip(targets, paths, strict=True):
-        if target == ".gitignore":
-            if path.is_symlink():
-                raise ConfigError(f"{path} is a symlink; refusing to merge")
-            if path.exists() and not path.is_file():
-                raise ConfigError(f"{path} is not a regular file")
-            if path.exists() and path.stat().st_nlink > 1:
-                raise ConfigError(f"{path} has multiple hard links; refusing to merge")
-        elif path.exists() or path.is_symlink():
-            if not _leftover(path, planned[target]):
-                raise ConfigError(f"{path} exists")
-            leftovers.append(target)
-    return tuple(leftovers)
+    ignore = directory / ".gitignore"
+    if ignore.is_symlink():
+        raise ConfigError(f"{ignore} is a symlink; refusing to merge")
+    if ignore.exists() and not ignore.is_file():
+        raise ConfigError(f"{ignore} is not a regular file")
+    if ignore.exists() and ignore.stat().st_nlink > 1:
+        raise ConfigError(f"{ignore} has multiple hard links; refusing to merge")
+    return initializer.leftovers(planned)
 
 
 def _refuse_leftovers(directory: Path, leftovers: tuple[str, ...]) -> Never:
     named = ", ".join(str(directory / target) for target in leftovers)
     raise ConfigError(
-        f"{named} were left by an interrupted initialization; "
-        "rerun with --remove-leftovers to delete them"
+        f"{named} already hold what init-workspace writes, as an interrupted run leaves them; "
+        "rerun with --remove-leftovers to delete them and initialize"
     )
 
 
@@ -134,7 +111,7 @@ def main(argv: list[str] | None = None) -> int:
             "songs/demo.yaml": setup.demo,
         }
         planned = {name: text.encode("utf-8") for name, text in outputs.items()}
-        leftovers = _preflight(directory, planned)
+        leftovers = _preflight(directory, planned, initializer)
         if leftovers and not args.remove_leftovers:
             _refuse_leftovers(directory, leftovers)
         removed = initializer.remove_leftovers(planned) if args.remove_leftovers else ()

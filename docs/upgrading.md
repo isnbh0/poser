@@ -44,8 +44,16 @@ fix. A change listed here applies to every studio that pinned a poser commit fro
   **Cause:** each analysis is now a numbered record in `history/`, laid out like an export
   bundle, and `latest` is a link to the newest complete record.
   **Fix:** the mix is `latest/audio/mix.wav`, and report paths are relative to the record. Old
-  `stems/`, `stamps/`, and `latest/` directories in a song's render directory may be deleted;
-  poser no longer reads them, and every track renders again once.
+  `stems/` and `stamps/` directories in a song's render directory may be deleted; poser no
+  longer reads them, and every track renders again once. The first analysis replaces an old
+  `latest/` directory with the link.
+
+- **Symptom:** a script finds no stems under `stems/`, or no spectrograms under node names.
+  **Cause:** a rendered unit is stored once under `objects/<node_key>/`, as `meta.json` and
+  numbered stems, and a record numbers its spectrograms in `images/`, as in `node-0.png`.
+  **Fix:** read stems through a record's `audio/` directory and `report.json`, whose paths are
+  relative to the record. Records in `history/` written before the upgrade keep their old
+  layout.
 
 ## Fixed adapters and no report sections
 
@@ -142,4 +150,4 @@ fix. A change listed here applies to every studio that pinned a poser commit fro
   `[adapters]` table in `poser.toml`, then run `uv run update-guide`. A track can set
   `pitched: false` to stay out of readings; its pitches must then be whole.
 
-Existing songs render the same audio, and stems rendered before the upgrade stay current.
+Songs whose pitches are all whole render the same audio.

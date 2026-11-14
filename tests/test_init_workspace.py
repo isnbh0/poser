@@ -333,7 +333,8 @@ def test_leftovers_refuse_without_the_flag(
     err = capsys.readouterr().err
     assert str(target / "AGENTS.md") in err
     assert str(target / "songs/demo.yaml") in err
-    assert "were left by an interrupted initialization" in err
+    assert str(target / ".poser-tmp-x") in err
+    assert "already hold what init-workspace writes" in err
     assert "--remove-leftovers" in err
     assert snapshot(target) == before
 
@@ -347,6 +348,21 @@ def test_remove_leftovers_initializes_like_a_clean_run(
     out = capsys.readouterr().out
     assert "removed AGENTS.md\n" in out
     assert "removed songs/demo.yaml\n" in out
+    assert not list(target.rglob(".poser-tmp-*"))
+    assert snapshot(target) == clean
+
+
+def test_a_lone_temp_file_is_a_leftover(
+    tmp_path: Path, plugin: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A run killed before linking any target leaves only its temp file."""
+    target, clean = interrupted(tmp_path, plugin)
+    for name in ("AGENTS.md", "songs/demo.yaml"):
+        (target / name).unlink()
+    capsys.readouterr()
+    assert init_workspace.main(args(target, plugin)) == 2
+    assert str(target / ".poser-tmp-x") in capsys.readouterr().err
+    assert init_workspace.main([*args(target, plugin), "--remove-leftovers"]) == 0
     assert not list(target.rglob(".poser-tmp-*"))
     assert snapshot(target) == clean
 
@@ -387,7 +403,7 @@ def test_target_still_linked_from_its_temp_file_is_a_leftover(
     os.link(target / "AGENTS.md", target / ".poser-tmp-linked")
     capsys.readouterr()
     assert init_workspace.main(args(target, plugin)) == 2
-    assert "were left by an interrupted initialization" in capsys.readouterr().err
+    assert "already hold what init-workspace writes" in capsys.readouterr().err
     assert init_workspace.main([*args(target, plugin), "--remove-leftovers"]) == 0
     assert "removed AGENTS.md\n" in capsys.readouterr().out
     assert not list(target.rglob(".poser-tmp-*"))

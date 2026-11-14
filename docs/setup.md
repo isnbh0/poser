@@ -51,8 +51,8 @@ two renders were sample-identical. A `pass` with `REPEATABLE no` (JSON `repeatab
 still a pass and needs no repair. Clipping is reported but does not fail the check.
 
 The demo mix is `renders/songs/demo.yaml/latest/audio/mix.wav`; its `report.json` is in
-`latest/`, and its spectrograms are in `latest/images/`. Analysis finds technical defects; listen to the mix to
-judge how it sounds.
+`latest/`, and its spectrograms are in `latest/images/`. Analysis finds technical defects; listen
+to the mix to judge how it sounds.
 
 ## Composition advice
 
@@ -95,8 +95,8 @@ uv run export-song <song-path> --destination deliveries/first-song
 ```
 
 Use a new destination each time, and add `--include <source-relative-file>`, once per file, for
-each local Python file the song depends on. The mix is WAV. If export fails, fix the reported problem and rerun export; don't hand
-over an earlier mix.
+each local Python file the song depends on. The mix is WAV. If export fails, fix the reported
+problem and rerun export; don't hand over an earlier mix.
 
 See the [export contract](#export-contract) for exit codes, manifest fields, and portability limits.
 

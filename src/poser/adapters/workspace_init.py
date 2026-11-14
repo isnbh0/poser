@@ -9,7 +9,7 @@ import contextlib
 import os
 import stat
 import tempfile
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -168,15 +168,36 @@ class WorkspaceInitializer:
                 raise ConfigError(f"{parent}: symlink parent")
         return path
 
-    def remove_leftovers(self, outputs: Mapping[str, bytes]) -> tuple[str, ...]:
-        removed: list[str] = []
-        changed: list[Path] = []
-        parents = {self.directory}
+    def _temps(self, names: Iterable[str]) -> list[Path]:
+        parents = {self.directory} | {self._target(name).parent for name in names}
+        return [
+            temp
+            for parent in sorted(parents)
+            if parent.is_dir() and not parent.is_symlink()
+            for temp in sorted(parent.glob(TEMP_PREFIX + "*"))
+            if stat.S_ISREG(temp.lstat().st_mode)
+        ]
+
+    def leftovers(self, outputs: Mapping[str, bytes]) -> tuple[str, ...]:
+        found: list[str] = []
         for name, data in outputs.items():
             if name == IGNORE:
                 continue
             path = self._target(name)
-            parents.add(path.parent)
+            if path.exists() or path.is_symlink():
+                if not _leftover(path, data):
+                    raise ConfigError(f"{path} exists")
+                found.append(name)
+        temps = self._temps(outputs)
+        return (*found, *(str(temp.relative_to(self.directory)) for temp in temps))
+
+    def remove_leftovers(self, outputs: Mapping[str, bytes]) -> tuple[str, ...]:
+        removed: list[str] = []
+        changed: list[Path] = []
+        for name, data in outputs.items():
+            if name == IGNORE:
+                continue
+            path = self._target(name)
             if not path.exists() and not path.is_symlink():
                 continue
             if _leftover(path, data):
@@ -184,12 +205,8 @@ class WorkspaceInitializer:
                 removed.append(name)
             else:
                 changed.append(path)
-        for parent in sorted(parents):
-            if not parent.is_dir() or parent.is_symlink():
-                continue
-            for temp in parent.glob(TEMP_PREFIX + "*"):
-                if stat.S_ISREG(temp.lstat().st_mode):
-                    temp.unlink()
+        for temp in self._temps(outputs):
+            temp.unlink()
         if changed:
             raise ConfigError(f"{changed[0]}: changed; not removed")
         return tuple(removed)

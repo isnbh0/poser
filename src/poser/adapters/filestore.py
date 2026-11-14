@@ -89,15 +89,32 @@ def _write_atomic(path: Path, text: str) -> None:
         temp.unlink(missing_ok=True)
 
 
+def _sync(path: Path) -> None:
+    fd = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
 def _sync_tree(directory: Path) -> None:
-    """Flush every file under `directory` to disk, so a rename publishes complete contents."""
+    """Flush every file and directory under `directory`, and `directory` itself, to disk, so a
+    rename publishes complete contents."""
     for path in directory.rglob("*"):
-        if path.is_file() and not path.is_symlink():
-            fd = os.open(path, os.O_RDONLY)
-            try:
-                os.fsync(fd)
-            finally:
-                os.close(fd)
+        if not path.is_symlink() and (path.is_file() or path.is_dir()):
+            _sync(path)
+    _sync(directory)
+
+
+def _remove_tree(directory: Path) -> None:
+    """Delete `directory`, first renaming it to a draft name, so it is whole or gone under its
+    own name and an interrupted deletion leaves only a draft for `sweep`."""
+    doomed = directory.parent / f"{DRAFT_PREFIX}{os.urandom(8).hex()}"
+    try:
+        directory.rename(doomed)
+    except FileNotFoundError:
+        return
+    shutil.rmtree(doomed, ignore_errors=True)
 
 
 def _draft_dir(parent: Path) -> Path:
@@ -326,6 +343,7 @@ class FileSongStore:
             if error.errno not in (errno.EEXIST, errno.ENOTEMPTY):
                 raise
         else:
+            _sync(target.parent)
             return
         if not replace and self.find(target.name) is not None:
             return
@@ -335,6 +353,7 @@ class FileSongStore:
             draft.rename(target)
         finally:
             shutil.rmtree(old, ignore_errors=True)
+            _sync(target.parent)
 
     def keep_units(self, keys: Collection[str]) -> None:
         objects = self._directory / OBJECTS_DIR
@@ -343,7 +362,11 @@ class FileSongStore:
         kept = set(keys)
         for entry in objects.iterdir():
             if not entry.name.startswith(DRAFT_PREFIX) and entry.name not in kept:
-                shutil.rmtree(entry, ignore_errors=True)
+                _remove_tree(entry)
+
+    def remove_unit(self, key: str) -> None:
+        _check_key(key)
+        _remove_tree(self._directory / OBJECTS_DIR / key)
 
     @contextmanager
     def write_record(
@@ -358,11 +381,10 @@ class FileSongStore:
             _write_atomic(draft.path(f"{SONG_NAME}{suffix}"), song_text)
             yield draft
             _sync_tree(draft.directory)
-            if not latest:
-                # Before the rename, so a crash between the two never leaves `latest` naming
-                # an older record while the newest is incomplete.
-                self.clear_latest()
+            # Before the rename, so `latest`, whenever it exists, names the newest record.
+            self.clear_latest()
             draft.directory.rename(self.record_path(run))
+            _sync(history)
         finally:
             shutil.rmtree(draft.directory, ignore_errors=True)
         if latest:
@@ -373,7 +395,7 @@ class FileSongStore:
         rename."""
         link = self._directory / LATEST_NAME
         if link.is_dir() and not link.is_symlink():
-            shutil.rmtree(link)  # A `latest` directory from an older layout.
+            shutil.rmtree(link)  # Anything at `latest` that is not the link is replaced.
         temp = self._directory / f"{LATEST_NAME}{DRAFT_PREFIX}{os.urandom(8).hex()}"
         temp.symlink_to(target, target_is_directory=True)
         try:
@@ -389,7 +411,7 @@ class FileSongStore:
         if link.is_symlink() or link.is_file():
             link.unlink()
         elif link.is_dir():
-            shutil.rmtree(link)  # A `latest` directory from an older layout.
+            shutil.rmtree(link)  # Anything at `latest` that is not the link is removed.
 
 
 class FileRenderStore:

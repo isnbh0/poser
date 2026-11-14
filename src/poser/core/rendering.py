@@ -203,6 +203,9 @@ class _RenderRun:
     force: bool
     notify: Notify
     results: dict[NodeName, TrackResult] = field(default_factory=dict[NodeName, TrackResult])
+    published: set[str] = field(default_factory=set[str])
+    """Keys published by this run, which a unit with an identical input reuses even when
+    forced."""
 
 
 def render_song(
@@ -271,7 +274,8 @@ def _render_unit(run: _RenderRun, unit: Unit) -> tuple[TrackResult, ...]:
         failures = ((name, *unit.failure_of(name)) for name in unit.nodes)
         return tuple(NotRendered(name, status, detail) for name, status, detail in failures)
     stored = run.store.find(unit.key)
-    if not run.force and stored is not None and len(stored.stems()) == len(unit.nodes):
+    current = not run.force or unit.key in run.published
+    if current and stored is not None and len(stored.stems()) == len(unit.nodes):
         return _cached(unit.nodes, stored)
     rendered: tuple[Audio, ...] | _Failed
     match unit:
@@ -284,7 +288,10 @@ def _render_unit(run: _RenderRun, unit: Unit) -> tuple[TrackResult, ...]:
         case DelayUnit():
             rendered = _one(_render_delay_node(run, unit))
     if isinstance(rendered, _Failed):
-        # A failed unit publishes nothing, so its key stays absent from the store.
+        # A failed unit leaves nothing under its key, even a unit a forced render meant to
+        # replace, so a later run renders it again.
+        if stored is not None:
+            run.store.remove_unit(unit.key)
         return tuple(NotRendered(name, rendered.status, rendered.detail) for name in unit.nodes)
     return _publish(run, unit.key, unit.nodes, rendered, replace=stored is not None)
 
@@ -323,6 +330,7 @@ def _publish(
     stored = run.store.find(key)
     if stored is None:
         raise RuntimeError(f"the store did not publish unit {key}")
+    run.published.add(key)
     return tuple(
         Rendered(name, meta.status, meta.peak_dbfs, stored.stem_path(index))
         for index, (name, meta) in enumerate(zip(nodes, stored.stems(), strict=True))

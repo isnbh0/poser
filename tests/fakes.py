@@ -542,6 +542,10 @@ class FakeSongStore:
             del self.state.units[key]
             shutil.rmtree(self.directory / "units" / key, ignore_errors=True)
 
+    def remove_unit(self, key: str) -> None:
+        self.state.units.pop(key, None)
+        shutil.rmtree(self.directory / "units" / key, ignore_errors=True)
+
     def records(self) -> Path:
         return self.directory / "records"
 
