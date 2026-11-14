@@ -1,301 +1,210 @@
-"""Failure windows use real temporary files and OS locks, never a studio."""
+"""No-clobber publication and its in-process rollback, on real temporary files."""
 
 import os
-import subprocess
-import sys
+import stat
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
 
-from poser.adapters import workspace_init as module
 from poser.adapters.workspace_init import WorkspaceInitializer
 from poser.core.ports import ConfigError
 
+OUTPUTS = {
+    "AGENTS.md": b"agents\n",
+    "POSER.md": b"guide\n",
+    "songs/demo.yaml": b"demo\n",
+    "poser.toml": b"config\n",
+}
 
-@pytest.mark.parametrize("point", [1, 3, 4, 5, 6])
-def test_failed_publication_rolls_back(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, point: int
+
+def tree(root: Path) -> dict[str, bytes | None]:
+    return {
+        str(path.relative_to(root)): None if path.is_dir() else path.read_bytes()
+        for path in root.rglob("*")
+    }
+
+
+def temps(root: Path) -> list[Path]:
+    return list(root.rglob(".poser-tmp-*"))
+
+
+def failing_link(calls_before_failure: int, error: BaseException) -> Callable[[Path, Path], None]:
+    link = os.link
+    calls = 0
+
+    def fail(source: Path, target: Path) -> None:
+        nonlocal calls
+        calls += 1
+        if calls > calls_before_failure:
+            raise error
+        link(source, target)
+
+    return fail
+
+
+def test_publish_creates_targets_with_bytes_and_mode(tmp_path: Path) -> None:
+    WorkspaceInitializer(tmp_path).publish(
+        {**OUTPUTS, ".gitignore": b"renders/\n"}, expected_ignore=None
+    )
+    for name, data in {**OUTPUTS, ".gitignore": b"renders/\n"}.items():
+        path = tmp_path / name
+        assert path.read_bytes() == data
+        assert stat.S_IMODE(path.stat().st_mode) == 0o644
+        assert path.stat().st_nlink == 1
+    assert temps(tmp_path) == []
+    # Only the targets exist: no journal, lock, or other initialization namespace.
+    assert sorted(tree(tmp_path)) == sorted([*OUTPUTS, ".gitignore", "songs"])
+
+
+def test_publish_creates_missing_directory_and_failure_removes_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    owner = WorkspaceInitializer(tmp_path)
+    target = tmp_path / "new" / "studio"
+    WorkspaceInitializer(target).publish(OUTPUTS, expected_ignore=None)
+    assert (target / "songs/demo.yaml").read_bytes() == b"demo\n"
+    other = tmp_path / "other"
+    monkeypatch.setattr(os, "link", failing_link(1, OSError(5, "injected")))
+    with pytest.raises(ConfigError, match="cannot create: injected"):
+        WorkspaceInitializer(other).publish(OUTPUTS, expected_ignore=None)
+    assert not other.exists()
+
+
+def test_existing_target_refuses_and_removes_earlier_targets(tmp_path: Path) -> None:
+    (tmp_path / "songs").mkdir()
+    (tmp_path / "songs/demo.yaml").write_bytes(b"mine")
+    with pytest.raises(FileExistsError):
+        WorkspaceInitializer(tmp_path).publish(OUTPUTS, expected_ignore=None)
+    assert tree(tmp_path) == {"songs": None, "songs/demo.yaml": b"mine"}
+
+
+def test_failure_after_second_target_rolls_back_everything(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     ignore = tmp_path / ".gitignore"
     ignore.write_bytes(b"owner\n")
     ignore.chmod(0o640)
-    save = owner._save
-    calls = 0
-
-    def fail(state: module.Journal) -> None:
-        nonlocal calls
-        calls += 1
-        if calls == point:
-            raise OSError("injected transition failure")
-        save(state)
-
-    with owner.session():
-        inode = (owner.namespace / "lock").stat().st_ino
-        monkeypatch.setattr(owner, "_save", fail)
-        with pytest.raises(OSError, match="injected transition failure"):
-            owner.publish(
-                {"AGENTS.md": b"new", "songs/demo.yaml": b"demo", ".gitignore": b"merged"},
-                expected_ignore=b"owner\n",
-            )
-    assert not (tmp_path / "AGENTS.md").exists()
-    assert not (tmp_path / "songs").exists()
-    assert ignore.read_bytes() == b"owner\n"
-    assert ignore.stat().st_mode & 0o777 == 0o640
-    assert (owner.namespace / "lock").stat().st_ino == inode
+    os.utime(ignore, ns=(1_000_000_000, 2_000_000_000))
+    outputs = {".gitignore": b"owner\nrenders/\n", **OUTPUTS}
+    monkeypatch.setattr(os, "link", failing_link(2, OSError(5, "injected")))
+    with pytest.raises(ConfigError, match=r"demo\.yaml: cannot create"):
+        WorkspaceInitializer(tmp_path).publish(outputs, expected_ignore=b"owner\n")
+    assert tree(tmp_path) == {".gitignore": b"owner\n"}
+    assert stat.S_IMODE(ignore.stat().st_mode) == 0o640
 
 
-def test_owner_edit_preserved_and_journal_retained(
+def test_rollback_restores_a_replaced_gitignore(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    owner = WorkspaceInitializer(tmp_path)
-    link = os.link
+    ignore = tmp_path / ".gitignore"
+    ignore.write_bytes(b"owner\n")
+    ignore.chmod(0o640)
+    os.utime(ignore, ns=(1_000_000_000, 2_000_000_000))
+    replace = os.replace
+    calls = 0
 
-    def change(source: Path, target: Path) -> None:
-        if target.name == "second":
-            (tmp_path / "first").write_bytes(b"owner edit")
-            raise OSError("failed")
-        link(source, target)
+    def fail_after_ignore(source: Path, target: Path) -> None:
+        nonlocal calls
+        calls += 1
+        replace(source, target)
+        if calls == 1:
+            assert ignore.read_bytes() == b"owner\nrenders/\n"
+            raise KeyboardInterrupt
 
-    monkeypatch.setattr(module.os, "link", change)
-    with owner.session(), pytest.raises(ConfigError, match="first"):
-        owner.publish({"first": b"generated", "second": b"generated"})
-    assert (tmp_path / "first").read_bytes() == b"owner edit"
-    assert owner.journal.exists()
-    with pytest.raises(ConfigError, match="first"), owner.session():
-        pass
-
-
-@pytest.mark.parametrize("target", ["first", ".gitignore"])
-@pytest.mark.parametrize("metadata", ["mode", "mtime"])
-def test_metadata_edit_preserved_on_failed_publication(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, target: str, metadata: str
-) -> None:
-    owner = WorkspaceInitializer(tmp_path)
-    output = tmp_path / target
-    if target == ".gitignore":
-        output.write_bytes(b"original")
-    link = os.link
-    edited_mtime = 1234567890000000000
-
-    def change(source: Path, destination: Path) -> None:
-        if destination.name == "second":
-            if metadata == "mode":
-                output.chmod(0o600)
-            else:
-                os.utime(output, ns=(output.stat().st_atime_ns, edited_mtime))
-            raise OSError("publication failure after owner metadata edit")
-        link(source, destination)
-
-    monkeypatch.setattr(module.os, "link", change)
-    with owner.session(), pytest.raises(ConfigError, match=target):
-        owner.publish(
-            {target: b"published", "second": b"new"},
-            expected_ignore=b"original" if target == ".gitignore" else None,
+    monkeypatch.setattr(os, "replace", fail_after_ignore)
+    with pytest.raises(KeyboardInterrupt):
+        WorkspaceInitializer(tmp_path).publish(
+            {**OUTPUTS, ".gitignore": b"owner\nrenders/\n"}, expected_ignore=b"owner\n"
         )
-    assert output.read_bytes() == b"published"
-    assert owner.journal.exists()
-    if metadata == "mode":
-        assert output.stat().st_mode & 0o777 == 0o600
-    else:
-        assert output.stat().st_mtime_ns == edited_mtime
-    journal = owner.journal.read_bytes()
-    with pytest.raises(ConfigError, match=target), owner.session():
-        pass
-    assert output.read_bytes() == b"published"
-    assert owner.journal.read_bytes() == journal
+    assert tree(tmp_path) == {".gitignore": b"owner\n"}
+    assert stat.S_IMODE(ignore.stat().st_mode) == 0o640
+    assert ignore.stat().st_mtime_ns == 2_000_000_000
 
 
-@pytest.mark.parametrize("metadata", ["mode", "mtime"])
-def test_metadata_edit_preserved_after_process_death(tmp_path: Path, metadata: str) -> None:
-    script = """
-import os, sys
-from pathlib import Path
-from poser.adapters.workspace_init import WorkspaceInitializer
-owner = WorkspaceInitializer(Path(sys.argv[1]))
-link = os.link
-def die(source, target):
-    if target.name == "second":
-        first = owner.directory / "first"
-        if sys.argv[2] == "mode":
-            first.chmod(0o600)
-        else:
-            os.utime(first, ns=(first.stat().st_atime_ns, 1234567890000000000))
-        os._exit(19)
-    link(source, target)
-os.link = die
-with owner.session():
-    owner.publish({"first": b"published", "second": b"new"})
-"""
-    result = subprocess.run([sys.executable, "-c", script, str(tmp_path), metadata], check=False)
-    assert result.returncode == 19
-    owner = WorkspaceInitializer(tmp_path)
-    output = tmp_path / "first"
-    journal = owner.journal.read_bytes()
-    lock = (owner.namespace / "lock").stat().st_ino
-    with pytest.raises(ConfigError, match="first"), owner.session():
-        pass
-    assert output.read_bytes() == b"published"
-    assert owner.journal.read_bytes() == journal
-    assert (owner.namespace / "lock").stat().st_ino == lock
-    if metadata == "mode":
-        assert output.stat().st_mode & 0o777 == 0o600
-    else:
-        assert output.stat().st_mtime_ns == 1234567890000000000
+def test_replaced_gitignore_keeps_its_mode(tmp_path: Path) -> None:
+    ignore = tmp_path / ".gitignore"
+    ignore.write_bytes(b"owner\n")
+    ignore.chmod(0o444)
+    WorkspaceInitializer(tmp_path).publish(
+        {".gitignore": b"owner\nrenders/\n"}, expected_ignore=b"owner\n"
+    )
+    assert ignore.read_bytes() == b"owner\nrenders/\n"
+    assert stat.S_IMODE(ignore.stat().st_mode) == 0o444
 
 
-def test_process_death_retry_and_three_contenders(tmp_path: Path) -> None:
-    script = """
-import os, sys
-from pathlib import Path
-from poser.adapters.workspace_init import WorkspaceInitializer
-owner = WorkspaceInitializer(Path(sys.argv[1]))
-link = os.link
-def die(source, target):
-    link(source, target)
-    os._exit(19)
-os.link = die
-with owner.session():
-    owner.publish({"first": b"new", "songs/second": b"new"})
-"""
-    result = subprocess.run([sys.executable, "-c", script, str(tmp_path)], check=False)
-    assert result.returncode == 19
-    owner = WorkspaceInitializer(tmp_path)
-    inode = (owner.namespace / "lock").stat().st_ino
-    assert (tmp_path / "first").read_bytes() == b"new"
-    with owner.session():
-        assert not (tmp_path / "first").exists()
-        assert not (tmp_path / "songs").exists()
-        for _ in range(2):
-            with pytest.raises(ConfigError, match="busy"), WorkspaceInitializer(tmp_path).session():
-                pass
-        owner.publish({"first": b"retry"})
-        with pytest.raises(ConfigError, match="busy"), WorkspaceInitializer(tmp_path).session():
-            pass
-    assert (owner.namespace / "lock").stat().st_ino == inode
-    assert (tmp_path / "first").read_bytes() == b"retry"
-
-
-def test_committed_cleanup_failure_never_rolls_back(
+def test_gitignore_changed_before_replace_refuses(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    owner = WorkspaceInitializer(tmp_path)
+    ignore = tmp_path / ".gitignore"
+    ignore.write_bytes(b"owner\n")
+    ignore.chmod(0o600)
+    fchmod = os.fchmod
 
-    def fail() -> None:
-        raise OSError("cleanup failed")
+    def mutate(fd: int, mode: int) -> None:
+        fchmod(fd, mode)
+        if mode == 0o600:
+            ignore.write_bytes(b"owner edited\n")
 
-    monkeypatch.setattr(owner, "_cleanup", fail)
-    with owner.session(), pytest.raises(OSError, match="cleanup failed"):
-        owner.publish({"first": b"committed"})
-    with (
-        pytest.raises(ConfigError, match="already exists"),
-        WorkspaceInitializer(tmp_path).session(),
-    ):
-        pass
-    assert (tmp_path / "first").read_bytes() == b"committed"
-    assert not owner.journal.exists()
-
-
-def test_ignore_changed_since_preparation_is_preserved(tmp_path: Path) -> None:
-    owner = WorkspaceInitializer(tmp_path)
-    (tmp_path / ".gitignore").write_bytes(b"new owner content")
-    with owner.session(), pytest.raises(ConfigError, match="during preparation"):
-        owner.publish({".gitignore": b"stale merge"}, expected_ignore=b"old content")
-    assert (tmp_path / ".gitignore").read_bytes() == b"new owner content"
+    monkeypatch.setattr(os, "fchmod", mutate)
+    with pytest.raises(ConfigError, match=r"\.gitignore changed during initialization; retry"):
+        WorkspaceInitializer(tmp_path).publish(
+            {**OUTPUTS, ".gitignore": b"owner\nrenders/\n"}, expected_ignore=b"owner\n"
+        )
+    assert tree(tmp_path) == {".gitignore": b"owner edited\n"}
 
 
-def test_directory_creation_window_is_non_destructive(
+def test_keyboard_interrupt_from_link_rolls_back_and_propagates(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    owner = WorkspaceInitializer(tmp_path)
-    save = owner._save
-    calls = 0
-
-    def fail(state: module.Journal) -> None:
-        nonlocal calls
-        calls += 1
-        if calls == 2:
-            raise OSError("death after mkdir before recording ownership")
-        save(state)
-
-    monkeypatch.setattr(owner, "_save", fail)
-    with owner.session(), pytest.raises(ConfigError, match="directory ownership ambiguous"):
-        owner.publish({"songs/demo": b"demo"})
-    assert (tmp_path / "songs").is_dir()
-    assert owner.journal.exists()
+    target = tmp_path / "studio"
+    monkeypatch.setattr(os, "link", failing_link(3, KeyboardInterrupt()))
+    with pytest.raises(KeyboardInterrupt):
+        WorkspaceInitializer(target).publish(OUTPUTS, expected_ignore=None)
+    assert not target.exists()
 
 
-def test_refuses_unrelated_namespace(tmp_path: Path) -> None:
-    (tmp_path / ".poser-init").mkdir()
-    with pytest.raises(ConfigError, match="unrecognized"), WorkspaceInitializer(tmp_path).session():
-        pass
-
-
-def test_publication_requires_lock(tmp_path: Path) -> None:
-    with pytest.raises(ConfigError, match="active locked session"):
-        WorkspaceInitializer(tmp_path).publish({"first": b"new"})
-    assert list(tmp_path.iterdir()) == []
-
-
-def test_rollback_failure_retains_journal_for_retry(
+def test_rollback_keeps_a_target_another_run_linked(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    owner = WorkspaceInitializer(tmp_path)
-    unlink = Path.unlink
     link = os.link
 
-    def fail_link(source: Path, target: Path) -> None:
-        if target.name == "second":
-            raise OSError("publication failure")
+    def race(source: Path, target: Path) -> None:
+        if Path(target).name == "POSER.md":
+            Path(target).write_bytes(b"guide\n")
         link(source, target)
 
-    def fail_unlink(path: Path, missing_ok: bool = False) -> None:
-        if path == tmp_path / "first":
-            raise OSError("rollback failure")
-        unlink(path, missing_ok=missing_ok)
-
-    with monkeypatch.context() as patch:
-        patch.setattr(module.os, "link", fail_link)
-        patch.setattr(Path, "unlink", fail_unlink)
-        with owner.session(), pytest.raises(ConfigError, match=r"first.*rollback failure"):
-            owner.publish({"first": b"new", "second": b"new"})
-    assert owner.journal.exists()
-    assert (tmp_path / "first").read_bytes() == b"new"
-    with owner.session():
-        assert not (tmp_path / "first").exists()
-        assert not owner.journal.exists()
+    monkeypatch.setattr(os, "link", race)
+    with pytest.raises(FileExistsError):
+        WorkspaceInitializer(tmp_path).publish(OUTPUTS, expected_ignore=None)
+    assert tree(tmp_path) == {"POSER.md": b"guide\n"}
 
 
-def test_intervening_directory_is_not_removed(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    owner = WorkspaceInitializer(tmp_path)
-    mkdir = Path.mkdir
-
-    def intervene(
-        path: Path, mode: int = 0o777, parents: bool = False, exist_ok: bool = False
-    ) -> None:
-        if path == tmp_path / "songs":
-            mkdir(path)
-        mkdir(path, mode=mode, parents=parents, exist_ok=exist_ok)
-
-    with owner.session():
-        monkeypatch.setattr(Path, "mkdir", intervene)
-        with pytest.raises(ConfigError, match="directory ownership ambiguous"):
-            owner.publish({"songs/demo": b"new"})
-    assert (tmp_path / "songs").is_dir()
-    assert owner.journal.exists()
+def test_symlink_parent_refused(tmp_path: Path) -> None:
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    studio = tmp_path / "studio"
+    studio.mkdir()
+    (studio / "songs").symlink_to(elsewhere)
+    with pytest.raises(ConfigError, match="symlink parent"):
+        WorkspaceInitializer(studio).publish(OUTPUTS, expected_ignore=None)
+    assert list(elsewhere.iterdir()) == []
+    assert sorted(p.name for p in studio.iterdir()) == ["songs"]
 
 
-def test_no_clobber_intervening_owner_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    owner = WorkspaceInitializer(tmp_path)
-    link = os.link
+def test_remove_leftovers_unlinks_matching_targets_and_temps(tmp_path: Path) -> None:
+    (tmp_path / "songs").mkdir()
+    (tmp_path / "AGENTS.md").write_bytes(OUTPUTS["AGENTS.md"])
+    (tmp_path / "songs/demo.yaml").write_bytes(OUTPUTS["songs/demo.yaml"])
+    (tmp_path / ".poser-tmp-x").write_bytes(b"partial")
+    (tmp_path / "songs/.poser-tmp-y").write_bytes(b"partial")
+    removed = WorkspaceInitializer(tmp_path).remove_leftovers(OUTPUTS)
+    assert removed == ("AGENTS.md", "songs/demo.yaml")
+    assert tree(tmp_path) == {"songs": None}
 
-    def intervene(source: Path, target: Path) -> None:
-        target.write_bytes(b"owner")
-        link(source, target)
 
-    monkeypatch.setattr(module.os, "link", intervene)
-    with owner.session(), pytest.raises(ConfigError, match="first"):
-        owner.publish({"first": b"generated"})
-    assert (tmp_path / "first").read_bytes() == b"owner"
+def test_remove_leftovers_refuses_a_changed_target(tmp_path: Path) -> None:
+    (tmp_path / "AGENTS.md").write_bytes(OUTPUTS["AGENTS.md"])
+    (tmp_path / "POSER.md").write_bytes(b"edited\n")
+    with pytest.raises(ConfigError, match=r"POSER\.md: changed; not removed"):
+        WorkspaceInitializer(tmp_path).remove_leftovers(OUTPUTS)
+    assert tree(tmp_path) == {"POSER.md": b"edited\n"}

@@ -302,7 +302,7 @@ def test_fresh_off_initialization_complete_context_inventory(
     inventory = {
         path.relative_to(target).as_posix(): path.read_text()
         for path in target.rglob("*")
-        if path.is_file() and ".poser-init" not in path.relative_to(target).parts
+        if path.is_file()
     }
     assert set(inventory) == {
         "AGENTS.md",

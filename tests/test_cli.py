@@ -789,8 +789,7 @@ def test_update_guide_check_follows_poser_toml(
     assert "SENTINEL-NOTE" in guide_file.read_text()
     assert guide.main(["--check"]) == EXIT_ALL_PASS
     assert sorted(path.name for path in initialized.iterdir() if path.name.startswith(".")) == [
-        ".gitignore",
-        ".poser-init",
+        ".gitignore"
     ]
 
 

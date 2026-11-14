@@ -1,51 +1,23 @@
-"""Recoverable studio publication. The namespace and lock inode are permanent."""
+"""No-clobber studio publication with in-process rollback.
 
-import base64
-import fcntl
-import hashlib
-import json
+Each target is linked from a complete temp file, so it either does not exist or holds all of
+its bytes. `.gitignore` is merged by compare-and-replace. A failure inside the process removes
+only what this run wrote, identified by the inode and device of its temp files.
+"""
+
+import contextlib
 import os
 import stat
-from collections.abc import Generator, Mapping
-from contextlib import contextmanager
+import tempfile
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TypedDict, cast
 
 from poser.core.ports import ConfigError
 
-IDENTITY = b"poser initialization namespace v1\n"
-
-
-class Entry(TypedDict):
-    target: str
-    data: str
-    digest: str
-    original: str | None
-    mode: int
-    atime: int
-    mtime: int
-    intent: bool
-    published_mode: int
-    published_mtime: int
-    inode: int
-    device: int
-
-
-class Directory(TypedDict):
-    target: str
-    inode: int
-    device: int
-
-
-class Journal(TypedDict):
-    version: int
-    committed: bool
-    entries: list[Entry]
-    directories: list[Directory]
-
-
-def _digest(data: bytes) -> str:
-    return hashlib.sha256(data).hexdigest()
+TEMP_PREFIX = ".poser-tmp-"
+IGNORE = ".gitignore"
+CREATED_MODE = 0o644
 
 
 def _regular(path: Path) -> bool:
@@ -53,262 +25,176 @@ def _regular(path: Path) -> bool:
     return stat.S_ISREG(info.st_mode) and info.st_nlink == 1
 
 
-def _atomic(path: Path, data: bytes, mode: int = 0o644) -> None:
-    temporary = path.with_name(path.name + ".tmp")
-    # The temporary name is private to the locked, recognized namespace.
-    with temporary.open("wb") as stream:
-        stream.write(data)
-        stream.flush()
-        os.fsync(stream.fileno())
-    temporary.chmod(mode)
-    temporary.replace(path)
+@dataclass(frozen=True)
+class _Original:
+    """The `.gitignore` this run replaced, and the inode of the replacement."""
+
+    data: bytes
+    mode: int
+    atime: int
+    mtime: int
+    inode: int
+    device: int
+    written: bytes
+
+
+@dataclass
+class _Publication:
+    """What one `publish` call has created, so a failure can remove exactly that."""
+
+    directory: Path
+    directories: list[Path] = field(default_factory=list)
+    temps: list[Path] = field(default_factory=list)
+    created: list[tuple[Path, int, int]] = field(default_factory=list)
+    original: _Original | None = None
+
+    def ensure_directory(self, path: Path) -> None:
+        missing: list[Path] = []
+        while not path.exists():
+            missing.append(path)
+            path = path.parent
+        for item in reversed(missing):
+            try:
+                item.mkdir()
+            except FileExistsError:
+                continue
+            self.directories.append(item)
+
+    def temp(self, directory: Path, data: bytes, mode: int) -> tuple[Path, os.stat_result]:
+        fd, name = tempfile.mkstemp(dir=directory, prefix=TEMP_PREFIX)
+        path = Path(name)
+        self.temps.append(path)
+        with os.fdopen(fd, "wb") as stream:
+            os.fchmod(stream.fileno(), mode)
+            stream.write(data)
+            stream.flush()
+            os.fsync(stream.fileno())
+            return path, os.fstat(stream.fileno())
+
+    def create(self, path: Path, data: bytes) -> None:
+        temp, info = self.temp(path.parent, data, CREATED_MODE)
+        # Record before linking, so no instant exists where this run's target is unrecorded.
+        self.created.append((path, info.st_ino, info.st_dev))
+        try:
+            os.link(temp, path)
+        except FileExistsError:
+            raise
+        except OSError as error:  # such as a filesystem without hard links
+            raise ConfigError(f"{path}: cannot create: {error.strerror}") from error
+        temp.unlink()
+        self.temps.remove(temp)
+
+    def replace_ignore(self, path: Path, data: bytes, expected: bytes) -> None:
+        before = path.lstat()
+        mode = stat.S_IMODE(before.st_mode)
+        temp, info = self.temp(path.parent, data, mode)
+        try:
+            unchanged = _regular(path) and path.read_bytes() == expected
+        except FileNotFoundError:
+            unchanged = False
+        if not unchanged:
+            raise ConfigError(".gitignore changed during initialization; retry")
+        self.original = _Original(
+            expected,
+            mode,
+            before.st_atime_ns,
+            before.st_mtime_ns,
+            info.st_ino,
+            info.st_dev,
+            data,
+        )
+        temp.replace(path)
+        self.temps.remove(temp)
+
+    def rollback(self) -> None:
+        for path, inode, device in reversed(self.created):
+            with contextlib.suppress(OSError):
+                info = path.lstat()
+                if (info.st_ino, info.st_dev) == (inode, device):
+                    path.unlink()
+        if self.original is not None:
+            with contextlib.suppress(OSError):
+                self._restore_ignore(self.original)
+        for temp in self.temps:
+            with contextlib.suppress(OSError):
+                temp.unlink(missing_ok=True)
+        for directory in reversed(self.directories):
+            with contextlib.suppress(OSError):
+                directory.rmdir()
+
+    def _restore_ignore(self, original: _Original) -> None:
+        path = self.directory / IGNORE
+        info = path.lstat()
+        if (info.st_ino, info.st_dev) != (original.inode, original.device):
+            return
+        if path.read_bytes() != original.written:
+            return
+        temp, _info = self.temp(path.parent, original.data, original.mode)
+        os.utime(temp, ns=(original.atime, original.mtime))
+        temp.replace(path)
+        self.temps.remove(temp)
 
 
 class WorkspaceInitializer:
     def __init__(self, directory: Path) -> None:
         self.directory = directory
-        self.namespace = directory / ".poser-init"
-        self.journal = self.namespace / "journal.json"
-        self._active = False
-
-    @contextmanager
-    def session(self) -> Generator[None]:
-        self.directory.mkdir(parents=True, exist_ok=True)
-        try:
-            self.namespace.mkdir()
-        except FileExistsError:
-            pass
-        else:
-            # Death before identity creation leaves an unrecognized namespace: safe refusal.
-            with (self.namespace / "identity").open("xb") as stream:
-                stream.write(IDENTITY)
-        identity = self.namespace / "identity"
-        if (
-            self.namespace.is_symlink()
-            or not identity.is_file()
-            or not _regular(identity)
-            or identity.read_bytes() != IDENTITY
-        ):
-            raise ConfigError(
-                f"{self.namespace}: unrecognized initialization namespace; inspect it"
-            )
-        lock = self.namespace / "lock"
-        fd = os.open(lock, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
-        try:
-            if not stat.S_ISREG(os.fstat(fd).st_mode) or os.fstat(fd).st_nlink != 1:
-                raise ConfigError(f"{lock}: unsafe initialization lock")
-            try:
-                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except BlockingIOError as error:
-                raise ConfigError(f"{lock}: initialization is busy; retry later") from error
-            if self.journal.exists():
-                state = self._load()
-                if state["committed"]:
-                    self._cleanup()
-                    raise ConfigError(f"{self.directory}: studio already exists (committed)")
-                self._rollback(state)
-            self._active = True
-            yield
-        finally:
-            self._active = False
-            os.close(fd)
-
-    def _load(self) -> Journal:
-        try:
-            state = cast("Journal", json.loads(self.journal.read_bytes()))
-            self._validate(state)
-        except (ValueError, KeyError, TypeError) as error:
-            raise ConfigError(
-                f"{self.journal}: invalid journal; inspect without deleting outputs"
-            ) from error
-
-        return state
-
-    def _validate(self, state: Journal) -> None:
-        if state["version"] != 1 or not isinstance(state["committed"], bool):
-            raise ValueError("invalid state")
-        for entry in state["entries"]:
-            self._target(entry["target"])
-            if not isinstance(entry["published_mode"], int) or not isinstance(
-                entry["published_mtime"], int
-            ):
-                raise TypeError("invalid published metadata")
-            if _digest(base64.b64decode(entry["data"])) != entry["digest"]:
-                raise ValueError("invalid staged digest")
-        for directory in state["directories"]:
-            self._target(directory["target"])
 
     def _target(self, name: str) -> Path:
         relative = Path(name)
         if relative.is_absolute() or ".." in relative.parts or not relative.parts:
-            raise ConfigError(f"{self.journal}: unsafe target {name!r}")
-        if relative.parts[0] == ".poser-init":
-            raise ConfigError(f"{self.journal}: reserved target {name!r}")
+            raise ConfigError(f"unsafe initialization target {name!r}")
         path = self.directory / relative
         for parent in path.parents:
-            if parent == self.directory.parent:
+            if parent == self.directory:
                 break
             if parent.is_symlink():
                 raise ConfigError(f"{parent}: symlink parent")
         return path
 
-    def _save(self, state: Journal) -> None:
-        _atomic(self.journal, json.dumps(state).encode())
-
-    def _cleanup(self) -> None:
-        for name in ("stage", "restore", "restore.tmp", "journal.json.tmp"):
-            (self.namespace / name).unlink(missing_ok=True)
-        self.journal.unlink(missing_ok=True)
-
-    def publish(
-        self, outputs: Mapping[str, bytes], *, expected_ignore: bytes | None = None
-    ) -> None:
-        if not self._active:
-            raise ConfigError("initialization publication requires an active locked session")
-        entries: list[Entry] = []
-        directories: list[Directory] = []
+    def remove_leftovers(self, outputs: Mapping[str, bytes]) -> tuple[str, ...]:
+        removed: list[str] = []
+        changed: list[Path] = []
+        parents = {self.directory}
         for name, data in outputs.items():
-            path = self._target(name)
-            original = None
-            mode, atime, mtime = 0o644, 0, 0
-            if path.exists() or path.is_symlink():
-                if name != ".gitignore" or not _regular(path):
-                    raise ConfigError(f"{path}: exists or is unsafe")
-                info = path.stat()
-                original = base64.b64encode(path.read_bytes()).decode()
-                mode, atime, mtime = stat.S_IMODE(info.st_mode), info.st_atime_ns, info.st_mtime_ns
-            if name == ".gitignore":
-                observed = base64.b64decode(original) if original is not None else None
-                if observed != expected_ignore:
-                    raise ConfigError(f"{path}: owner changed .gitignore during preparation")
-            for parent in reversed(path.parents):
-                if parent.is_relative_to(self.directory) and not parent.exists():
-                    relative = str(parent.relative_to(self.directory))
-                    if not any(item["target"] == relative for item in directories):
-                        directories.append(Directory(target=relative, inode=0, device=0))
-            entries.append(
-                Entry(
-                    target=name,
-                    data=base64.b64encode(data).decode(),
-                    digest=_digest(data),
-                    original=original,
-                    mode=mode,
-                    atime=atime,
-                    mtime=mtime,
-                    intent=False,
-                    published_mode=0,
-                    published_mtime=0,
-                    inode=0,
-                    device=0,
-                )
-            )
-        state = Journal(version=1, committed=False, entries=entries, directories=directories)
-        self._save(state)
-        try:
-            for directory in directories:
-                path = self._target(directory["target"])
-                path.mkdir()
-                info = path.stat()
-                directory["inode"], directory["device"] = info.st_ino, info.st_dev
-                self._save(state)
-            for entry in entries:
-                path = self._target(entry["target"])
-                stage = self.namespace / "stage"
-                with stage.open("xb") as stream:
-                    stream.write(base64.b64decode(entry["data"]))
-                    stream.flush()
-                    os.fsync(stream.fileno())
-                stage.chmod(entry["mode"])
-                info = stage.stat()
-                entry["inode"], entry["device"] = info.st_ino, info.st_dev
-                # Linking/renaming preserves these; reads may change atime, so exclude it.
-                entry["published_mode"] = stat.S_IMODE(info.st_mode)
-                entry["published_mtime"] = info.st_mtime_ns
-                entry["intent"] = True
-                self._save(state)
-                if entry["original"] is None:
-                    os.link(stage, path)
-                    stage.unlink()
-                else:
-                    self._check_original(path, entry)
-                    stage.replace(path)
-            state["committed"] = True
-            self._save(state)
-        except BaseException:
-            # Read durable state: a committed journal must never be rolled back.
-            durable = self._load()
-            if not durable["committed"]:
-                self._rollback(durable)
-            raise
-        self._cleanup()
-
-    def _check_original(self, path: Path, entry: Entry) -> None:
-        if (
-            not _regular(path)
-            or path.read_bytes() != base64.b64decode(entry["original"] or "")
-            or stat.S_IMODE(path.stat().st_mode) != entry["mode"]
-            or path.stat().st_mtime_ns != entry["mtime"]
-        ):
-            raise ConfigError(f"{path}: owner changed .gitignore during initialization")
-
-    def _rollback(self, state: Journal) -> None:
-        problems: list[str] = []
-        for entry in reversed(state["entries"]):
-            if not entry["intent"]:
+            if name == IGNORE:
                 continue
-            path = self._target(entry["target"])
-            try:
-                if not path.exists() and not path.is_symlink():
+            path = self._target(name)
+            parents.add(path.parent)
+            if not path.exists() and not path.is_symlink():
+                continue
+            if _regular(path) and path.read_bytes() == data:
+                path.unlink()
+                removed.append(name)
+            else:
+                changed.append(path)
+        for parent in sorted(parents):
+            if not parent.is_dir() or parent.is_symlink():
+                continue
+            for temp in parent.glob(TEMP_PREFIX + "*"):
+                if stat.S_ISREG(temp.lstat().st_mode):
+                    temp.unlink()
+        if changed:
+            raise ConfigError(f"{changed[0]}: changed; not removed")
+        return tuple(removed)
+
+    def publish(self, outputs: Mapping[str, bytes], *, expected_ignore: bytes | None) -> None:
+        paths = {name: self._target(name) for name in outputs}
+        publication = _Publication(self.directory)
+        try:
+            publication.ensure_directory(self.directory)
+            for name, data in outputs.items():
+                if name == IGNORE:
                     continue
-                info = path.lstat()
-                original = entry["original"]
-                if (
-                    original is not None
-                    and (info.st_ino, info.st_dev) != (entry["inode"], entry["device"])
-                    and _regular(path)
-                    and path.read_bytes() == base64.b64decode(original)
-                ):
-                    continue
-                if (
-                    not stat.S_ISREG(info.st_mode)
-                    or info.st_ino != entry["inode"]
-                    or info.st_dev != entry["device"]
-                    or stat.S_IMODE(info.st_mode) != entry["published_mode"]
-                    or info.st_mtime_ns != entry["published_mtime"]
-                    or _digest(path.read_bytes()) != entry["digest"]
-                ):
-                    problems.append(str(path))
-                    continue
-                if original is None:
-                    path.unlink()
+                publication.ensure_directory(paths[name].parent)
+                publication.create(paths[name], data)
+            if IGNORE in outputs:
+                if expected_ignore is None:
+                    publication.create(paths[IGNORE], outputs[IGNORE])
                 else:
-                    restore = self.namespace / "restore"
-                    _atomic(restore, base64.b64decode(original), entry["mode"])
-                    os.utime(restore, ns=(entry["atime"], entry["mtime"]))
-                    restore.replace(path)
-            except OSError as error:
-                problems.append(f"{path}: {error}")
-        for directory in reversed(state["directories"]):
-            path = self._target(directory["target"])
-            try:
-                if path.exists() or path.is_symlink():
-                    info = path.lstat()
-                    if (
-                        not stat.S_ISDIR(info.st_mode)
-                        or info.st_ino != directory["inode"]
-                        or info.st_dev != directory["device"]
-                    ):
-                        problems.append(f"{path}: directory ownership ambiguous")
-                    elif not any(path.iterdir()):
-                        path.rmdir()
-            except OSError as error:
-                problems.append(f"{path}: {error}")
-        if problems:
-            raise ConfigError(
-                "initialization recovery needs inspection; preserved journal and paths: "
-                + ", ".join(problems)
-            )
-        self._cleanup()
+                    publication.replace_ignore(paths[IGNORE], outputs[IGNORE], expected_ignore)
+        except BaseException:
+            publication.rollback()
+            raise
 
 
 def create(directory: Path) -> WorkspaceInitializer:

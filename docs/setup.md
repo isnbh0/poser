@@ -107,12 +107,13 @@ its existing location as described in the
 [Surge guide](../src/poser/reference_setups/surge/README.md), and retry
 `uv run init-workspace --setup surge` with any needed overrides. Retry only `init-workspace`: a
 failed prerequisite check writes no studio files and leaves the Python project and poser
-dependency in place. After an interrupted initialization, retry the same command. Keep
-`.poser-init`, which the initializer uses for recovery; it remains after every initialization and
-is gitignored. The initializer refuses to run if
-`AGENTS.md`, `POSER.md`, `CLAUDE.md`, `poser.toml`, or `songs/demo.yaml` already exists, and
-merges its required entries into an existing `.gitignore`; if it refuses, follow the diagnostic,
-which names the conflicting path.
+dependency in place. An interrupted initialization removes the files it wrote, so retry the same
+command. If the process was killed before it could clean up (for example, by SIGKILL), a retry
+names the files the interrupted run left and suggests `--remove-leftovers`, which deletes exactly
+those files and initializes. The initializer refuses to run if `AGENTS.md`, `POSER.md`,
+`CLAUDE.md`, `poser.toml`, or `songs/demo.yaml` already exists with other content, and merges its
+required entries into an existing `.gitignore`; if it refuses, follow the diagnostic, which names
+the conflicting path.
 
 If initialization succeeds but `check-instruments` fails, read the diagnostic.
 Failures include load errors, crashes, timeouts, non-finite output, silence, and missing notes.
@@ -155,9 +156,8 @@ configuration, sounds, and output path options as `render-song` and `analyze-son
 - The destination and explicit path options resolve from the invocation directory.
 - Unsafe includes and source escapes are refused.
 - The destination is refused if it already exists, has a parent that is not a directory,
-  overlaps a root the render store protects, overlaps the `.poser-init` namespace of the source
-  or configuration root, contains a captured input, or overlaps `POSER.md`. A render store can
-  export only if its `protected_roots()` declares its roots.
+  overlaps a root the render store protects, contains a captured input, or overlaps `POSER.md`.
+  A render store can export only if its `protected_roots()` declares its roots.
 
 ### Not covered
 

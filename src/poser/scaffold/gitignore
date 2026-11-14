@@ -1,5 +1,4 @@
 renders/
-.poser-init/
 .venv/
 __pycache__/
 .DS_Store

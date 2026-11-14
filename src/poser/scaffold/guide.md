@@ -173,10 +173,9 @@ full scale; and `headroom`, for a mix peak above -1 dBFS.
 To deliver a song, run `uv run export-song <song> --destination <new-directory>`. Export
 renders, analyzes, and publishes matching source, audio, report, images, and a hash manifest only
 on success. Choose a destination that does not exist yet, neither lies inside nor contains the
-render store (`renders/` by default) or `.poser-init`, and contains neither `POSER.md` nor the
-song's inputs (the song, its includes, `poser.toml`, and `uv.lock`). Repeat `--include
-<source-relative-file>` for declared local source dependencies; `uv run export-song --help` lists
-the other options. Exit code 0 means published; 3 means another run holds the song's lock, so wait
+render store (`renders/` by default), and contains neither `POSER.md` nor the song's inputs
+(the song, its includes, `poser.toml`, and `uv.lock`). Repeat `--include <source-relative-file>`
+for declared local source dependencies; `uv run export-song --help` lists the other options. Exit code 0 means published; 3 means another run holds the song's lock, so wait
 and rerun; any other code means nothing was published, and the message says why. The manifest
 records `listening: "not_auditioned"`; report any actual audition separately. See the
 [export contract](https://github.com/isnbh0/poser/blob/main/docs/setup.md#export-contract)

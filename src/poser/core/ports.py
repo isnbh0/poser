@@ -55,13 +55,15 @@ def _tuple_of[T](owner: str, field: str, value: object, kind: type[T]) -> tuple[
 
 
 class WorkspaceInitializer(Protocol):
-    """Own recovery, preparation's lock lifetime, and no-clobber publication."""
+    """No-clobber publication with in-process rollback."""
 
-    def session(self) -> AbstractContextManager[None]: ...
+    def remove_leftovers(self, outputs: Mapping[str, bytes]) -> tuple[str, ...]:
+        """Delete targets holding exactly their planned bytes, and temp files; return them."""
+        ...
 
-    def publish(
-        self, outputs: Mapping[str, bytes], *, expected_ignore: bytes | None = None
-    ) -> None: ...
+    def publish(self, outputs: Mapping[str, bytes], *, expected_ignore: bytes | None) -> None:
+        """Create every target without overwriting, merging `.gitignore` by compare-and-replace."""
+        ...
 
 
 # Song files

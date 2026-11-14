@@ -15,6 +15,14 @@ uv run check-instruments
 If a command fails after the upgrade, find its message below, newest change first, and apply the
 fix. A change listed here applies to every studio that pinned a poser commit from before it.
 
+## No initialization journal
+
+- **Symptom:** a studio has a `.poser-init/` directory and a `.poser-init/` line in `.gitignore`.
+  **Cause:** `init-workspace` used to keep a recovery journal there; it now creates files without
+  overwriting and removes what it wrote on failure, so it keeps no journal.
+  **Fix:** delete the `.poser-init/` directory and its `.gitignore` line, or leave them; nothing
+  reads them.
+
 ## Report statuses and shape
 
 - **Symptom:** a script reading `report.json` finds no `peak_dbfs` on a node or the mix, no

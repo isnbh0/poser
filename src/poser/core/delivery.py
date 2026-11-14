@@ -134,25 +134,11 @@ def capture_inputs(
         raise
     except Exception as error:
         raise ValueError(f"cannot establish protected render roots: {error}") from error
-    reserved = tuple(
-        path
-        for root in (source_root, configuration_root)
-        for path in (root / ".poser-init", (root / ".poser-init").resolve())
-    )
-    if any(
-        _overlap(destination, path) or _overlap(requested_destination, path) for path in reserved
-    ):
-        raise DestinationError("destination overlaps reserved .poser-init namespace")
 
     def source(path: Path, *, preserve_name: bool = False) -> InputSnapshot:
         resolved = path.resolve()
         if not resolved.is_relative_to(source_root):
             raise ValueError(f"source escapes source root: {path}")
-        if any(
-            resolved.is_relative_to(root) or path.absolute().is_relative_to(root)
-            for root in reserved
-        ):
-            raise ValueError(f"source is in reserved .poser-init namespace: {path}")
         return InputSnapshot.capture(path.absolute() if preserve_name else resolved)
 
     captured_song = source(song)
@@ -185,8 +171,6 @@ def capture_inputs(
         for guide in (guide_path, guide_path.resolve())
     ):
         raise DestinationError("destination overlaps workspace guide: POSER.md")
-    if any(configuration.path.is_relative_to(root) for root in reserved):
-        raise ValueError("configuration is in reserved .poser-init namespace")
     return DeliveryInputs(
         source_root,
         configuration_root,

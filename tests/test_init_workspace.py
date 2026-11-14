@@ -41,7 +41,6 @@ def snapshot(root: Path) -> dict[str, tuple[str, bytes]]:
             else path.read_bytes(),
         )
         for path in root.rglob("*")
-        if ".poser-init" not in path.relative_to(root).parts
     }
 
 
@@ -297,3 +296,83 @@ def test_guide_preparation_does_not_spawn_processes(
 
     monkeypatch.setattr(subprocess, "Popen", fail)
     assert init_workspace.main(args(tmp_path / "project", plugin)) == 0
+
+
+def test_second_init_refuses_naming_an_existing_target(
+    tmp_path: Path, plugin: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    target = tmp_path / "studio"
+    assert init_workspace.main(args(target, plugin)) == 0
+    before = snapshot(target)
+    capsys.readouterr()
+    assert init_workspace.main(args(target, plugin)) == 2
+    assert str(target / "AGENTS.md") in capsys.readouterr().err
+    assert snapshot(target) == before
+
+
+def interrupted(tmp_path: Path, plugin: Path) -> tuple[Path, dict[str, tuple[str, bytes]]]:
+    """A clean studio's snapshot, and a directory holding what a killed run left."""
+    clean = tmp_path / "clean"
+    assert init_workspace.main(args(clean, plugin)) == 0
+    target = tmp_path / "studio"
+    (target / "songs").mkdir(parents=True)
+    for name in ("AGENTS.md", "songs/demo.yaml"):
+        (target / name).write_bytes((clean / name).read_bytes())
+    (target / ".poser-tmp-x").write_bytes(b"partial")
+    return target, snapshot(clean)
+
+
+def test_leftovers_refuse_without_the_flag(
+    tmp_path: Path, plugin: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    target, _clean = interrupted(tmp_path, plugin)
+    before = snapshot(target)
+    capsys.readouterr()
+    assert init_workspace.main(args(target, plugin)) == 2
+    err = capsys.readouterr().err
+    assert str(target / "AGENTS.md") in err
+    assert str(target / "songs/demo.yaml") in err
+    assert "were left by an interrupted initialization" in err
+    assert "--remove-leftovers" in err
+    assert snapshot(target) == before
+
+
+def test_remove_leftovers_initializes_like_a_clean_run(
+    tmp_path: Path, plugin: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    target, clean = interrupted(tmp_path, plugin)
+    capsys.readouterr()
+    assert init_workspace.main([*args(target, plugin), "--remove-leftovers"]) == 0
+    out = capsys.readouterr().out
+    assert "removed AGENTS.md\n" in out
+    assert "removed songs/demo.yaml\n" in out
+    assert not list(target.rglob(".poser-tmp-*"))
+    assert snapshot(target) == clean
+
+
+@pytest.mark.parametrize("flag", [[], ["--remove-leftovers"]])
+def test_edited_target_refuses_and_deletes_nothing(
+    tmp_path: Path, plugin: Path, capsys: pytest.CaptureFixture[str], flag: list[str]
+) -> None:
+    target, _clean = interrupted(tmp_path, plugin)
+    (target / "songs/demo.yaml").write_bytes(b"edited")
+    before = snapshot(target)
+    capsys.readouterr()
+    assert init_workspace.main([*args(target, plugin), *flag]) == 2
+    assert f"{target / 'songs/demo.yaml'} exists" in capsys.readouterr().err
+    assert snapshot(target) == before
+
+
+def test_merged_gitignore_is_not_a_leftover(
+    tmp_path: Path, plugin: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    target, clean = interrupted(tmp_path, plugin)
+    merged = b"mine\n" + files("poser").joinpath("scaffold", "gitignore").read_bytes()
+    (target / ".gitignore").write_bytes(merged)
+    capsys.readouterr()
+    assert init_workspace.main(args(target, plugin)) == 2
+    assert ".gitignore" not in capsys.readouterr().err
+    assert init_workspace.main([*args(target, plugin), "--remove-leftovers"]) == 0
+    assert (target / ".gitignore").read_bytes() == merged
+    assert ".gitignore" not in capsys.readouterr().out
+    assert set(snapshot(target)) == set(clean)

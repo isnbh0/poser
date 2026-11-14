@@ -379,22 +379,12 @@ def test_unsafe_includes_refused(harness: Harness, include: str) -> None:
     assert not harness.instrument.renders
 
 
-def test_include_symlink_escape_and_reserved_namespaces(harness: Harness, tmp_path: Path) -> None:
+def test_include_symlink_escape_refused(harness: Harness, tmp_path: Path) -> None:
     outside = tmp_path.parent / f"{tmp_path.name}-outside"
     outside.write_text("private")
     (harness.root / "escape").symlink_to(outside)
     harness.includes = (Path("escape"),)
     with pytest.raises(ValueError, match="escapes"):
-        harness.run()
-    reserved = harness.root / ".poser-init"
-    reserved.mkdir()
-    (reserved / "private").write_text("private")
-    harness.includes = (Path(".poser-init/private"),)
-    with pytest.raises(ValueError, match="reserved"):
-        harness.run()
-    harness.includes = ()
-    harness.destination = reserved / "bundle"
-    with pytest.raises(ValueError, match="reserved"):
         harness.run()
 
 
@@ -764,34 +754,6 @@ def test_dual_root_lock_changes_fail(
         == 1
     )
     assert not (source / "bundle").exists()
-
-
-def test_configuration_root_reserved_destination_with_distinct_source(
-    cli_workspace: CommandWorkspace,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    source = cli_workspace.root / "source"
-    source.mkdir()
-    marker = source / "ran"
-    song = write_script_song(source / "song.py", "synth", marker)
-    monkeypatch.chdir(source)
-    assert (
-        export.main(
-            [
-                str(song),
-                "--config",
-                str(cli_workspace.config),
-                "--sounds-dir",
-                "sounds",
-                "--output-dir",
-                "renders",
-                "--destination",
-                str(cli_workspace.root / ".poser-init/out"),
-            ]
-        )
-        == 2
-    )
-    assert not marker.exists()
 
 
 def test_writer_cleanup_does_not_remove_owner_content(harness: Harness) -> None:

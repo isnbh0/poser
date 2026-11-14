@@ -34,7 +34,6 @@ PLUGIN_LOADERS = {"poser/adapters/pedalboard/worker.py"}
 FCNTL_USERS = {
     "poser/adapters/filestore.py",
     "poser/adapters/pedalboard/instrument.py",
-    "poser/adapters/workspace_init.py",
 }
 LIBRARY_HOMES = {
     "pyloudnorm": {"poser/adapters/measuring.py"},
