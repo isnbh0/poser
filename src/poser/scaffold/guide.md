@@ -117,17 +117,33 @@ Exit codes, for both `render-song` and `analyze-song`:
 the report, which names the files it wrote: the mix, and a spectrogram per node and for the mix.
 Every analysis keeps a numbered record, even a failed one, holding the song as analyzed and that
 run's report, mix, and images. `latest` in the song's render directory links to the newest record
-in which every node analyzed. Report fields whose meaning is not obvious from their names:
+in which every node analyzed.
+
+The report's `status` is `complete` when every node analyzed, and only then does it have a `mix`
+and images; otherwise it is `incomplete`, with no `mix` key. Every node has `name`, `kind`,
+`upstream`, `gain_db`, and `status`, and only the fields its status gives it:
+
+- `analyzed`: `node_key`, `sound_key`, `measurements`, `defects`, and `spectrogram`.
+- `measured`, a readable node in an incomplete analysis, which draws no images: `node_key`,
+  `sound_key`, `measurements`, and `defects`.
+- `not_rendered`, a node with no stem for its current inputs; render again. `unreadable_stem`, a
+  stem whose audio cannot be read; run `render-song --force`. Both have `node_key`, `sound_key`,
+  and `detail`.
+- A plan failure, with the meaning `render-song` gives it: `unknown_sound`, `load_failed`,
+  `unsupported_pitch`, or `upstream_failed`. It has `sound_key` and `detail`, and no `node_key`.
+
+`measurements` holds `peak_dbfs`, `integrated_lufs`, `clipped_samples`, `bands_db`, and
+`bar_dbfs`, for a node and for the mix. Fields whose meaning is not obvious from their names:
 
 | Field | Meaning |
 |---|---|
 | `run` | This analysis's record number |
 | `song_sha256` | Digest of the loaded song as the record writer serializes it; it differs from a hash of the source file |
-| `node_key` | Digest of the node's render input: for a track, its sound and the samples and events it plays; for an effect or delay, its recipe or delay and the stems and gains fed into it; for a cycle group member, the whole group. Renaming a node or changing its `gain_db` leaves it unchanged, and nodes in one cycle group share it. Null when the node cannot render |
+| `node_key` | Digest of the node's render input: for a track, its sound and the samples and events it plays; for an effect or delay, its recipe or delay and the stems and gains fed into it; for a cycle group member, the whole group. Renaming a node or changing its `gain_db` leaves it unchanged, and nodes in one cycle group share it |
 | `sound_key` | Digest of the sound or recipe itself; it changes when a preset, saved sound file, or effect parameters change. Null for a delay or a sound that does not resolve |
 | `gain_db` | The node's terminal mix fader, in decibels |
 | `peak_dbfs` | Highest sample level, in dB relative to full scale |
-| `integrated_lufs` | Loudness over the whole song |
+| `integrated_lufs` | Loudness over the whole song; null when the audio is too short to measure |
 | `bands_db` | Level in each frequency band, relative and uncalibrated |
 | `bar_dbfs` | RMS level of each 4-beat span, up to the song's last beat |
 | `detail` | Why a node has no measurements |
@@ -147,9 +163,7 @@ skipped because an upstream node did not render. A track whose sound begins more
 its first note is rendered again, up to three times in all, and `render-song` and `export-song`
 print a line for each retry. A track that starts at the same moment in all three renders is kept, as
 starting late by design; `late_start` means every attempt started late, not all by the same amount,
-so the track left no stem. Node statuses from `analyze-song`: `analyzed`, `missing_stem`, and
-`stale_stem`, which means the stem cannot be read or the node cannot be planned; `detail` says
-which.
+so the track left no stem.
 
 Defects fail the analysis: `silent`, for a node or the mix; `clipping`, for mix samples beyond
 full scale; and `headroom`, for a mix peak above -1 dBFS.
@@ -272,8 +286,9 @@ pins them.
 - `uv run read-song`: show a song's marks and read its score through the configured frameworks,
   as above.
 - `uv run list-sounds`: every sound a song can name, with a description.
-- `uv run check-instruments`: checks that each instrument loads and plays notes. Its
-  repeatability and clipping results are informational.
+- `uv run check-instruments`: checks that each instrument loads and plays notes. An instrument
+  that plays is `pass`, `silent`, or `missing_notes`; one that fails is `load_failed`, `crashed`,
+  `timed_out`, or `non_finite`. Its repeatability and clipping results are informational.
 - `uv run update-guide`: rewrite `POSER.md` after `poser.toml` changes; `--check` compares it.
   To upgrade poser, follow https://github.com/isnbh0/poser/blob/main/docs/upgrading.md.
 - `uv run save-sound`: do not run it. It opens an instrument's window and waits for a person to

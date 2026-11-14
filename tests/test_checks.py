@@ -9,7 +9,7 @@ from poser.core.checks import (
     CHECK_SAMPLES,
     CHECK_VELOCITY,
     CheckAnalysis,
-    CheckStatus,
+    MeasuredStatus,
     analyze_check,
     check_pattern,
 )
@@ -50,7 +50,7 @@ def test_check_pattern_plays_four_half_second_notes() -> None:
 
 def test_tone_in_all_note_windows_passes() -> None:
     result = check(tone_render(), tone_render())
-    assert result.status is CheckStatus.PASS
+    assert result.status is MeasuredStatus.PASS
     assert result.peak_dbfs == pytest.approx(-6.02, abs=0.01)
     assert result.note_peaks_dbfs == pytest.approx((-6.02,) * 4, abs=0.01)
     assert isinstance(result.note_peaks_dbfs, tuple)
@@ -59,19 +59,19 @@ def test_tone_in_all_note_windows_passes() -> None:
 def test_all_zero_render_is_silent() -> None:
     silence = np.zeros((NUM_CHANNELS, CHECK_SAMPLES), dtype=np.float32)
     result = check(silence, silence)
-    assert result.status is CheckStatus.SILENT
+    assert result.status is MeasuredStatus.SILENT
     assert result.peak_dbfs == FLOOR_DBFS
 
 
 def test_silent_second_render_is_silent() -> None:
     silence = np.zeros((NUM_CHANNELS, CHECK_SAMPLES), dtype=np.float32)
-    assert check(tone_render(), silence).status is CheckStatus.SILENT
+    assert check(tone_render(), silence).status is MeasuredStatus.SILENT
 
 
 def test_empty_note_window_is_missing_notes() -> None:
     render = tone_render(skip_note=2)
     result = check(render, render)
-    assert result.status is CheckStatus.MISSING_NOTES
+    assert result.status is MeasuredStatus.MISSING_NOTES
     assert result.note_peaks_dbfs[2] == FLOOR_DBFS
     assert result.note_peaks_dbfs[1] == pytest.approx(-6.02, abs=0.01)
 
@@ -88,7 +88,7 @@ def test_differing_renders_are_reported_without_failing() -> None:
     result = check(tone_render(), second)
     assert result.repeatable is False
     assert result.max_difference_dbfs == pytest.approx(-20.0, abs=0.01)
-    assert result.status is CheckStatus.PASS
+    assert result.status is MeasuredStatus.PASS
 
 
 def test_full_scale_sample_is_clipped_without_failing() -> None:
@@ -96,7 +96,7 @@ def test_full_scale_sample_is_clipped_without_failing() -> None:
     render[0, note_window(1).start] = 1.0
     result = check(render, render)
     assert result.clipped is True
-    assert result.status is CheckStatus.PASS
+    assert result.status is MeasuredStatus.PASS
 
 
 def test_clean_render_is_not_clipped() -> None:

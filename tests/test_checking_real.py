@@ -8,7 +8,7 @@ from helpers import real_composition
 
 from poser.cli.common import RENDER_TIMEOUT_S
 from poser.core.checking import check_instrument
-from poser.core.checks import CheckStatus
+from poser.core.checks import CheckAnalysis, CheckFailureStatus, MeasuredStatus
 
 
 @pytest.mark.real_plugins
@@ -22,6 +22,10 @@ def test_each_instrument_returns_a_known_status_with_finite_numbers(tmp_path: Pa
 
     assert [result.name for result in results] == list(instruments)
     for result in results:
-        assert result.status in CheckStatus
-        numbers = [result.peak_dbfs, result.max_difference_dbfs, *(result.note_peaks_dbfs or ())]
-        assert all(math.isfinite(number) for number in numbers if number is not None)
+        outcome = result.outcome
+        if isinstance(outcome, CheckAnalysis):
+            assert outcome.status in MeasuredStatus
+            numbers = [outcome.peak_dbfs, outcome.max_difference_dbfs, *outcome.note_peaks_dbfs]
+            assert all(math.isfinite(number) for number in numbers)
+        else:
+            assert outcome.status in CheckFailureStatus

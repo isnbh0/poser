@@ -26,7 +26,7 @@ from poser.core.performance import NoteOff, NoteOn, Performance, PitchSupport
 from poser.core.planning import GroupUnit, Plan, TrackUnit, Unit, Unplanned, plan, resolve_all
 from poser.core.ports import Effect, Instrument, SoundFailure
 from poser.core.song import Note
-from poser.core.statuses import RenderFailureStatus, SoundFailureStatus
+from poser.core.statuses import SkipStatus, SoundFailureStatus
 
 KEY_A = "a" * 64
 KEY_B = "b" * 64
@@ -234,7 +234,7 @@ def test_an_unresolvable_sound_fails_its_unit_and_everything_downstream_names_it
     assert (lead.status, lead.detail) == (SoundFailureStatus.UNKNOWN_SOUND, "no sound named 'gone'")
     assert isinstance(drive, Unplanned)
     assert (drive.status, drive.detail) == (
-        RenderFailureStatus.UPSTREAM_FAILED,
+        SkipStatus.UPSTREAM_FAILED,
         "upstream 'lead' did not render",
     )
     assert not isinstance(unit_of(graph, "pad"), Unplanned)
@@ -252,7 +252,7 @@ def test_a_fractional_pitch_on_a_whole_pitch_instrument_is_unsupported_pitch() -
 
     lead = unit_of(graph, "lead")
     assert isinstance(lead, Unplanned)
-    assert lead.status is RenderFailureStatus.UNSUPPORTED_PITCH
+    assert lead.status is SkipStatus.UNSUPPORTED_PITCH
     assert isinstance(unit_of(graph, "lead", PitchSupport.CONTINUOUS), TrackUnit)
 
 
@@ -304,6 +304,6 @@ def test_a_cycle_group_whose_feed_fails_fails_whole_naming_the_feed() -> None:
     assert isinstance(unit, Unplanned)
     assert unit.nodes == ("late", "loop", "loop.drive")
     assert unit.failure_of(NodeName("loop")) == (
-        RenderFailureStatus.UPSTREAM_FAILED,
+        SkipStatus.UPSTREAM_FAILED,
         "upstream 'track' did not render",
     )

@@ -1,13 +1,15 @@
 """The instrument check: the pattern an instrument plays, and how its renders are judged."""
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import assert_never
+from typing import assert_never, cast
 
 import numpy as np
 
 from poser.core.audio import SILENCE_DBFS, Audio, measure_peak_dbfs, to_dbfs
 from poser.core.performance import NoteOff, NoteOn, Performance
+from poser.core.rules import is_number
 from poser.core.statuses import RenderFailureStatus, SoundFailureStatus
 
 CHECK_SAMPLES = 240000
@@ -28,49 +30,92 @@ def check_pattern() -> Performance:
     return Performance(CHECK_SAMPLES, tuple(events))
 
 
-class CheckStatus(StrEnum):
+class CheckFailureStatus(StrEnum):
+    """The check could not measure two renders."""
+
     TIMED_OUT = "timed_out"
     CRASHED = "crashed"
     LOAD_FAILED = "load_failed"
     NON_FINITE = "non_finite"
+
+
+class MeasuredStatus(StrEnum):
+    """The verdict on two measured renders."""
+
     SILENT = "silent"
     MISSING_NOTES = "missing_notes"
     PASS = "pass"  # noqa: S105 -- a check status, not a password.
 
 
-def check_status(status: SoundFailureStatus | RenderFailureStatus) -> CheckStatus:
+type CheckStatus = CheckFailureStatus | MeasuredStatus
+
+
+def check_status(status: SoundFailureStatus | RenderFailureStatus) -> CheckFailureStatus:
     """Return the check status for an instrument that could not resolve a sound or render."""
     match status:
         case SoundFailureStatus.UNKNOWN_SOUND:
-            return CheckStatus.LOAD_FAILED
+            return CheckFailureStatus.LOAD_FAILED
         case SoundFailureStatus.LOAD_FAILED:
-            return CheckStatus.LOAD_FAILED
+            return CheckFailureStatus.LOAD_FAILED
         case RenderFailureStatus.LOAD_FAILED:
-            return CheckStatus.LOAD_FAILED
+            return CheckFailureStatus.LOAD_FAILED
         case RenderFailureStatus.CRASHED:
-            return CheckStatus.CRASHED
+            return CheckFailureStatus.CRASHED
         case RenderFailureStatus.TIMED_OUT:
-            return CheckStatus.TIMED_OUT
-        # Only the core sets these, and a check gets its statuses from adapters, so they cannot
-        # reach here; a render it could not complete would be a crash of the check.
-        case (
-            RenderFailureStatus.UPSTREAM_FAILED
-            | RenderFailureStatus.LATE_START
-            | RenderFailureStatus.UNSUPPORTED_PITCH
-        ):
-            return CheckStatus.CRASHED
+            return CheckFailureStatus.TIMED_OUT
+        # Only the core sets this, and a check gets its statuses from adapters, so it cannot reach
+        # here; a render it could not complete would be a crash of the check.
+        case RenderFailureStatus.LATE_START:
+            return CheckFailureStatus.CRASHED
         case _:
             assert_never(status)
 
 
 @dataclass(frozen=True)
 class CheckAnalysis:
-    status: CheckStatus
+    """Two renders of the check pattern, measured."""
+
+    status: MeasuredStatus
     peak_dbfs: float
     note_peaks_dbfs: tuple[float, ...]
     clipped: bool
     repeatable: bool
     max_difference_dbfs: float
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.status, MeasuredStatus):
+            raise ValueError(f"CheckAnalysis.status must be a MeasuredStatus, got {self.status!r}")
+        for field in ("peak_dbfs", "max_difference_dbfs"):
+            value = getattr(self, field)
+            if not is_number(value):
+                raise ValueError(f"CheckAnalysis.{field} must be a finite number, got {value!r}")
+        for field in ("clipped", "repeatable"):
+            value = getattr(self, field)
+            if not isinstance(value, bool):
+                raise ValueError(f"CheckAnalysis.{field} must be a bool, got {value!r}")
+        peaks = self.note_peaks_dbfs
+        if not isinstance(peaks, Sequence) or isinstance(peaks, str):
+            raise ValueError(f"CheckAnalysis.note_peaks_dbfs must be a sequence, got {peaks!r}")
+        peaks = tuple(cast("Sequence[object]", peaks))
+        if not all(is_number(peak) for peak in peaks):
+            raise ValueError(f"CheckAnalysis.note_peaks_dbfs must hold finite numbers: {peaks}")
+        object.__setattr__(self, "note_peaks_dbfs", peaks)
+
+
+@dataclass(frozen=True)
+class CheckFailure:
+    """A check that produced no renders to measure, and why."""
+
+    status: CheckFailureStatus
+    detail: str
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.status, CheckFailureStatus):
+            raise ValueError(
+                f"CheckFailure.status must be a CheckFailureStatus, got {self.status!r}"
+            )
+        if not (isinstance(self.detail, str) and self.detail):
+            raise ValueError(f"CheckFailure.detail must be a non-empty str, got {self.detail!r}")
 
 
 def _note_windows() -> list[tuple[int, int]]:
@@ -110,11 +155,11 @@ def analyze_check(first: Audio, second: Audio) -> CheckAnalysis:
     )
 
     if peak_dbfs < SILENCE_DBFS:
-        status = CheckStatus.SILENT
+        status = MeasuredStatus.SILENT
     elif min(note_peaks_dbfs) < SILENCE_DBFS:
-        status = CheckStatus.MISSING_NOTES
+        status = MeasuredStatus.MISSING_NOTES
     else:
-        status = CheckStatus.PASS
+        status = MeasuredStatus.PASS
 
     return CheckAnalysis(
         status=status,

@@ -25,28 +25,36 @@ class RenderFailureStatus(StrEnum):
     TIMED_OUT = "timed_out"
     # Every render attempt's sound began late after the first note, not all by the same amount.
     LATE_START = "late_start"
+
+
+class SkipStatus(StrEnum):
+    """The core did not ask an instrument to render the node."""
+
     # The track has a fractional pitch, and its instrument plays only whole pitches.
     UNSUPPORTED_PITCH = "unsupported_pitch"
     UPSTREAM_FAILED = "upstream_failed"
 
 
 # The render failures only the core decides; an adapter's `RenderFailure` cannot carry them.
-CORE_RENDER_FAILURES = frozenset(
-    {
-        RenderFailureStatus.LATE_START,
-        RenderFailureStatus.UNSUPPORTED_PITCH,
-        RenderFailureStatus.UPSTREAM_FAILED,
-    }
-)
+CORE_RENDER_FAILURES = frozenset({RenderFailureStatus.LATE_START})
 
 
-type RenderStatus = StemStatus | SoundFailureStatus | RenderFailureStatus
+type RenderStatus = StemStatus | SoundFailureStatus | RenderFailureStatus | SkipStatus
 
 # Every distinct render status value, in the order above.
 RENDER_STATUSES: tuple[str, ...] = tuple(
     dict.fromkeys(
         str(status)
-        for enum in (StemStatus, SoundFailureStatus, RenderFailureStatus)
+        for enum in (StemStatus, SoundFailureStatus, RenderFailureStatus, SkipStatus)
         for status in enum
     )
 )
+
+
+class UnrenderedStatus(StrEnum):
+    """Why analysis has no audio for a node the plan keys."""
+
+    # No stem exists under the node's current key.
+    NOT_RENDERED = "not_rendered"
+    # A stem exists under the key, and its audio cannot be read.
+    UNREADABLE_STEM = "unreadable_stem"

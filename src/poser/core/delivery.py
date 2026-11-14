@@ -25,8 +25,15 @@ from poser.core.ports import (
     SongBusyError,
     SongFormat,
 )
-from poser.core.rendering import Notify, _render, ignore_progress, require_stem_format
-from poser.core.report import Report, report_failed, report_to_data
+from poser.core.rendering import (
+    Notify,
+    NotRendered,
+    Rendered,
+    _render,
+    ignore_progress,
+    require_stem_format,
+)
+from poser.core.report import CompleteReport, report_failed, report_to_data
 from poser.core.session import song_session
 from poser.core.song import SongError
 from poser.core.statuses import StemStatus
@@ -239,12 +246,12 @@ class PublishedDelivery:
 
     destination: Path
     manifest_sha256: str
-    report: Report
+    report: CompleteReport
     outcome: ClassVar[str] = "published"
     exit_code: ClassVar[int] = 0
 
     def __post_init__(self) -> None:
-        if report_failed(self.report) or self.report.mix is None:
+        if not isinstance(self.report, CompleteReport) or report_failed(self.report):
             raise ValueError("published delivery requires a successful analysis")
         manifest = self.destination / "manifest.json"
         if not manifest.is_file() or sha256(manifest.read_bytes()) != self.manifest_sha256:
@@ -277,7 +284,7 @@ class PublishedDelivery:
             raise ValueError("published delivery requires the editable song source")
         mix = self.report.mix
         required = {REPORT_NAME, mix.path, mix.spectrogram, *sources}
-        required.update(node.spectrogram for node in self.report.nodes if node.spectrogram)
+        required.update(node.spectrogram for node in self.report.nodes)
         if not required.issubset(artifacts):
             raise ValueError("published delivery is missing required artifacts")
         if any(artifacts[name] != digest for name, digest in sources.items()):
@@ -316,7 +323,7 @@ def result_to_data(result: DeliveryResult) -> dict[str, JsonValue]:
 
 def _bundle(
     inputs: DeliveryInputs,
-    report: Report,
+    report: CompleteReport,
     record: Path,
     poser_version: str,
     song_id: SongId,
@@ -404,12 +411,18 @@ def export_song(
                 force=force,
                 notify=notify,
             )
-            if any(result.status is not StemStatus.RENDERED for result in results):
+            # A silent stem fails export as well as a node without one.
+            failed = [
+                result
+                for result in results
+                if not (isinstance(result, Rendered) and result.status is StemStatus.RENDERED)
+            ]
+            if failed:
                 return RenderFailed(
                     "; ".join(
-                        f"{result.track}: {result.status}: {result.detail or ''}"
-                        for result in results
-                        if result.status is not StemStatus.RENDERED
+                        f"{result.track}: {result.status}: "
+                        f"{result.detail if isinstance(result, NotRendered) else ''}"
+                        for result in failed
                     )
                 )
             report = _analyze(
@@ -422,7 +435,7 @@ def export_song(
                 record_writer,
                 tools,
             )
-            if report_failed(report) or report.mix is None:
+            if not isinstance(report, CompleteReport) or report_failed(report):
                 return AnalysisFailed(f"analysis run {report.run} failed")
             record = store.record_path(report.run)
             if not (record / report.mix.path).is_file():

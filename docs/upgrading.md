@@ -15,6 +15,20 @@ uv run check-instruments
 If a command fails after the upgrade, find its message below, newest change first, and apply the
 fix. A change listed here applies to every studio that pinned a poser commit from before it.
 
+## Report statuses and shape
+
+- **Symptom:** a script reading `report.json` finds no `peak_dbfs` on a node or the mix, no
+  `mix` key, or no `stale_stem` or `missing_stem` status.
+  **Cause:** a report's `status` is `complete` or `incomplete`, and only a complete report has a
+  `mix`. Each node carries only the fields its `status` gives it, with metrics nested under
+  `measurements`. Analysis reports a node the render plan cannot key with the status
+  `render-song` gives it.
+  **Fix:** read metrics under `measurements`, and branch on the report's `status` and each node's
+  `status`. Treat `not_rendered` as the old `missing_stem` and `stale_stem`; `unreadable_stem` is
+  fixed by `render-song --force`; `unknown_sound`, `load_failed`, `unsupported_pitch`, and
+  `upstream_failed` mean what `render-song` reports for them. A readable node of an incomplete
+  analysis is `measured`, with no `spectrogram`.
+
 ## Render store layout
 
 - **Symptom:** `latest/mix.wav` is missing, or a report's `path` and `spectrogram` values are not
@@ -43,7 +57,7 @@ fix. A change listed here applies to every studio that pinned a poser commit fro
 - **Symptom:** every track renders again on the first `render` after upgrading.
   **Cause:** a node's `node_key` is now the digest of exactly what its render receives, so every
   stored key stops matching once. Nodes in one cycle group share one key, and a report's
-  `node_key` is null for a node that cannot render and its `sound_key` null for a delay.
+  `sound_key` is null for a delay.
   **Fix:** nothing; the renders after the first are cached as before.
 
 ## Typed graph nodes

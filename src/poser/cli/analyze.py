@@ -21,7 +21,18 @@ from poser.cli.workspace import WorkspaceError, fill_path_options, song_id
 from poser.core.analysis import analyze_song, report_json
 from poser.core.loading import load_song
 from poser.core.ports import ConfigError, SongBusyError
-from poser.core.report import MixReport, NodeReport, Report, report_failed
+from poser.core.report import (
+    AnalyzedNode,
+    CompleteReport,
+    Defect,
+    IncompleteReport,
+    MeasuredNode,
+    Measurements,
+    Report,
+    UnplannedNode,
+    UnrenderedNode,
+    report_failed,
+)
 from poser.core.song import SongError
 
 PROG = "analyze-song"
@@ -35,30 +46,35 @@ def format_table(report: Report, record: Path) -> str:
     def number(value: float | None) -> str:
         return "-" if value is None else f"{value:.1f}"
 
-    def row(name: str, status: str, values: NodeReport | MixReport) -> tuple[str, ...]:
-        clipped = "-" if values.clipped_samples is None else str(values.clipped_samples)
-        gain = number(values.gain_db) if isinstance(values, NodeReport) else "-"
+    def measured(
+        name: str, status: str, gain: str, values: Measurements, defects: tuple[Defect, ...]
+    ) -> tuple[str, str, str, str, str, str, str]:
         return (
             name,
             status,
             gain,
             number(values.peak_dbfs),
             number(values.integrated_lufs),
-            clipped,
-            ", ".join(values.defects) or "-",
+            str(values.clipped_samples),
+            ", ".join(defects) or "-",
         )
 
     rows = [("NAME", "STATUS", "GAIN DB", "PEAK DBFS", "LUFS", "CLIPPED", "DEFECTS")]
     details: list[str] = []
     for node in report.nodes:
-        rows.append(row(node.name, str(node.status), node))
-        if node.detail:
-            details.append(f"{node.name}: {node.detail}")
+        gain = number(node.gain_db)
+        match node:
+            case AnalyzedNode() | MeasuredNode():
+                rows.append(measured(node.name, node.status, gain, node.measurements, node.defects))
+            case UnrenderedNode() | UnplannedNode():
+                rows.append((node.name, str(node.status), gain, "-", "-", "-", "-"))
+                details.append(f"{node.name}: {node.detail}")
     # Brackets cannot appear in a node name, so this row cannot be mistaken for a node.
-    if report.mix is None:
-        rows.append(("[mix]", "not_written", "-", "-", "-", "-", "-"))
-    else:
-        rows.append(row("[mix]", "written", report.mix))
+    match report:
+        case CompleteReport(mix=mix):
+            rows.append(measured("[mix]", "written", "-", mix.measurements, mix.defects))
+        case IncompleteReport():
+            rows.append(("[mix]", "not_written", "-", "-", "-", "-", "-"))
     return "\n".join([*align_rows(rows), *details, f"record: {record}"])
 
 

@@ -8,22 +8,29 @@ import pytest
 
 from poser.core.audio import SAMPLE_RATE
 from poser.core.report import (
+    ANALYSIS_STATUSES,
     BANDS,
     LEVEL_FLOOR_DBFS,
-    AnalysisStatus,
+    AnalyzedNode,
+    CompleteReport,
     Defect,
+    IncompleteReport,
+    MeasuredNode,
     Measurements,
     MixReport,
-    NodeReport,
     Report,
+    UnplannedNode,
+    UnrenderedNode,
     bar_dbfs,
     mix_defects,
     report_failed,
     report_to_data,
     silent_defects,
 )
+from poser.core.statuses import SkipStatus, SoundFailureStatus, UnrenderedStatus
 
 KEY = "0" * 64
+SOUND = "1" * 64
 BANDS_DB = dict.fromkeys(BANDS, -30.0)
 
 
@@ -37,146 +44,208 @@ def measurements(peak_dbfs: float = -6.0, clipped_samples: int = 0) -> Measureme
     )
 
 
-def node(**changes: object) -> NodeReport:
-    clean = NodeReport(
-        name="lead",
-        status=AnalysisStatus.ANALYZED,
-        node_key=KEY,
-        sound_key=KEY,
-        kind="track",
-        upstream=(),
-        gain_db=-3.0,
-        peak_dbfs=-6.0,
-        integrated_lufs=-14.0,
-        clipped_samples=0,
-        bands_db=BANDS_DB,
-        bar_dbfs=(-12.0, -13.0),
-        spectrogram="lead.png",
+MEASUREMENTS_DATA = {
+    "peak_dbfs": -6.0,
+    "integrated_lufs": -14.0,
+    "clipped_samples": 0,
+    "bands_db": BANDS_DB,
+    "bar_dbfs": [-12.0, -13.0],
+}
+
+
+def analyzed(**changes: object) -> AnalyzedNode:
+    clean = AnalyzedNode(
+        "lead", "track", (), -3.0, KEY, SOUND, measurements(), (), "images/node-0.png"
+    )
+    return replace(clean, **changes)
+
+
+def measured(**changes: object) -> MeasuredNode:
+    return replace(
+        MeasuredNode("lead", "track", (), -3.0, KEY, SOUND, measurements(), ()), **changes
+    )
+
+
+def unrendered(**changes: object) -> UnrenderedNode:
+    clean = UnrenderedNode(
+        "pad", "track", (), 0.0, KEY, SOUND, UnrenderedStatus.NOT_RENDERED, "not rendered"
+    )
+    return replace(clean, **changes)
+
+
+def unplanned(**changes: object) -> UnplannedNode:
+    clean = UnplannedNode(
+        "echo", "effect", ("lead",), 0.0, None, SoundFailureStatus.UNKNOWN_SOUND, "no recipe"
     )
     return replace(clean, **changes)
 
 
 def mix(**changes: object) -> MixReport:
-    clean = MixReport(
-        path="mix.wav",
-        peak_dbfs=-6.0,
-        integrated_lufs=-14.0,
-        clipped_samples=0,
-        bands_db=BANDS_DB,
-        bar_dbfs=(-12.0, -13.0),
-        spectrogram="mix.png",
-        defects=(),
-    )
+    clean = MixReport("audio/mix.wav", measurements(), "images/mix.png", ())
     return replace(clean, **changes)
 
 
-def report(nodes: tuple[NodeReport, ...] = (), mix_report: MixReport | None = None) -> Report:
-    return Report(song="song", run=1, song_sha256=KEY, nodes=nodes or (node(),), mix=mix_report)
+def complete(
+    nodes: tuple[AnalyzedNode, ...] = (), mix_report: MixReport | None = None
+) -> CompleteReport:
+    return CompleteReport("song", 1, KEY, nodes or (analyzed(),), mix_report or mix())
+
+
+def incomplete(
+    nodes: tuple[MeasuredNode | UnrenderedNode | UnplannedNode, ...] = (),
+) -> IncompleteReport:
+    return IncompleteReport("song", 1, KEY, nodes or (measured(), unrendered()))
 
 
 @pytest.mark.parametrize(
     ("value", "failed"),
     [
-        (report(mix_report=mix()), False),
-        (report(), True),
-        (
-            report(
-                (node(status=AnalysisStatus.STALE_STEM, detail="song changed"),),
-                mix(),
-            ),
-            True,
-        ),
-        (report((node(defects=(Defect.SILENT,)),), mix()), True),
-        (report(mix_report=mix(defects=(Defect.HEADROOM,))), True),
+        (complete(), False),
+        (incomplete(), True),
+        (incomplete((unplanned(),)), True),
+        (complete((analyzed(defects=(Defect.SILENT,)),)), True),
+        (complete(mix_report=mix(defects=(Defect.HEADROOM,))), True),
     ],
-    ids=[
-        "clean",
-        "missing_mix",
-        "stale_track",
-        "track_defect",
-        "mix_defect",
-    ],
+    ids=["clean", "incomplete", "unplanned", "node_defect", "mix_defect"],
 )
 def test_report_failed(value: Report, failed: bool) -> None:
     assert report_failed(value) is failed
 
 
-NODE_KEYS = {
-    "name",
-    "status",
-    "kind",
-    "upstream",
-    "node_key",
-    "sound_key",
-    "gain_db",
-    "peak_dbfs",
-    "integrated_lufs",
-    "clipped_samples",
-    "bands_db",
-    "bar_dbfs",
-    "spectrogram",
-    "defects",
-    "detail",
-}
-MIX_KEYS = {
-    "path",
-    "peak_dbfs",
-    "integrated_lufs",
-    "clipped_samples",
-    "bands_db",
-    "bar_dbfs",
-    "spectrogram",
-    "defects",
-}
-
-
-def test_report_to_data_has_the_documented_keys_and_shapes() -> None:
-    value = report(
-        (node(defects=(Defect.SILENT,)),),
+def test_a_complete_report_is_json_in_the_documented_shape() -> None:
+    value = complete(
+        (analyzed(defects=(Defect.SILENT,)),),
         mix(defects=(Defect.CLIPPING,)),
     )
 
     data = report_to_data(value)
 
-    assert isinstance(data, dict)
-    assert set(data) == {"song", "run", "song_sha256", "nodes", "mix"}
-    nodes = data["nodes"]
-    assert isinstance(nodes, list)
-    (node_data,) = nodes
-    mix_data = data["mix"]
-    assert isinstance(node_data, dict)
-    assert isinstance(mix_data, dict)
-    assert set(node_data) == NODE_KEYS
-    assert set(mix_data) == MIX_KEYS
-    assert "tracks" not in data
-    assert node_data["kind"] == "track"
-    assert node_data["upstream"] == []
-    for part in (node_data, mix_data):
-        assert isinstance(part["defects"], list)
-        assert isinstance(part["bar_dbfs"], list)
-        assert isinstance(part["bands_db"], dict)
-        assert "sections" not in part
-    assert node_data["status"] == "analyzed"
-    assert node_data["defects"] == ["silent"]
-    assert mix_data["defects"] == ["clipping"]
+    assert data == {
+        "status": "complete",
+        "song": "song",
+        "run": 1,
+        "song_sha256": KEY,
+        "nodes": [
+            {
+                "name": "lead",
+                "kind": "track",
+                "upstream": [],
+                "gain_db": -3.0,
+                "status": "analyzed",
+                "node_key": KEY,
+                "sound_key": SOUND,
+                "measurements": MEASUREMENTS_DATA,
+                "defects": ["silent"],
+                "spectrogram": "images/node-0.png",
+            }
+        ],
+        "mix": {
+            "path": "audio/mix.wav",
+            "measurements": MEASUREMENTS_DATA,
+            "spectrogram": "images/mix.png",
+            "defects": ["clipping"],
+        },
+    }
     assert json.loads(json.dumps(data, allow_nan=False)) == data
 
 
-def test_a_report_with_upstream_nodes_names_them_in_json() -> None:
-    value = report((node(upstream=("bass", "drums")),))
+def test_an_incomplete_report_is_json_with_each_node_type_and_no_mix() -> None:
+    value = incomplete(
+        (
+            measured(),
+            unrendered(status=UnrenderedStatus.UNREADABLE_STEM, detail="cannot read"),
+            unplanned(),
+            unplanned(
+                name="tail",
+                upstream=("echo",),
+                sound_key=SOUND,
+                status=SkipStatus.UPSTREAM_FAILED,
+                detail="upstream 'echo' did not render",
+            ),
+        )
+    )
 
     data = report_to_data(value)
 
-    assert isinstance(data, dict)
-    nodes = data["nodes"]
-    assert isinstance(nodes, list)
-    (node_data,) = nodes
-    assert isinstance(node_data, dict)
-    assert node_data["upstream"] == ["bass", "drums"]
+    assert data == {
+        "status": "incomplete",
+        "song": "song",
+        "run": 1,
+        "song_sha256": KEY,
+        "nodes": [
+            {
+                "name": "lead",
+                "kind": "track",
+                "upstream": [],
+                "gain_db": -3.0,
+                "status": "measured",
+                "node_key": KEY,
+                "sound_key": SOUND,
+                "measurements": MEASUREMENTS_DATA,
+                "defects": [],
+            },
+            {
+                "name": "pad",
+                "kind": "track",
+                "upstream": [],
+                "gain_db": 0.0,
+                "status": "unreadable_stem",
+                "node_key": KEY,
+                "sound_key": SOUND,
+                "detail": "cannot read",
+            },
+            {
+                "name": "echo",
+                "kind": "effect",
+                "upstream": ["lead"],
+                "gain_db": 0.0,
+                "status": "unknown_sound",
+                "sound_key": None,
+                "detail": "no recipe",
+            },
+            {
+                "name": "tail",
+                "kind": "effect",
+                "upstream": ["echo"],
+                "gain_db": 0.0,
+                "status": "upstream_failed",
+                "sound_key": SOUND,
+                "detail": "upstream 'echo' did not render",
+            },
+        ],
+    }
+
+
+def test_an_incomplete_report_needs_a_node_that_is_not_measured() -> None:
+    with pytest.raises(ValueError, match="not measured"):
+        IncompleteReport("song", 1, KEY, (measured(), measured(name="pad")))
+
+
+def test_an_incomplete_report_refuses_analyzed_nodes() -> None:
+    with pytest.raises(ValueError, match="IncompleteReport"):
+        IncompleteReport("song", 1, KEY, (analyzed(), unrendered()))  # ty: ignore[invalid-argument-type]
+
+
+def test_a_complete_report_refuses_other_nodes() -> None:
+    with pytest.raises(ValueError, match=r"CompleteReport\.nodes"):
+        CompleteReport("song", 1, KEY, (measured(),), mix())  # ty: ignore[invalid-argument-type]
+
+
+def test_every_node_status_is_listed() -> None:
+    assert ANALYSIS_STATUSES == (
+        "analyzed",
+        "measured",
+        "not_rendered",
+        "unreadable_stem",
+        "unknown_sound",
+        "load_failed",
+        "unsupported_pitch",
+        "upstream_failed",
+    )
 
 
 def test_changing_report_data_leaves_the_report_unchanged() -> None:
-    value = report(mix_report=mix())
+    value = complete()
     expected = report_to_data(value)
     data = report_to_data(value)
     assert isinstance(data, dict)
@@ -184,19 +253,23 @@ def test_changing_report_data_leaves_the_report_unchanged() -> None:
     assert isinstance(nodes, list)
     node_data = nodes[0]
     assert isinstance(node_data, dict)
+    values = node_data["measurements"]
+    assert isinstance(values, dict)
 
-    part = node_data["bands_db"]
+    part = values["bands_db"]
     assert isinstance(part, dict)
     part.clear()
-    for key in ("bar_dbfs", "defects"):
-        part = node_data[key]
-        assert isinstance(part, list)
-        part.append(0.0)
+    part = values["bar_dbfs"]
+    assert isinstance(part, list)
+    part.append(0.0)
+    part = node_data["defects"]
+    assert isinstance(part, list)
+    part.append("silent")
     nodes.clear()
 
     assert report_to_data(value) == expected
-    assert value.nodes[0].bands_db == BANDS_DB
-    assert value.nodes[0].bar_dbfs == (-12.0, -13.0)
+    assert value.nodes[0].measurements.bands_db == BANDS_DB
+    assert value.nodes[0].measurements.bar_dbfs == (-12.0, -13.0)
 
 
 def sine(frequency: float, seconds: float, amplitude: float = 1.0) -> np.ndarray:
@@ -252,5 +325,7 @@ def test_mix_defects_follow_the_ceiling_and_full_scale(
     [{"song": 1}, {"run": True}, {"run": 0}, {"song_sha256": None}],
 )
 def test_report_refuses_bad_scalars(changes: dict[str, object]) -> None:
-    with pytest.raises(ValueError, match="Report"):
-        replace(report(), **changes)
+    with pytest.raises(ValueError, match="CompleteReport"):
+        replace(complete(), **changes)
+    with pytest.raises(ValueError, match="IncompleteReport"):
+        replace(incomplete(), **changes)

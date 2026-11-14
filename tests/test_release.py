@@ -13,7 +13,14 @@ from urllib.parse import unquote, urlsplit
 import pytest
 from helpers import REPO_DIR
 
-from poser.core.report import BANDS, AnalysisStatus, MixReport, NodeReport, Report, report_to_data
+from poser.core.report import (
+    BANDS,
+    AnalyzedNode,
+    CompleteReport,
+    Measurements,
+    MixReport,
+    report_to_data,
+)
 
 PROJECT = tomllib.loads((REPO_DIR / "pyproject.toml").read_text())["project"]
 
@@ -152,50 +159,36 @@ def test_readme_analysis_example_matches_serialized_report() -> None:
     (example,) = re.findall(r"```json\n(.*?)```", demo, re.DOTALL)
     documented = json.loads(example)
     bands = dict.fromkeys(BANDS, -30.0)
-    node = NodeReport(
-        name="lead",
-        status=AnalysisStatus.ANALYZED,
-        node_key="0" * 64,
-        sound_key="1" * 64,
-        kind="track",
-        upstream=(),
-        peak_dbfs=-6.0,
-        integrated_lufs=-14.0,
-        clipped_samples=0,
-        bands_db=bands,
-        bar_dbfs=(-12.0,),
-        spectrogram="lead.png",
+    measurements = Measurements(-6.0, -14.0, 0, bands, (-12.0,))
+    node = AnalyzedNode(
+        "lead", "track", (), 0.0, "0" * 64, "1" * 64, measurements, (), "images/node-0.png"
     )
-    mix = MixReport(
-        path="mix.wav",
-        peak_dbfs=-6.0,
-        integrated_lufs=-14.0,
-        clipped_samples=0,
-        bands_db=bands,
-        bar_dbfs=(-12.0,),
-        spectrogram="mix.png",
-        defects=(),
-    )
-    serialized = report_to_data(Report("example", 1, "2" * 64, (node,), mix))
+    mix = MixReport("audio/mix.wav", measurements, "images/mix.png", ())
+    serialized = report_to_data(CompleteReport("example", 1, "2" * 64, (node,), mix))
     assert isinstance(serialized, dict)
     assert isinstance(documented, dict)
-    assert "nodes" in documented
-    assert "tracks" not in documented
+    assert documented["status"] == serialized["status"] == "complete"
     assert set(documented) <= set(serialized)
     serialized_nodes = serialized["nodes"]
     assert isinstance(serialized_nodes, list)
     serialized_node = serialized_nodes[0]
     assert isinstance(serialized_node, dict)
-    assert isinstance(documented["nodes"], list)
-    assert documented["nodes"]
-    for documented_node in documented["nodes"]:
-        assert isinstance(documented_node, dict)
-        assert set(documented_node) <= set(serialized_node)
-        assert documented_node["status"] in {status.value for status in AnalysisStatus}
     serialized_mix = serialized["mix"]
     assert isinstance(serialized_mix, dict)
-    assert isinstance(documented["mix"], dict)
-    assert set(documented["mix"]) <= set(serialized_mix)
+    assert isinstance(documented["nodes"], list)
+    assert documented["nodes"]
+    pairs = [(documented["mix"], serialized_mix)]
+    for documented_node in documented["nodes"]:
+        assert documented_node["status"] == "analyzed"
+        pairs.append((documented_node, serialized_node))
+    for documented_part, serialized_part in pairs:
+        assert isinstance(documented_part, dict)
+        assert set(documented_part) <= set(serialized_part)
+        documented_values = documented_part["measurements"]
+        serialized_values = serialized_part["measurements"]
+        assert isinstance(documented_values, dict)
+        assert isinstance(serialized_values, dict)
+        assert set(documented_values) <= set(serialized_values)
 
 
 def test_scsynth_readme_config_supplies_engine_path(tmp_path: Path) -> None:

@@ -36,23 +36,28 @@ to its record:
 
 ```json
 {
+  "status": "complete",
   "song": "demo",
   "run": 1,
   "nodes": [
     {
       "name": "lead",
-      "status": "analyzed",
       "gain_db": -3.0,
-      "peak_dbfs": -10.383672189873698,
-      "integrated_lufs": -18.651026814438925,
-      "clipped_samples": 0,
+      "status": "analyzed",
+      "measurements": {
+        "peak_dbfs": -10.383672189873698,
+        "integrated_lufs": -18.651026814438925,
+        "clipped_samples": 0
+      },
       "defects": []
     }
   ],
   "mix": {
-    "peak_dbfs": -10.05617342416529,
-    "integrated_lufs": -19.345337407632602,
     "path": "audio/mix.wav",
+    "measurements": {
+      "peak_dbfs": -10.05617342416529,
+      "integrated_lufs": -19.345337407632602
+    },
     "spectrogram": "images/mix.png",
     "defects": []
   }

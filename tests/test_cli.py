@@ -22,7 +22,7 @@ from poser.cli.common import (
 from poser.compose import load
 from poser.core.audio import SILENCE_DBFS
 from poser.core.checking import CheckResult
-from poser.core.checks import CheckStatus
+from poser.core.checks import CheckAnalysis, CheckFailure, CheckFailureStatus, MeasuredStatus
 from poser.core.guide import GENERATED
 from poser.core.loading import load_song
 from poser.core.names import Identifier, NodeName, SongId
@@ -303,7 +303,7 @@ def test_analyze_table_has_a_mix_row(
     assert len(lines) == 4
 
 
-def test_missing_stem_fails_the_analysis(
+def test_an_unrendered_node_fails_the_analysis(
     workspace: CommandWorkspace, capsys: pytest.CaptureFixture[str]
 ) -> None:
     write_song(workspace.root / SONG, ("lead", "synth:lead"))
@@ -311,10 +311,27 @@ def test_missing_stem_fails_the_analysis(
     assert analyze.main([SONG]) == EXIT_SOME_FAILED
 
     lines = out(capsys).splitlines()
-    assert lines[1].split()[:2] == ["lead", "missing_stem"]
+    assert lines[1].split() == ["lead", "not_rendered", "0.0", "-", "-", "-", "-"]
     assert lines[2].split() == ["[mix]", "not_written", "-", "-", "-", "-", "-"]
-    assert lines[3] == f"record: {workspace.renders / SONG / 'history' / '1'}"
-    assert len(lines) == 4
+    assert lines[3] == "lead: render-song has not rendered this node's current inputs"
+    assert lines[4] == f"record: {workspace.renders / SONG / 'history' / '1'}"
+    assert len(lines) == 5
+
+
+def test_an_unplannable_node_reports_render_songs_status(
+    workspace: CommandWorkspace, capsys: pytest.CaptureFixture[str]
+) -> None:
+    write_song(workspace.root / SONG, ("lead", "synth:lead"), ("pad", "nowhere:pad"))
+    render.main([SONG])
+    capsys.readouterr()
+
+    assert analyze.main([SONG]) == EXIT_SOME_FAILED
+
+    lines = out(capsys).splitlines()
+    assert lines[1].split()[:2] == ["lead", "measured"]
+    assert lines[2].split() == ["pad", "unknown_sound", "0.0", "-", "-", "-", "-"]
+    assert lines[3].split()[:2] == ["[mix]", "not_written"]
+    assert lines[4] == "pad: no instrument 'nowhere' in poser.toml"
 
 
 # check-instruments
@@ -399,12 +416,27 @@ def test_check_differing_renders_pass(
     }
 
 
+def analysis(status: MeasuredStatus) -> CheckAnalysis:
+    return CheckAnalysis(
+        status, -6.0, (-6.0,) * 4, clipped=False, repeatable=True, max_difference_dbfs=-120.0
+    )
+
+
 @pytest.mark.parametrize(
-    "status", [status for status in CheckStatus if status is not CheckStatus.PASS]
+    "outcome",
+    [
+        *(CheckFailure(status, "it failed") for status in CheckFailureStatus),
+        analysis(MeasuredStatus.SILENT),
+        analysis(MeasuredStatus.MISSING_NOTES),
+    ],
+    ids=str,
 )
-def test_check_each_failure_exits_one_alongside_a_pass(status: CheckStatus) -> None:
-    passing = CheckResult(Identifier("good"), Identifier("fake"), CheckStatus.PASS)
-    failing = CheckResult(Identifier("bad"), Identifier("fake"), status)
+def test_check_each_failure_exits_one_alongside_a_pass(
+    outcome: CheckAnalysis | CheckFailure,
+) -> None:
+    passing = CheckResult(Identifier("good"), Identifier("fake"), analysis(MeasuredStatus.PASS))
+    failing = CheckResult(Identifier("bad"), Identifier("fake"), outcome)
+    assert check.exit_code([passing]) == EXIT_ALL_PASS
     assert check.exit_code([passing, failing]) == EXIT_SOME_FAILED
 
 

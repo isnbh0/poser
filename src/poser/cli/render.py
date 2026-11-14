@@ -22,7 +22,7 @@ from poser.cli.workspace import WorkspaceError, fill_path_options, song_id
 from poser.core.jsonvalue import JsonValue
 from poser.core.loading import load_song
 from poser.core.ports import ConfigError, SongBusyError
-from poser.core.rendering import TrackResult, render_song
+from poser.core.rendering import NotRendered, Rendered, TrackResult, render_song
 from poser.core.song import SongError
 from poser.core.statuses import StemStatus
 
@@ -30,18 +30,25 @@ PROG = "render-song"
 
 
 def result_to_data(result: TrackResult) -> dict[str, JsonValue]:
+    match result:
+        case Rendered():
+            peak, stem, detail, cached = result.peak_dbfs, str(result.stem), None, result.cached
+        case NotRendered():
+            peak, stem, detail, cached = None, None, result.detail, False
     return {
         "track": str(result.track),
         "status": str(result.status),
-        "peak_dbfs": result.peak_dbfs,
-        "stem": None if result.stem is None else str(result.stem),
-        "detail": result.detail,
-        "cached": result.cached,
+        "peak_dbfs": peak,
+        "stem": stem,
+        "detail": detail,
+        "cached": cached,
     }
 
 
 def exit_code(results: list[TrackResult]) -> int:
-    all_rendered = all(result.status is StemStatus.RENDERED for result in results)
+    all_rendered = all(
+        isinstance(result, Rendered) and result.status is StemStatus.RENDERED for result in results
+    )
     return EXIT_ALL_PASS if all_rendered else EXIT_SOME_FAILED
 
 
@@ -49,12 +56,21 @@ def format_table(results: list[TrackResult]) -> str:
     rows = [("TRACK", "STATUS", "CACHED", "PEAK DBFS", "STEM")]
     details = []
     for result in results:
-        peak = "-" if result.peak_dbfs is None else f"{result.peak_dbfs:.1f}"
-        cached = "yes" if result.cached else "-"
-        stem = "-" if result.stem is None else str(result.stem)
-        rows.append((result.track, str(result.status), cached, peak, stem))
-        if result.detail:
-            details.append(f"{result.track}: {result.detail}")
+        match result:
+            case Rendered():
+                cached = "yes" if result.cached else "-"
+                rows.append(
+                    (
+                        result.track,
+                        str(result.status),
+                        cached,
+                        f"{result.peak_dbfs:.1f}",
+                        str(result.stem),
+                    )
+                )
+            case NotRendered():
+                rows.append((result.track, str(result.status), "-", "-", "-"))
+                details.append(f"{result.track}: {result.detail}")
     return "\n".join([*align_rows(rows), *details])
 
 

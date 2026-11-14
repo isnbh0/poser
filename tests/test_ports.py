@@ -7,8 +7,7 @@ import pytest
 
 from poser.core.audio import Audio
 from poser.core.capturing import SaveRequest
-from poser.core.checking import CheckResult
-from poser.core.checks import CheckStatus
+from poser.core.checks import CheckAnalysis, MeasuredStatus
 from poser.core.graph import Wire
 from poser.core.jsonvalue import Json
 from poser.core.names import Identifier, NodeName, TrackName
@@ -26,7 +25,7 @@ from poser.core.ports import (
     SoundFailure,
     SoundListing,
 )
-from poser.core.rendering import TrackResult
+from poser.core.rendering import NotRendered, Rendered
 from poser.core.sounds import SoundEntry, SoundRef
 from poser.core.statuses import (
     CORE_RENDER_FAILURES,
@@ -58,16 +57,24 @@ def test_types_refuse_what_their_rules_forbid() -> None:
         CaptureFailure("")
     with pytest.raises(ValueError, match="gain_db"):
         MixInput(TrackName("lead"), AUDIO, float("inf"))
-    with pytest.raises(ValueError, match="no stem"):
-        TrackResult(
+    with pytest.raises(ValueError, match="StemStatus"):
+        Rendered(
             TrackName("lead"),
-            RenderFailureStatus.CRASHED,
+            RenderFailureStatus.CRASHED,  # ty: ignore[invalid-argument-type]
             peak_dbfs=-6.0,
             stem=Path("lead.npy"),
-            detail="it crashed",
         )
-    with pytest.raises(ValueError, match="needs a stem"):
-        TrackResult(TrackName("lead"), StemStatus.RENDERED, peak_dbfs=-6.0)
+    with pytest.raises(ValueError, match="stem must be a Path"):
+        Rendered(
+            TrackName("lead"),
+            StemStatus.RENDERED,
+            peak_dbfs=-6.0,
+            stem=None,  # ty: ignore[invalid-argument-type]
+        )
+    with pytest.raises(ValueError, match="failure status"):
+        NotRendered(TrackName("lead"), StemStatus.RENDERED, "it rendered")  # ty: ignore[invalid-argument-type]
+    with pytest.raises(ValueError, match="non-empty"):
+        NotRendered(TrackName("lead"), RenderFailureStatus.CRASHED, "")
     with pytest.raises(ValueError, match="description must not be empty"):
         SaveRequest(FAKE, Identifier("pad"), "  ", None, replace=False)
     with pytest.raises(ValueError, match="root"):
@@ -99,11 +106,13 @@ def test_collection_fields_are_tuples_that_later_changes_cannot_reach() -> None:
     notes = ["presets hold 1 .txt poser cannot read"]
     listing = SoundListing(entries, problems, notes)  # ty: ignore[invalid-argument-type]
     peaks = [-6.0, -7.0]
-    check = CheckResult(
-        FAKE,
-        FAKE,
-        CheckStatus.PASS,
-        note_peaks_dbfs=peaks,  # ty: ignore[invalid-argument-type]
+    check = CheckAnalysis(
+        MeasuredStatus.PASS,
+        -6.0,
+        peaks,  # ty: ignore[invalid-argument-type]
+        clipped=False,
+        repeatable=True,
+        max_difference_dbfs=-120.0,
     )
 
     entries.append(SoundEntry(SoundRef(FAKE, "pad"), "a pad"))

@@ -13,7 +13,7 @@ from helpers import REPO_DIR, SCAFFOLD_DIR, SURGE_DIR, real_analyze, real_compos
 import poser
 from poser.adapters.song_formats import SONG_FORMATS
 from poser.compose import DEFAULT_PRESET, PRESETS, read_config
-from poser.core import analysis, music, report, song
+from poser.core import analysis, checks, music, report, song
 from poser.core.audio import NUM_CHANNELS, SAMPLE_RATE, TAIL_S
 from poser.core.graph import Graph
 from poser.core.guide import FIRST_INSTRUMENT_PLACEHOLDER
@@ -177,7 +177,9 @@ def test_framework_readings_name_every_outcome_and_preset() -> None:
 def test_statuses_and_defects_are_named() -> None:
     names = {
         *RENDER_STATUSES,
-        *(str(status) for status in report.AnalysisStatus),
+        *report.ANALYSIS_STATUSES,
+        *(str(status) for status in checks.CheckFailureStatus),
+        *(str(status) for status in checks.MeasuredStatus),
         *(str(defect) for defect in report.Defect),
     }
     assert names <= backticked()
@@ -186,7 +188,13 @@ def test_statuses_and_defects_are_named() -> None:
 def test_report_fields_exist() -> None:
     fields = {
         field.name
-        for cls in (report.Report, report.NodeReport, report.MixReport)
+        for cls in (
+            report.CompleteReport,
+            report.AnalyzedNode,
+            report.UnrenderedNode,
+            report.MixReport,
+            report.Measurements,
+        )
         for field in dataclasses.fields(cls)
     }
     names = set(first_column("Reading the analysis"))
@@ -391,8 +399,7 @@ def test_python_example_renders_without_defects(tmp_path: Path) -> None:
 
     result = real_analyze(tmp_path, example, "example0/example.py")
 
+    assert isinstance(result, report.CompleteReport), result
     for node in result.nodes:
-        assert node.status is report.AnalysisStatus.ANALYZED, node.detail
         assert node.defects == ()
-    assert result.mix is not None
-    assert result.mix.defects == (), result.mix.peak_dbfs
+    assert result.mix.defects == (), result.mix.measurements.peak_dbfs

@@ -28,6 +28,7 @@ from poser.adapters.song_formats import ScriptSongFormat, YamlSongFormat
 from poser.cli import export
 from poser.compose import Composition, WorkspaceConfig
 from poser.core.analysis import AnalysisTools
+from poser.core.audio import Audio
 from poser.core.delivery import (
     AnalysisFailed,
     DeliveryIOFailed,
@@ -47,12 +48,14 @@ from poser.core.delivery import (
 from poser.core.names import Identifier, SongId, Suffix
 from poser.core.ports import (
     AdapterContext,
+    AudioFileError,
     DeliveryWriter,
     RecordDraft,
     RenderFailure,
     SongBusyError,
     StagedDelivery,
 )
+from poser.core.report import Defect
 from poser.core.statuses import RenderFailureStatus
 
 
@@ -79,6 +82,7 @@ class Harness:
         self.guide_path.write_text(self.guide_text)
         self.includes: tuple[Path, ...] = ()
         self.writer: DeliveryWriter = FileDeliveryWriter()
+        self.audio_files = NpyAudioFiles()
 
     def run(self, mutation: Callable[[], None] | None = None) -> DeliveryResult:
         inputs = capture_inputs(
@@ -98,7 +102,7 @@ class Harness:
             self.store,
             {Identifier("fake"): self.instrument},
             {},
-            NpyAudioFiles(),
+            self.audio_files,
             FakeRecordWriter(),
             self.tools,
             self.writer,
@@ -278,7 +282,17 @@ def test_source_changed_by_builder_is_not_published(harness: Harness) -> None:
     assert not harness.destination.exists()
 
 
-@pytest.mark.parametrize("failure", ["render", "defect", "missing_mix", "writer"])
+class UnreadableAudioFiles(NpyAudioFiles):
+    """Audio files that write stems but cannot read them back."""
+
+    @override
+    def read(self, path: Path, frames: int) -> Audio:
+        raise AudioFileError(f"{path.name} is unreadable")
+
+
+@pytest.mark.parametrize(
+    "failure", ["render", "silent", "defect", "incomplete", "missing_mix", "writer"]
+)
 def test_failure_outcomes_preserve_history_and_never_publish(
     harness: Harness,
     failure: str,
@@ -295,6 +309,12 @@ def test_failure_outcomes_preserve_history_and_never_publish(
             },
         )
         expected = RenderFailed
+    elif failure == "silent":
+        harness.instrument = FakeInstrument("fake", {None: FakeSound(amplitude=0.0)})
+        expected = RenderFailed
+    elif failure == "incomplete":
+        harness.audio_files = UnreadableAudioFiles()
+        harness.writer = HookWriter(lambda: pytest.fail("an incomplete analysis was staged"))
     elif failure == "defect":
         harness.instrument = FakeInstrument("fake", {None: FakeSound(amplitude=0.95)})
     elif failure == "missing_mix":
@@ -323,7 +343,9 @@ def test_failure_outcomes_preserve_history_and_never_publish(
     assert not harness.destination.exists()
     assert "bundle" not in result_to_data(result)
     assert not list(harness.root.rglob(".poser-export-*"))
-    if failure != "render":
+    if failure in ("render", "silent"):
+        assert result.detail.startswith(f"lead: {failure if failure == 'silent' else 'crashed'}: ")
+    else:
         assert list((harness.root / "renders").rglob("history/*/report.json"))
 
 
@@ -412,7 +434,9 @@ def test_success_constructor_refuses_missing_publication(harness: Harness) -> No
         PublishedDelivery(harness.root / "absent", result.manifest_sha256, result.report)
     with pytest.raises(ValueError, match="successful analysis"):
         PublishedDelivery(
-            harness.destination, result.manifest_sha256, replace(result.report, mix=None)
+            harness.destination,
+            result.manifest_sha256,
+            replace(result.report, mix=replace(result.report.mix, defects=(Defect.HEADROOM,))),
         )
     (harness.destination / "audio/mix.npy").write_bytes(b"corrupt")
     with pytest.raises(ValueError, match="does not match"):

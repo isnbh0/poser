@@ -16,6 +16,7 @@ from poser.core.audio import (
     stem_samples,
 )
 from poser.core.loading import load_song
+from poser.core.rendering import Rendered
 from poser.core.song import ControlChange, Note, Song, Track
 from poser.core.statuses import StemStatus
 
@@ -31,8 +32,8 @@ def test_demo_song_renders_aligned_audible_stems(tmp_path: Path) -> None:
     # Render order is the graph's topological order, not the report's song order.
     assert [result.track for result in results] == [node.name for node in song.graph.topological()]
     for result in results:
-        assert result.status is StemStatus.RENDERED, result.detail
-        assert result.stem is not None
+        assert isinstance(result, Rendered), result
+        assert result.status is StemStatus.RENDERED
         with ReadableAudioFile(str(result.stem)) as stem:  # ty: ignore[no-matching-overload]
             assert stem.samplerate == SAMPLE_RATE
             audio = stem.read(stem.frames)
@@ -46,8 +47,8 @@ SOUND = "serum:presets/Leads/LD A Bit of Luck [SD]"
 def render_cc_song(tmp_path: Path, name: str, beats: float, *changes: ControlChange) -> np.ndarray:
     track = Track("lead", SOUND, (Note(0, 60, beats, 100),), cc=changes)
     (result,) = real_render(tmp_path, Song(120, (track,)), f"songs/{name}.yaml")
-    assert result.status is StemStatus.RENDERED, result.detail
-    assert result.stem is not None
+    assert isinstance(result, Rendered), result
+    assert result.status is StemStatus.RENDERED
     return read_stem(str(result.stem))
 
 

@@ -23,7 +23,8 @@ from poser.core.loading import LoadedSong
 from poser.core.names import Identifier, SongId
 from poser.core.performance import Control, NoteOff, NoteOn, Performance
 from poser.core.ports import AdapterContext, RenderRequest, ResolvedSound
-from poser.core.rendering import TrackResult
+from poser.core.rendering import Rendered, TrackResult
+from poser.core.report import CompleteReport
 from poser.core.song import Note, Song, Track
 
 pytestmark = pytest.mark.real_scsynth
@@ -332,7 +333,6 @@ def pedalboard_instrument(composition: Composition) -> str:
 def test_two_engine_timeline_and_cache(tmp_path: Path) -> None:
     """Both adapters answer the same song with exact stems and independent caches: re-rendering
     one engine's sound leaves the other engine's stem alone."""
-    from poser.core.statuses import StemStatus
 
     composition, source = two_engine_composition(tmp_path)
     song = two_engine_song(pedalboard_instrument(composition))
@@ -342,25 +342,28 @@ def test_two_engine_timeline_and_cache(tmp_path: Path) -> None:
     by_track = {str(result.track): result for result in first}
     assert set(by_track) == {"synth", "strings"}
     for result in first:
-        assert result.status in (StemStatus.RENDERED, StemStatus.SILENT), result
+        assert isinstance(result, Rendered), result
         assert result.cached is False
     stems = {}
     for name, result in by_track.items():
-        assert result.stem is not None
+        assert isinstance(result, Rendered), result
         stems[name] = composition.audio_files().read(result.stem, frames)
     for audio in stems.values():
         assert isinstance(audio, Audio)
         assert np.isfinite(audio.samples).all()
 
     second = render(composition, song, "songs/two-engines.py", force=False)
-    assert all(result.cached for result in second)
+    assert all(isinstance(result, Rendered) and result.cached for result in second)
 
     # Touching only the scsynth sound's meta re-renders only the scsynth node.
     (source / "voice.json").write_text('{"cc": {"1": "amp"}}')
     third = render(composition, song, "songs/two-engines.py", force=False)
     by_track = {str(result.track): result for result in third}
-    assert by_track["synth"].cached is False
-    assert by_track["strings"].cached is True
+    synth, strings = by_track["synth"], by_track["strings"]
+    assert isinstance(synth, Rendered), synth
+    assert isinstance(strings, Rendered), strings
+    assert synth.cached is False
+    assert strings.cached is True
 
 
 def test_two_engine_mix_sums_the_leaves(tmp_path: Path) -> None:
@@ -390,15 +393,16 @@ def test_two_engine_mix_sums_the_leaves(tmp_path: Path) -> None:
         effects=composition.effects(),
     )
     record = composition.render_store().song(song_id).record_path(report.run)
-    assert report.mix is not None
+    assert isinstance(report, CompleteReport), report
     mix = composition.audio_files().read(record / report.mix.path, frames)
     assert isinstance(mix, Audio)
     gains = {str(track.name): track.gain for track in song.tracks}
     by_track = {str(result.track): result for result in results}
     stems = {}
     for name, gain in gains.items():
-        stem = by_track[name].stem
-        assert stem is not None
+        result = by_track[name]
+        assert isinstance(result, Rendered), result
+        stem = result.stem
         samples = composition.audio_files().read(stem, frames).samples.astype(np.float64)
         stems[name] = samples * 10 ** (gain / 20)
     expected = np.zeros_like(mix.samples, dtype=np.float64)

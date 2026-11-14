@@ -20,7 +20,7 @@ from poser.core.guide import GENERATED, GuideBlock, compose_guide, observed_advi
 from poser.core.loading import load_song
 from poser.core.names import SongId
 from poser.core.ports import AdapterContext, AdviceProvider, ConfigError, Guided
-from poser.core.rendering import TrackResult, render_song
+from poser.core.rendering import Rendered, TrackResult, render_song
 from poser.core.song import Song
 from poser.core.statuses import StemStatus
 
@@ -195,7 +195,7 @@ def test_guidance_toggle_preserves_rendered_bytes_keys_and_cache(
             assert instrument.renders == []
             assert units == baseline_units
             assert stem_bytes == baseline_bytes
-            assert all(item.cached for item in result)
+            assert all(isinstance(item, Rendered) and item.cached for item in result)
             assert [dataclasses.replace(item, cached=False) for item in result] == baseline_result
         instrument.renders.clear()
         assert render(force=True) == baseline_result

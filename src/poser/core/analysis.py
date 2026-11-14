@@ -34,21 +34,25 @@ from poser.core.ports import (
     Measurer,
     Mixer,
     MixInput,
+    RecordDraft,
     RecordWriter,
     RenderStore,
     SongStore,
-    StoredUnit,
     Visualizer,
 )
 from poser.core.rendering import require_stem_format
 from poser.core.report import (
     BAR_BEATS,
     MIX_NAME,
-    AnalysisStatus,
+    AnalyzedNode,
+    CompleteReport,
+    IncompleteReport,
+    MeasuredNode,
     Measurements,
     MixReport,
-    NodeReport,
     Report,
+    UnplannedNode,
+    UnrenderedNode,
     bar_dbfs,
     mix_defects,
     report_to_data,
@@ -56,9 +60,11 @@ from poser.core.report import (
 )
 from poser.core.session import song_session
 from poser.core.song import song_last_beat
+from poser.core.statuses import UnrenderedStatus
 
 # The report's name in a record.
 REPORT_NAME = "report.json"
+NOT_RENDERED_DETAIL = "render-song has not rendered this node's current inputs"
 
 
 def measure(audio: Audio, graph: Graph, measurer: Measurer) -> Measurements:
@@ -84,18 +90,6 @@ class AnalysisTools:
     mixer: Mixer
     measurer: Measurer
     visualizer: Visualizer
-
-
-class StaleStemError(Exception):
-    """A stored stem's audio cannot be read."""
-
-
-def read_stem(stored: StoredUnit, index: int, audio_files: AudioFiles, frames: int) -> Audio:
-    """Read the stem at `index` of a stored unit. Raises StaleStemError when it cannot be read."""
-    try:
-        return audio_files.read(stored.stem_path(index), frames)
-    except AudioFileError as error:
-        raise StaleStemError(str(error)) from error
 
 
 def report_json(report: Report) -> str:
@@ -148,110 +142,124 @@ def _analyze(
     resolutions = resolve_all(graph, instruments, effects)
     planned = plan(graph, resolutions)
     store.sweep()
-    keys: dict[NodeName, str | None] = {}
+    keys: dict[NodeName, str] = {}
     sound_keys: dict[NodeName, str | None] = {}
     stems: dict[NodeName, Audio] = {}
-    failures: dict[NodeName, NodeReport] = {}
+    failures: dict[NodeName, UnrenderedNode | UnplannedNode] = {}
     for node in graph.nodes:
         name = NodeName(node.name)
-        unit, index = planned.place(name)
+        upstream = tuple(wire.from_name for wire in graph.incoming(node.name))
         resolved = resolutions[node.name]
         sound = (
             resolved.sound_key
             if isinstance(resolved, ResolvedInstrument | ResolvedEffectNode)
             else None
         )
-        key = None if isinstance(unit, Unplanned) else unit.key
-        keys[name], sound_keys[name] = key, sound
-        detail: str | None = None
-        stored = None if isinstance(unit, Unplanned) else store.find(unit.key)
+        sound_keys[name] = sound
+        unit, index = planned.place(name)
         if isinstance(unit, Unplanned):
-            status, detail = AnalysisStatus.STALE_STEM, unit.detail
-        elif stored is None:
-            status = AnalysisStatus.MISSING_STEM
+            status, detail = unit.failure_of(name)
+            failures[name] = UnplannedNode(
+                node.name, node.kind, upstream, node.gain_db, sound, status, detail
+            )
+            continue
+        keys[name] = unit.key
+        stored = store.find(unit.key)
+        if stored is None:
+            status, detail = UnrenderedStatus.NOT_RENDERED, NOT_RENDERED_DETAIL
         else:
             try:
-                stems[name] = read_stem(stored, index, audio_files, frames)
+                stems[name] = audio_files.read(stored.stem_path(index), frames)
                 continue
-            except StaleStemError as error:
-                status, detail = AnalysisStatus.STALE_STEM, str(error)
-        failures[name] = NodeReport(
-            node.name,
-            status,
-            key,
-            sound,
-            node.kind,
-            tuple(wire.from_name for wire in graph.incoming(node.name)),
-            gain_db=node.gain_db,
-            detail=detail,
+            except AudioFileError as error:
+                status, detail = UnrenderedStatus.UNREADABLE_STEM, str(error)
+        failures[name] = UnrenderedNode(
+            node.name, node.kind, upstream, node.gain_db, unit.key, sound, status, detail
         )
 
     song_text = record_writer.dump(loaded.source)
     song_sha256 = hashlib.sha256(song_text.encode("utf-8")).hexdigest()
     complete = not failures
     suffix = tools.visualizer.suffix
+    report: Report
     with store.write_record(song_text, record_writer.suffix, latest=complete) as record:
-        nodes: list[NodeReport] = []
+        analyzed: list[AnalyzedNode] = []
+        incomplete: list[MeasuredNode | UnrenderedNode | UnplannedNode] = []
         for position, node in enumerate(graph.nodes):
             name = NodeName(node.name)
             if name in failures:
-                nodes.append(failures[name])
+                incomplete.append(failures[name])
                 continue
             audio = stems[name]
             measurements = measure(audio, graph, tools.measurer)
-            image = None
+            upstream = tuple(wire.from_name for wire in graph.incoming(node.name))
+            defects = tuple(silent_defects(measurements))
             if complete:
                 image = record.path(f"images/node-{position}{suffix}")
                 tools.visualizer.draw(audio, image, node.name)
-            nodes.append(
-                NodeReport(
-                    node.name,
-                    AnalysisStatus.ANALYZED,
-                    keys[name],
-                    sound_keys[name],
-                    node.kind,
-                    tuple(wire.from_name for wire in graph.incoming(node.name)),
-                    gain_db=node.gain_db,
-                    peak_dbfs=measurements.peak_dbfs,
-                    integrated_lufs=measurements.integrated_lufs,
-                    clipped_samples=measurements.clipped_samples,
-                    bands_db=measurements.bands_db,
-                    bar_dbfs=measurements.bar_dbfs,
-                    spectrogram=None if image is None else record.relative(image),
-                    defects=tuple(silent_defects(measurements)),
+                analyzed.append(
+                    AnalyzedNode(
+                        node.name,
+                        node.kind,
+                        upstream,
+                        node.gain_db,
+                        keys[name],
+                        sound_keys[name],
+                        measurements,
+                        defects,
+                        record.relative(image),
+                    )
                 )
-            )
+            else:
+                incomplete.append(
+                    MeasuredNode(
+                        node.name,
+                        node.kind,
+                        upstream,
+                        node.gain_db,
+                        keys[name],
+                        sound_keys[name],
+                        measurements,
+                        defects,
+                    )
+                )
 
-        mix = None
         if complete:
-            inputs = tuple(
-                MixInput(NodeName(node.name), stems[NodeName(node.name)], node.gain_db)
-                for node in _leaves(graph)
-            )
-            mixed = tools.mixer.mix(inputs, frames)
-            if mixed.frames != frames:
-                raise ValueError(f"the mixer returned {mixed.frames} frames, expected {frames}")
-            mix_image = record.path(f"images/{MIX_NAME}{suffix}")
-            tools.visualizer.draw(mixed, mix_image, MIX_NAME)
-            mix_path = record.path(f"audio/{MIX_NAME}{audio_files.suffix}")
-            audio_files.write(mix_path, mixed)
-            measurements = measure(mixed, graph, tools.measurer)
-            mix = MixReport(
-                path=record.relative(mix_path),
-                peak_dbfs=measurements.peak_dbfs,
-                integrated_lufs=measurements.integrated_lufs,
-                clipped_samples=measurements.clipped_samples,
-                bands_db=measurements.bands_db,
-                bar_dbfs=measurements.bar_dbfs,
-                spectrogram=record.relative(mix_image),
-                defects=tuple(mix_defects(measurements)),
-            )
-
-        report = Report(
-            song=song_name, run=record.run, song_sha256=song_sha256, nodes=tuple(nodes), mix=mix
-        )
+            mix = _mix(graph, stems, frames, audio_files, tools, record)
+            report = CompleteReport(song_name, record.run, song_sha256, tuple(analyzed), mix)
+        else:
+            report = IncompleteReport(song_name, record.run, song_sha256, tuple(incomplete))
         record.path(REPORT_NAME).write_text(report_json(report), encoding="utf-8")
     return report
+
+
+def _mix(
+    graph: Graph,
+    stems: Mapping[NodeName, Audio],
+    frames: int,
+    audio_files: AudioFiles,
+    tools: AnalysisTools,
+    record: RecordDraft,
+) -> MixReport:
+    """Mix the leaf stems into the record, draw the mix, and measure it."""
+    inputs = tuple(
+        MixInput(NodeName(node.name), stems[NodeName(node.name)], node.gain_db)
+        for node in _leaves(graph)
+    )
+    mixed = tools.mixer.mix(inputs, frames)
+    if mixed.frames != frames:
+        raise ValueError(f"the mixer returned {mixed.frames} frames, expected {frames}")
+    mix_image = record.path(f"images/{MIX_NAME}{tools.visualizer.suffix}")
+    tools.visualizer.draw(mixed, mix_image, MIX_NAME)
+    mix_path = record.path(f"audio/{MIX_NAME}{audio_files.suffix}")
+    audio_files.write(mix_path, mixed)
+    measurements = measure(mixed, graph, tools.measurer)
+    return MixReport(
+        record.relative(mix_path),
+        measurements,
+        record.relative(mix_image),
+        tuple(mix_defects(measurements)),
+    )
 
 
 def _leaves(graph: Graph) -> tuple[GraphNode, ...]:

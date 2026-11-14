@@ -30,7 +30,7 @@ from poser.core.names import Identifier, NodeName
 from poser.core.performance import PitchProblem, perform_for
 from poser.core.ports import Effect, Instrument, ResolvedEffect, ResolvedSound, SoundFailure
 from poser.core.sounds import parse_sound_ref
-from poser.core.statuses import RenderFailureStatus, SoundFailureStatus
+from poser.core.statuses import SkipStatus, SoundFailureStatus
 
 EMPTY_EFFECTS: Mapping[Identifier, Effect] = cast(
     "Mapping[Identifier, Effect]", MappingProxyType({})
@@ -215,7 +215,7 @@ class GroupUnit:
 
 type Planned = TrackUnit | EffectUnit | DelayUnit | GroupUnit
 
-type UnplannedStatus = SoundFailureStatus | RenderFailureStatus
+type UnplannedStatus = SoundFailureStatus | SkipStatus
 
 
 @dataclass(frozen=True)
@@ -239,7 +239,7 @@ class Unplanned:
         """Return the status and detail the unit's node `name` fails with."""
         if name == self.cause:
             return self.status, self.detail
-        return RenderFailureStatus.UPSTREAM_FAILED, f"upstream {self.cause!r} did not render"
+        return SkipStatus.UPSTREAM_FAILED, f"upstream {self.cause!r} did not render"
 
 
 type Unit = Planned | Unplanned
@@ -333,7 +333,7 @@ def _plan_node(
     for wire in wires:
         if isinstance(places[wire.from_name][0], Unplanned):
             detail = f"upstream {wire.from_name!r} did not render"
-            return Unplanned((name,), RenderFailureStatus.UPSTREAM_FAILED, detail, name)
+            return Unplanned((name,), SkipStatus.UPSTREAM_FAILED, detail, name)
     if isinstance(resolution, SoundFailure):
         return Unplanned((name,), resolution.status, resolution.detail, name)
     audio = tuple(_ref(places, wire) for wire in wires if wire.kind == "audio")
@@ -343,7 +343,7 @@ def _plan_node(
             if isinstance(performance, PitchProblem):
                 instrument = parse_sound_ref(node.sound).instrument
                 detail = f"instrument '{instrument}' {performance.detail}"
-                return Unplanned((name,), RenderFailureStatus.UNSUPPORTED_PITCH, detail, name)
+                return Unplanned((name,), SkipStatus.UNSUPPORTED_PITCH, detail, name)
             return TrackUnit(name, TrackInput(resolution.sound_key, performance), resolution)
         case EffectNode(), ResolvedEffectNode():
             # The graph keeps a node to at most one control wire.
@@ -370,7 +370,7 @@ def _plan_group(
         for wire in external:
             if wire.to_name == member and isinstance(places[wire.from_name][0], Unplanned):
                 detail = f"upstream {wire.from_name!r} did not render"
-                return Unplanned(names, RenderFailureStatus.UPSTREAM_FAILED, detail, member)
+                return Unplanned(names, SkipStatus.UPSTREAM_FAILED, detail, member)
     for member in names:
         if isinstance(failure := resolutions[member], SoundFailure):
             return Unplanned(names, failure.status, failure.detail, member)

@@ -2,31 +2,39 @@
 
 import math
 from collections.abc import Callable
-from types import MappingProxyType
 
 import numpy as np
 import pytest
 
 from poser.core.audio import NUM_CHANNELS, Audio, AudioFault, AudioProblem, make_audio
 from poser.core.cache import sound_key
-from poser.core.checks import CheckStatus, check_status
+from poser.core.checks import CheckFailureStatus, check_status
 from poser.core.jsonvalue import Json
 from poser.core.names import Identifier, NodeName, SongId, Suffix, TrackName
 from poser.core.performance import Control, NoteOff, NoteOn, Performance
 from poser.core.ports import StemMeta
 from poser.core.report import (
     BANDS,
-    AnalysisStatus,
+    AnalyzedNode,
+    CompleteReport,
     Defect,
+    IncompleteReport,
     Levels,
+    MeasuredNode,
     Measurements,
     MixReport,
-    NodeReport,
-    Report,
+    UnplannedNode,
+    UnrenderedNode,
 )
 from poser.core.song import Note, Song, SongError, Track
 from poser.core.sounds import SoundEntry, SoundRef, parse_sound_ref
-from poser.core.statuses import RenderFailureStatus, SoundFailureStatus, StemStatus
+from poser.core.statuses import (
+    RenderFailureStatus,
+    SkipStatus,
+    SoundFailureStatus,
+    StemStatus,
+    UnrenderedStatus,
+)
 
 KEY = "0123456789abcdef" * 4
 BANDS_DB = dict.fromkeys(BANDS, -20.0)
@@ -55,22 +63,32 @@ def _measurements(**changes: object) -> dict[str, object]:
 
 def _mix(**changes: object) -> dict[str, object]:
     fields: dict[str, object] = {
-        **_measurements(),
-        "path": "mix/mix.wav",
-        "spectrogram": "mix/mix.png",
+        "path": "audio/mix.wav",
+        "measurements": _make(Measurements, **_measurements()),
+        "spectrogram": "images/mix.png",
         "defects": (),
     }
     return {**fields, **changes}
 
 
-def _node_report(**changes: object) -> dict[str, object]:
+def _node(**changes: object) -> dict[str, object]:
     fields: dict[str, object] = {
         "name": "lead",
-        "status": AnalysisStatus.ANALYZED,
-        "node_key": KEY,
-        "sound_key": KEY,
         "kind": "track",
         "upstream": (),
+        "gain_db": 0.0,
+    }
+    return {**fields, **changes}
+
+
+def _analyzed(**changes: object) -> dict[str, object]:
+    fields: dict[str, object] = {
+        **_node(),
+        "node_key": KEY,
+        "sound_key": KEY,
+        "measurements": _make(Measurements, **_measurements()),
+        "defects": (),
+        "spectrogram": "images/node-0.png",
     }
     return {**fields, **changes}
 
@@ -367,45 +385,101 @@ def test_measurements() -> None:
         _bad(Measurements, **_measurements(**changes))
 
 
-def test_node_report() -> None:
-    report = _make(NodeReport, **_node_report(defects=[Defect.SILENT]))
-    assert report.defects == (Defect.SILENT,)
+NODE_RULES: list[dict[str, object]] = [
+    {"name": 1},
+    {"kind": "magnet"},
+    {"upstream": ("lead", 1)},
+    {"upstream": "lead"},
+    {"gain_db": math.nan},
+]
+MEASURED_RULES: list[dict[str, object]] = [
+    *NODE_RULES,
+    {"node_key": None},
+    {"node_key": ""},
+    {"sound_key": ""},
+    {"measurements": _measurements()},
+    {"defects": ("silent",)},
+    {"defects": (UnrenderedStatus.NOT_RENDERED,)},
+]
+
+
+def test_analyzed_and_measured_nodes() -> None:
+    node = _make(AnalyzedNode, **_analyzed(defects=[Defect.SILENT], sound_key=None))
+    assert node.defects == (Defect.SILENT,)
+    assert node.sound_key is None
+    measured_fields = {key: value for key, value in _analyzed().items() if key != "spectrogram"}
+    assert _make(MeasuredNode, **measured_fields).status == "measured"
+    for changes in [*MEASURED_RULES, {"spectrogram": None}]:
+        _bad(AnalyzedNode, **_analyzed(**changes))
+    for changes in MEASURED_RULES:
+        _bad(MeasuredNode, **{**measured_fields, **changes})
+
+
+def test_unrendered_and_unplanned_nodes() -> None:
+    unrendered = {
+        **_node(),
+        "node_key": KEY,
+        "sound_key": None,
+        "status": UnrenderedStatus.UNREADABLE_STEM,
+        "detail": "cannot read",
+    }
+    assert _make(UnrenderedNode, **unrendered).status is UnrenderedStatus.UNREADABLE_STEM
     for changes in (
-        {"status": "analyzed"},
-        {"kind": "magnet"},
-        {"upstream": ("lead", 1)},
-        {"upstream": "lead"},
-        {"defects": (AnalysisStatus.ANALYZED,)},
-        {"defects": ("silent",)},
-        {"gain_db": math.nan},
-        {"peak_dbfs": math.inf},
-        {"clipped_samples": -1},
-        {"bands_db": {"sub": 0.0}},
-        {"bar_dbfs": [math.nan]},
+        *NODE_RULES,
+        {"node_key": None},
+        {"status": "unreadable_stem"},
+        {"status": SkipStatus.UPSTREAM_FAILED},
+        {"detail": ""},
     ):
-        _bad(NodeReport, **_node_report(**changes))
+        _bad(UnrenderedNode, **{**unrendered, **changes})
+    unplanned = {
+        **_node(),
+        "sound_key": None,
+        "status": SkipStatus.UPSTREAM_FAILED,
+        "detail": "upstream 'a' did not render",
+    }
+    assert _make(UnplannedNode, **unplanned).sound_key is None
+    for changes in (
+        *NODE_RULES,
+        {"status": UnrenderedStatus.NOT_RENDERED},
+        {"status": RenderFailureStatus.CRASHED},
+        {"detail": None},
+    ):
+        _bad(UnplannedNode, **{**unplanned, **changes})
 
 
 def test_mix_report() -> None:
     mix = _make(MixReport, **_mix(defects=[Defect.CLIPPING]))
     assert mix.defects == (Defect.CLIPPING,)
     for changes in (
-        {"defects": (AnalysisStatus.ANALYZED,)},
-        {"peak_dbfs": math.nan},
-        {"clipped_samples": -1},
-        {"bands_db": {}},
-        {"bar_dbfs": [math.inf]},
+        {"defects": (UnrenderedStatus.NOT_RENDERED,)},
+        {"measurements": _measurements()},
+        {"path": None},
+        {"spectrogram": ""},
     ):
         _bad(MixReport, **_mix(**changes))
 
 
-def test_report() -> None:
-    node = _make(NodeReport, **_node_report())
-    report = _make(Report, "demo", 1, KEY, [node], None)
+def test_reports() -> None:
+    node = _make(AnalyzedNode, **_analyzed())
+    mix = _make(MixReport, **_mix())
+    report = _make(CompleteReport, "demo", 1, KEY, [node], mix)
     assert report.nodes == (node,)
-    _bad(Report, "demo", 1, KEY, [node, "lead"], None)
-    _bad(Report, "demo", 1, KEY, "lead", None)
-    _bad(Report, "demo", 1, KEY, (node,), {"path": "mix.wav"})
+    _bad(CompleteReport, "demo", 1, KEY, [node, "lead"], mix)
+    _bad(CompleteReport, "demo", 1, KEY, "lead", mix)
+    _bad(CompleteReport, "demo", 1, KEY, (node,), None)
+    _bad(CompleteReport, "demo", 1, KEY, (node,), {"path": "mix.wav"})
+    failed = _make(
+        UnplannedNode,
+        **_node(),
+        sound_key=None,
+        status=SkipStatus.UPSTREAM_FAILED,
+        detail="upstream 'a' did not render",
+    )
+    assert _make(IncompleteReport, "demo", 1, KEY, [failed]).nodes == (failed,)
+    _bad(IncompleteReport, "demo", 1, KEY, [failed, "lead"])
+    _bad(IncompleteReport, "demo", 1, KEY, [failed, node])
+    _bad(IncompleteReport, "demo", 1, KEY, ())
 
 
 def test_collections_are_immutable_copies() -> None:
@@ -421,42 +495,33 @@ def test_collections_are_immutable_copies() -> None:
         measurements.bands_db["sub"] = 0.0  # ty: ignore[invalid-assignment]
 
     defects = [Defect.SILENT]
-    node = _make(
-        NodeReport,
-        **_node_report(bands_db=bands, bar_dbfs=bars, defects=defects),
-    )
+    upstream = ["bass"]
+    node = _make(AnalyzedNode, **_analyzed(upstream=upstream, defects=defects))
     mix = _make(MixReport, **_mix(defects=defects))
     nodes = [node]
-    report = _make(Report, "demo", 1, KEY, nodes, mix)
-    snapshot = (dict(node.bands_db or {}), node.bar_dbfs)
+    report = _make(CompleteReport, "demo", 1, KEY, nodes, mix)
     defects.append(Defect.CLIPPING)
-    bands["bass"] = 0.0
+    upstream.append("drums")
     nodes.append(node)
-    assert (dict(node.bands_db or {}), node.bar_dbfs) == snapshot
+    assert node.upstream == ("bass",)
     assert node.defects == (Defect.SILENT,)
     assert mix.defects == (Defect.SILENT,)
     assert report.nodes == (node,)
     for value in (node, mix):
         assert isinstance(value.defects, tuple)
-    assert isinstance(node.bands_db, MappingProxyType)
-    assert isinstance(mix.bands_db, MappingProxyType)
-    with pytest.raises(TypeError):
-        mix.bands_db["sub"] = 0.0  # ty: ignore[invalid-assignment]
 
 
 # Checks
 
 
 CHECK_STATUS_TABLE = [
-    (SoundFailureStatus.UNKNOWN_SOUND, CheckStatus.LOAD_FAILED),
-    (SoundFailureStatus.LOAD_FAILED, CheckStatus.LOAD_FAILED),
-    (RenderFailureStatus.LOAD_FAILED, CheckStatus.LOAD_FAILED),
-    (RenderFailureStatus.CRASHED, CheckStatus.CRASHED),
-    (RenderFailureStatus.TIMED_OUT, CheckStatus.TIMED_OUT),
-    # A check has no upstream and no retry, so these cannot occur there; they map to a crash.
-    (RenderFailureStatus.LATE_START, CheckStatus.CRASHED),
-    (RenderFailureStatus.UNSUPPORTED_PITCH, CheckStatus.CRASHED),
-    (RenderFailureStatus.UPSTREAM_FAILED, CheckStatus.CRASHED),
+    (SoundFailureStatus.UNKNOWN_SOUND, CheckFailureStatus.LOAD_FAILED),
+    (SoundFailureStatus.LOAD_FAILED, CheckFailureStatus.LOAD_FAILED),
+    (RenderFailureStatus.LOAD_FAILED, CheckFailureStatus.LOAD_FAILED),
+    (RenderFailureStatus.CRASHED, CheckFailureStatus.CRASHED),
+    (RenderFailureStatus.TIMED_OUT, CheckFailureStatus.TIMED_OUT),
+    # A check has no retry, so this cannot occur there; it maps to a crash.
+    (RenderFailureStatus.LATE_START, CheckFailureStatus.CRASHED),
 ]
 
 

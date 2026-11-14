@@ -68,7 +68,7 @@ from poser.core.ports import (
 )
 from poser.core.session import song_session
 from poser.core.song import is_number
-from poser.core.statuses import RenderFailureStatus, RenderStatus, SoundFailureStatus, StemStatus
+from poser.core.statuses import RenderFailureStatus, SkipStatus, SoundFailureStatus, StemStatus
 
 # How many times a track is rendered when its first note comes out silent.
 RENDER_ATTEMPTS = 3
@@ -102,38 +102,46 @@ def late_start_s(samples: np.ndarray, performance: Performance) -> float | None:
 
 
 @dataclass(frozen=True)
-class TrackResult:
-    """What happened to one node. A stem and its peak exist exactly when the status is a
-    StemStatus, and a detail exactly when it is not."""
+class Rendered:
+    """A node with a stem: rendered this run, or found under its key when `cached`."""
 
     track: NodeName
-    status: RenderStatus
-    peak_dbfs: float | None = None
-    stem: Path | None = None
-    detail: str | None = None
+    status: StemStatus
+    peak_dbfs: float
+    stem: Path
     cached: bool = False
 
     def __post_init__(self) -> None:
         if not isinstance(self.track, NodeName):
-            raise ValueError(f"TrackResult.track must be a NodeName, got {self.track!r}")
-        if not isinstance(self.status, StemStatus | SoundFailureStatus | RenderFailureStatus):
-            raise ValueError(f"TrackResult.status must be a render status, got {self.status!r}")
+            raise ValueError(f"Rendered.track must be a NodeName, got {self.track!r}")
+        if not isinstance(self.status, StemStatus):
+            raise ValueError(f"Rendered.status must be a StemStatus, got {self.status!r}")
+        if not is_number(self.peak_dbfs):
+            raise ValueError(f"Rendered.peak_dbfs must be a finite number, got {self.peak_dbfs!r}")
+        if not isinstance(self.stem, Path):
+            raise ValueError(f"Rendered.stem must be a Path, got {self.stem!r}")
         if not isinstance(self.cached, bool):
-            raise ValueError(f"TrackResult.cached must be a bool, got {self.cached!r}")
-        if isinstance(self.status, StemStatus):
-            if not isinstance(self.stem, Path):
-                raise ValueError(f"TrackResult with status {self.status} needs a stem path")
-            if not is_number(self.peak_dbfs):
-                raise ValueError(f"TrackResult with status {self.status} needs a finite peak")
-            if self.detail is not None:
-                raise ValueError(f"TrackResult with status {self.status} has no detail")
-        else:
-            if self.stem is not None or self.peak_dbfs is not None:
-                raise ValueError(f"TrackResult with status {self.status} has no stem or peak")
-            if not (isinstance(self.detail, str) and self.detail):
-                raise ValueError(f"TrackResult with status {self.status} needs a detail")
-            if self.cached:
-                raise ValueError(f"TrackResult with status {self.status} cannot be cached")
+            raise ValueError(f"Rendered.cached must be a bool, got {self.cached!r}")
+
+
+@dataclass(frozen=True)
+class NotRendered:
+    """A node left without a stem, and why."""
+
+    track: NodeName
+    status: SoundFailureStatus | SkipStatus | RenderFailureStatus
+    detail: str
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.track, NodeName):
+            raise ValueError(f"NotRendered.track must be a NodeName, got {self.track!r}")
+        if not isinstance(self.status, SoundFailureStatus | SkipStatus | RenderFailureStatus):
+            raise ValueError(f"NotRendered.status must be a failure status, got {self.status!r}")
+        if not (isinstance(self.detail, str) and self.detail):
+            raise ValueError(f"NotRendered.detail must be a non-empty str, got {self.detail!r}")
+
+
+type TrackResult = Rendered | NotRendered
 
 
 def require_stem_format(renders: RenderStore, audio_files: AudioFiles) -> None:
@@ -261,7 +269,7 @@ def _render_unit(run: _RenderRun, unit: Unit) -> tuple[TrackResult, ...]:
         return skipped
     if isinstance(unit, Unplanned):
         failures = ((name, *unit.failure_of(name)) for name in unit.nodes)
-        return tuple(TrackResult(name, status, detail=detail) for name, status, detail in failures)
+        return tuple(NotRendered(name, status, detail) for name, status, detail in failures)
     stored = run.store.find(unit.key)
     if not run.force and stored is not None and len(stored.stems()) == len(unit.nodes):
         return _cached(unit.nodes, stored)
@@ -277,9 +285,7 @@ def _render_unit(run: _RenderRun, unit: Unit) -> tuple[TrackResult, ...]:
             rendered = _one(_render_delay_node(run, unit))
     if isinstance(rendered, _Failed):
         # A failed unit publishes nothing, so its key stays absent from the store.
-        return tuple(
-            TrackResult(name, rendered.status, detail=rendered.detail) for name in unit.nodes
-        )
+        return tuple(NotRendered(name, rendered.status, rendered.detail) for name in unit.nodes)
     return _publish(run, unit.key, unit.nodes, rendered, replace=stored is not None)
 
 
@@ -318,7 +324,7 @@ def _publish(
     if stored is None:
         raise RuntimeError(f"the store did not publish unit {key}")
     return tuple(
-        TrackResult(name, meta.status, meta.peak_dbfs, stored.stem_path(index))
+        Rendered(name, meta.status, meta.peak_dbfs, stored.stem_path(index))
         for index, (name, meta) in enumerate(zip(nodes, stored.stems(), strict=True))
     )
 
@@ -335,17 +341,17 @@ def _upstream_skips(run: _RenderRun, unit: Unit) -> tuple[TrackResult, ...] | No
             if source in unit.nodes:
                 continue
             upstream = run.results.get(source)
-            if upstream is None or not isinstance(upstream.status, StemStatus):
+            if not isinstance(upstream, Rendered):
                 unmet[name] = source
                 break
     if not unmet:
         return None
     trigger = next(name for name in unit.nodes if name in unmet)
     return tuple(
-        TrackResult(
+        NotRendered(
             name,
-            RenderFailureStatus.UPSTREAM_FAILED,
-            detail=f"upstream {unmet.get(name, trigger)!r} did not render",
+            SkipStatus.UPSTREAM_FAILED,
+            f"upstream {unmet.get(name, trigger)!r} did not render",
         )
         for name in unit.nodes
     )
@@ -354,7 +360,7 @@ def _upstream_skips(run: _RenderRun, unit: Unit) -> tuple[TrackResult, ...] | No
 def _cached(nodes: tuple[NodeName, ...], stored: StoredUnit) -> tuple[TrackResult, ...]:
     """Return every node's result from the unit the store holds under its key."""
     return tuple(
-        TrackResult(name, meta.status, meta.peak_dbfs, stored.stem_path(index), cached=True)
+        Rendered(name, meta.status, meta.peak_dbfs, stored.stem_path(index), cached=True)
         for index, (name, meta) in enumerate(zip(nodes, stored.stems(), strict=True))
     )
 

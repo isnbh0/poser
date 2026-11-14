@@ -13,4 +13,5 @@ possible render noise. Use `run` and `song_sha256` to tell versions apart, and `
 `sound_key` to see which nodes changed between records. Compare relative band levels between
 nodes and versions. To clear `headroom`, lower track `gain` for a `Song`, or the appropriate
 leaf-node `gain_db` for a `Graph`.
-For `upstream_failed`, fix the named upstream and render again; for `stale_stem`, render again.
+For `upstream_failed`, fix the named upstream and render again; for `not_rendered`, render
+again; for `unreadable_stem`, run `render-song --force`.
