@@ -369,6 +369,10 @@ def test_a_misshapen_graph_from_a_script_reports_the_path(tmp_path: Path) -> Non
         ("x = 1\n", "must define a function build() that returns a Song or a Graph"),
         ("build = 3\n", "must define a function build() that returns a Song or a Graph"),
         ("raise ImportError('no module')\n", "cannot run"),
+        (
+            "from poser import NoSuchName\n",
+            "if the song was written for an earlier poser, see https://",
+        ),
         ("def build():\n    raise ValueError('boom')\n", "build() raised ValueError: boom"),
         (
             "def build():\n    return {'bpm': 120, 'tracks': []}\n",
@@ -668,3 +672,12 @@ def build():
 
     assert isinstance(song, Song)
     assert song.marks == Marks({"parts": [Mark(0, 8, "intro")]})
+
+
+def test_only_a_failed_import_from_poser_points_to_the_upgrade_guide(tmp_path: Path) -> None:
+    path = write_script(tmp_path, "import no_such_module_anywhere\n")
+
+    with pytest.raises(SongError) as error:
+        load_song(path, SONG_FORMATS)
+
+    assert "earlier poser" not in error.value.problems[0]

@@ -152,6 +152,10 @@ class AudioFiles(Protocol):
 # General types
 
 
+UPGRADING_URL = "https://github.com/isnbh0/poser/blob/main/docs/upgrading.md"
+"""How to move a studio, and code written against poser, to the current poser."""
+
+
 class ConfigError(Exception):
     """A workspace config or an adapter's options cannot be used."""
 

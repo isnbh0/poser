@@ -14,7 +14,7 @@ from poser.adapters.loading import refuse_options
 from poser.core.graph import Graph, GraphError
 from poser.core.jsonvalue import JsonValue
 from poser.core.names import Suffix
-from poser.core.ports import AdapterContext, SongFormat
+from poser.core.ports import UPGRADING_URL, AdapterContext, SongFormat
 from poser.core.song import Song, SongError, parse_song, song_to_data
 
 
@@ -106,7 +106,10 @@ class ScriptSongFormat:
         except (SongError, GraphError) as error:
             raise _in_script(path, error) from error
         except (Exception, SystemExit) as error:
-            raise SongError([f"cannot run {path}: {type(error).__name__}: {error}"]) from error
+            message = f"cannot run {path}: {type(error).__name__}: {error}"
+            if isinstance(error, ImportError) and (error.name or "").split(".")[0] == "poser":
+                message += f"; if the song was written for an earlier poser, see {UPGRADING_URL}"
+            raise SongError([message]) from error
         if not callable(build):
             raise SongError(
                 [f"{path}: must define a function build() that returns a Song or a Graph"]

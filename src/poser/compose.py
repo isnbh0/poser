@@ -40,6 +40,7 @@ from poser.core.jsonvalue import JsonValue, is_json_value
 from poser.core.marks import LAYER_PATTERN
 from poser.core.names import Identifier, Suffix
 from poser.core.ports import (
+    UPGRADING_URL,
     AdapterContext,
     AdviceProvider,
     AudioFiles,
@@ -131,7 +132,6 @@ PRESETS: Mapping[str, Mapping[str, tuple[str, ...]]] = MappingProxyType(
 DEFAULT_PRESET = "western"
 TOP_LEVEL_KEYS = frozenset({"instruments", "effects", "adapters", "guidance"})
 ADAPTER_KEY = "adapter"  # An instrument table's spelling of `use`.
-UPGRADING_URL = "https://github.com/isnbh0/poser/blob/main/docs/upgrading.md"
 GUIDE_KEY = "guide"  # An instrument table's note for the guide; compose's, not the adapter's.
 USE_KEY = "use"
 _NAME = r"[A-Za-z_][A-Za-z0-9_]*"

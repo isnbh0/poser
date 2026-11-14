@@ -1,7 +1,8 @@
 # Upgrade a studio
 
-A studio's `uv.lock` pins the poser commit it runs. To move a studio to the latest poser, run
-these from the studio:
+A studio that depends on poser from Git runs the commit its `uv.lock` pins; one with an editable
+path source runs whatever that checkout holds, and the lock step changes nothing. To move a studio
+to the latest poser, run these from the studio:
 
 ```bash
 uv lock --upgrade-package poser &&
@@ -10,10 +11,17 @@ uv run update-guide --check &&
 uv run check-instruments
 ```
 
+Then load every song, which needs no plugins; each song that fails prints its error:
+
+```bash
+find songs \( -name '*.yaml' -o -name '*.yml' -o -name '*.py' \) -exec uv run read-song {} \; \
+  > /dev/null
+```
+
 `update-guide` rewrites `POSER.md` for the new poser; until then, `update-guide --check` reports
 `POSER.md is out of date`. `AGENTS.md`, `poser.toml`, and songs are yours and are never rewritten.
 If a command fails after the upgrade, find its message below, newest change first, and apply the
-fix. A change listed here applies to every studio that pinned a poser commit from before it.
+fix. A change listed here applies to every studio that last ran a poser from before it.
 
 ## No initialization journal
 
