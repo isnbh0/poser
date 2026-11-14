@@ -1,7 +1,8 @@
 """`analyze-song`: mix a song's rendered stems and report defects an agent can read.
 
-Every analysis keeps a numbered record, even a failed one. Stems come from the song's track names,
-so a stem left by a removed or renamed track cannot enter the mix.
+Every analysis keeps a numbered record, even a failed one, and paths in its report are relative to
+the record's directory. Each stem is found by a digest of its inputs, so a stem rendered from other
+inputs cannot enter the mix.
 """
 
 import argparse
@@ -30,7 +31,7 @@ def exit_code(report: Report) -> int:
     return EXIT_SOME_FAILED if report_failed(report) else EXIT_ALL_PASS
 
 
-def format_table(report: Report) -> str:
+def format_table(report: Report, record: Path) -> str:
     def number(value: float | None) -> str:
         return "-" if value is None else f"{value:.1f}"
 
@@ -58,7 +59,7 @@ def format_table(report: Report) -> str:
         rows.append(("[mix]", "not_written", "-", "-", "-", "-", "-"))
     else:
         rows.append(row("[mix]", "written", report.mix))
-    return "\n".join([*align_rows(rows), *details])
+    return "\n".join([*align_rows(rows), *details, f"record: {record}"])
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -86,7 +87,7 @@ def main(argv: list[str] | None = None) -> int:
         fail(PROG, error)
         return EXIT_BAD_CONFIG
     try:
-        renders.song(song)  # Before loading, for the same reason.
+        store = renders.song(song)  # Before loading, for the same reason.
     except ValueError as error:
         fail(PROG, error)
         return EXIT_BAD_CONFIG
@@ -110,5 +111,8 @@ def main(argv: list[str] | None = None) -> int:
     except SongBusyError as error:
         fail(PROG, error)
         return EXIT_SONG_BUSY
-    print(report_json(report) if args.json else format_table(report), end="" if args.json else "\n")
+    if args.json:
+        print(report_json(report), end="")
+    else:
+        print(format_table(report, store.record_path(report.run)))
     return exit_code(report)

@@ -5,7 +5,13 @@ from collections.abc import Callable
 from pathlib import Path
 
 import pytest
-from workspaces import CommandWorkspace, make_workspace, write_script_song, write_song
+from workspaces import (
+    CommandWorkspace,
+    make_workspace,
+    stored_stems,
+    write_script_song,
+    write_song,
+)
 
 from poser.adapters.song_formats import SONG_FORMATS
 from poser.cli import analyze, render
@@ -25,12 +31,12 @@ def test_songs_with_one_name_in_different_directories_keep_apart(
     first = write_song(workspace.root / "songs" / "x.yaml", ("lead", "synth"))
     second = write_song(workspace.root / "drafts" / "x.yaml", ("lead", "synth"))
     render.main([str(first)])
-    stem = workspace.renders / "songs" / "x.yaml" / "stems" / "lead.wav"
+    (stem,) = stored_stems(workspace.renders / "songs" / "x.yaml")
     before = stem.read_bytes()
 
     render.main([str(second)])
 
-    assert (workspace.renders / "drafts" / "x.yaml" / "stems" / "lead.wav").is_file()
+    assert len(stored_stems(workspace.renders / "drafts" / "x.yaml")) == 1
     assert stem.read_bytes() == before
 
 
@@ -46,8 +52,8 @@ def test_script_and_yaml_with_one_stem_render_apart(workspace: CommandWorkspace)
     for song in (script, data):
         assert render.main([str(song)]) == EXIT_ALL_PASS
 
-    assert (workspace.renders / "songs" / "x.py" / "stems" / "lead.wav").is_file()
-    assert (workspace.renders / "songs" / "x.yaml" / "stems" / "lead.wav").is_file()
+    assert len(stored_stems(workspace.renders / "songs" / "x.py")) == 1
+    assert len(stored_stems(workspace.renders / "songs" / "x.yaml")) == 1
 
 
 def test_song_beside_a_directory_of_its_name_keeps_its_mix(
@@ -57,13 +63,13 @@ def test_song_beside_a_directory_of_its_name_keeps_its_mix(
     inner = write_script_song(workspace.root / "songs" / "x" / "mix.py", "synth")
     render.main([str(outer)])
     analyze.main([str(outer)])
-    mix = workspace.renders / "songs" / "x.py" / "latest" / "mix.wav"
+    mix = workspace.renders / "songs" / "x.py" / "latest" / "audio" / "mix.wav"
     before = mix.read_bytes()
 
     assert render.main([str(inner)]) == EXIT_ALL_PASS
     assert analyze.main([str(inner)]) == EXIT_ALL_PASS
 
-    assert (workspace.renders / "songs" / "x" / "mix.py" / "latest" / "mix.wav").is_file()
+    assert (workspace.renders / "songs" / "x" / "mix.py" / "latest" / "audio" / "mix.wav").is_file()
     assert mix.read_bytes() == before
 
 
@@ -104,7 +110,7 @@ def test_every_path_option_given_makes_the_working_directory_the_base(
     ]
 
     assert render.main(argv) == EXIT_ALL_PASS
-    assert (out / "songs" / "x.yaml" / "stems" / "lead.wav").is_file()
+    assert len(stored_stems(out / "songs" / "x.yaml")) == 1
     assert not workspace.renders.exists()
 
     (tmp_path / "sub").mkdir()
@@ -131,8 +137,8 @@ def test_config_alone_makes_its_directory_the_workspace(
     assert render.main([str(song), *config]) == EXIT_ALL_PASS
     assert analyze.main([str(song), *config]) == EXIT_ALL_PASS
 
-    assert (workspace.renders / "songs" / "x.yaml" / "stems" / "lead.wav").is_file()
-    assert (workspace.renders / "songs" / "x.yaml" / "latest" / "mix.wav").is_file()
+    assert len(stored_stems(workspace.renders / "songs" / "x.yaml")) == 1
+    assert (workspace.renders / "songs" / "x.yaml" / "latest" / "audio" / "mix.wav").is_file()
     assert sorted(path.name for path in here.iterdir()) == before
 
 
@@ -148,4 +154,6 @@ def test_analysis_reads_the_stems_render_wrote(
     report = json.loads(capsys.readouterr().out)
     assert [node["status"] for node in report["nodes"]] == ["analyzed"]
     song_dir = workspace.renders / "songs" / "x.yaml"
-    assert report["mix"]["path"] == str(song_dir / "latest" / "mix.wav")
+    assert report["mix"]["path"] == "audio/mix.wav"
+    assert (song_dir / "latest").readlink() == Path("history/1")
+    assert (song_dir / "latest" / report["mix"]["path"]).is_file()

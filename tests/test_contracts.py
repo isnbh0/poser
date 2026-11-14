@@ -1,6 +1,7 @@
 """The fakes pass every contract suite, and a broken fake fails its suite."""
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Collection, Generator, Sequence
+from contextlib import contextmanager
 from pathlib import Path
 from typing import cast, override
 
@@ -25,6 +26,7 @@ from fakes import (
     FakeSongFormat,
     FakeSongStore,
     FakeSound,
+    FakeUnitDraft,
     FakeVisualizer,
     NpyAudioFiles,
     SavedSounds,
@@ -34,11 +36,10 @@ from test_song import gain_song
 from poser.core.audio import Audio
 from poser.core.graph import Graph
 from poser.core.jsonvalue import Json
-from poser.core.names import Identifier, NodeName, SongId, Suffix
+from poser.core.names import Identifier, SongId
 from poser.core.ports import (
     Captured,
     MixInput,
-    SongStore,
     SoundListing,
 )
 from poser.core.report import Levels
@@ -64,11 +65,6 @@ def captured(instrument: object) -> Captured:
     return Captured(Json.of({"name": "contract", "amplitude": 0.3}))
 
 
-def spoil(store: SongStore, track: NodeName) -> None:
-    assert isinstance(store, FakeSongStore)
-    store.spoil_stamp(track)
-
-
 def test_fake_instrument_meets_the_instrument_contract(tmp_path: Path) -> None:
     check_instrument_contract(fake_instrument(), SoundRef(FAKE, "pad"), tmp_path)
 
@@ -78,8 +74,8 @@ def test_fake_instrument_meets_the_sound_capture_contract(tmp_path: Path) -> Non
 
 
 def test_fake_render_store_meets_the_render_store_contract(tmp_path: Path) -> None:
-    check_render_store_contract(FakeRenderStore, tmp_path, spoil)
-    check_render_store_contract(lambda root: FakeRenderStore(root, ".wav"), tmp_path / "wav", spoil)
+    check_render_store_contract(FakeRenderStore, tmp_path)
+    check_render_store_contract(lambda root: FakeRenderStore(root, ".wav"), tmp_path / "wav")
 
 
 def test_npy_audio_files_meet_the_audio_files_contract(tmp_path: Path) -> None:
@@ -120,18 +116,28 @@ class ReplacingInstrument(FakeInstrument):
         return super().store(name, description, captured, replace=True)
 
 
-class StampKeepingSongStore(FakeSongStore):
+class LeakingSongStore(FakeSongStore):
+    """Publishes a unit even when its writer raises."""
+
     @override
-    def discard(self, node: NodeName) -> None:
-        self.stem_path(node).unlink(missing_ok=True)
+    @contextmanager
+    def write_unit(self, key: str, *, replace: bool = False) -> Generator[FakeUnitDraft]:
+        error: Exception | None = None
+        with super().write_unit(key, replace=replace) as draft:
+            try:
+                yield draft
+            except Exception as raised:  # noqa: BLE001 -- the broken behavior under test.
+                error = raised
+        if error is not None:
+            raise error
 
 
-class SongImageSongStore(FakeSongStore):
+class HoardingSongStore(FakeSongStore):
+    """Keeps every unit."""
+
     @override
-    def image_path(self, node: NodeName | None, suffix: Suffix) -> Path:
-        if node == "song":
-            return self.stem_path(node)
-        return super().image_path(node, suffix)
+    def keep_units(self, keys: Collection[str]) -> None:
+        pass
 
 
 def broken_store(kind: type[FakeSongStore]) -> Callable[[Path], FakeRenderStore]:
@@ -141,7 +147,7 @@ def broken_store(kind: type[FakeSongStore]) -> Callable[[Path], FakeRenderStore]
         @override
         def song(self, song_id: SongId) -> FakeSongStore:
             store = super().song(song_id)
-            return kind(store.directory, self.stem_suffix, self._stamps)
+            return kind(store.directory, self.stem_suffix, store.state)
 
     return BrokenRenderStore
 
@@ -196,10 +202,13 @@ def test_contracts_can_fail(tmp_path: Path) -> None:
         check_sound_capture_contract(
             lambda directory: fake_instrument(), captured, tmp_path / "unshared"
         )
-    cases = [(StampKeepingSongStore, "left the stamp"), (SongImageSongStore, "share a path")]
+    cases = [
+        (LeakingSongStore, "an exception left a unit"),
+        (HoardingSongStore, "kept a unit outside the keys"),
+    ]
     for index, (kind, message) in enumerate(cases):
         with pytest.raises(AssertionError, match=message):
-            check_render_store_contract(broken_store(kind), tmp_path / f"store-{index}", spoil)
+            check_render_store_contract(broken_store(kind), tmp_path / f"store-{index}")
     with pytest.raises(AssertionError, match="a mix of 1 has"):
         check_mixer_contract(ShortMixer())
     with pytest.raises(AssertionError, match="returned a BandlessLevels"):

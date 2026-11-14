@@ -8,11 +8,12 @@ import numpy as np
 import pytest
 
 from poser.core.audio import NUM_CHANNELS, Audio, AudioFault, AudioProblem, make_audio
-from poser.core.cache import Stamp, sound_key
+from poser.core.cache import sound_key
 from poser.core.checks import CheckStatus, check_status
 from poser.core.jsonvalue import Json
 from poser.core.names import Identifier, NodeName, SongId, Suffix, TrackName
 from poser.core.performance import Control, NoteOff, NoteOn, Performance
+from poser.core.ports import StemMeta
 from poser.core.report import (
     BANDS,
     AnalysisStatus,
@@ -319,16 +320,13 @@ def test_performance() -> None:
 # Cache
 
 
-def test_stamp() -> None:
-    assert Stamp(KEY, KEY, StemStatus.RENDERED, -3.0).peak_dbfs == -3.0
-    assert Stamp(KEY, KEY, StemStatus.SILENT, -200).status is StemStatus.SILENT
-    for key in (KEY.upper(), KEY[:-1], KEY + "0", "", 1):
-        _bad(Stamp, key, KEY, StemStatus.RENDERED, 0.0)
-        _bad(Stamp, KEY, key, StemStatus.RENDERED, 0.0)
-    _bad(Stamp, KEY, KEY, "rendered", 0.0)
-    _bad(Stamp, KEY, KEY, RenderFailureStatus.CRASHED, 0.0)
+def test_stem_meta() -> None:
+    assert StemMeta(StemStatus.RENDERED, -3.0).peak_dbfs == -3.0
+    assert StemMeta(StemStatus.SILENT, -200).status is StemStatus.SILENT
+    _bad(StemMeta, "rendered", 0.0)
+    _bad(StemMeta, RenderFailureStatus.CRASHED, 0.0)
     for peak in (math.nan, math.inf, -math.inf, True, "0"):
-        _bad(Stamp, KEY, KEY, StemStatus.RENDERED, peak)
+        _bad(StemMeta, StemStatus.RENDERED, peak)
 
 
 def test_sound_key_needs_a_version() -> None:

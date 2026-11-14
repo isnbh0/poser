@@ -25,13 +25,14 @@ Hear an example and get its source in the [showcase](docs/showcase.md).
 ## Surge demo
 
 The eight-beat demo plays Surge XT's default patch on two tracks as a smoke test. Its mix and a
-spectrogram per track land under `renders/songs/demo.yaml/latest/`. Play `mix.wav` to hear the
-song, and see its shape at a glance:
+spectrogram per track land under `renders/songs/demo.yaml/latest/`. Play `latest/audio/mix.wav`
+to hear the song, and see its shape at a glance:
 
 ![the demo mix's spectrogram](docs/demo-spectrogram.png)
 
 The report that drives the next revision, abridged, with illustrative metric values. Songs author
-`tracks`; the report lists each track and each effect under `nodes`:
+`tracks`; the report lists each track and each effect under `nodes`, and its paths are relative
+to its record:
 
 ```json
 {
@@ -51,7 +52,8 @@ The report that drives the next revision, abridged, with illustrative metric val
   "mix": {
     "peak_dbfs": -10.05617342416529,
     "integrated_lufs": -19.345337407632602,
-    "spectrogram": "/path/to/my-studio/renders/songs/demo.yaml/latest/images/[mix].png",
+    "path": "audio/mix.wav",
+    "spectrogram": "images/mix.png",
     "defects": []
   }
 }

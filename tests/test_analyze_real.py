@@ -29,5 +29,7 @@ def test_demo_song_mixes_and_analyzes(tmp_path: Path) -> None:
     assert all(node.sound_key is not None for node in report.nodes)
     assert report.mix.integrated_lufs is not None
     assert math.isfinite(report.mix.integrated_lufs)
-    with ReadableAudioFile(report.mix.path) as mix:  # ty: ignore[no-matching-overload]
+    record = tmp_path / "renders" / "songs" / "demo.yaml" / "history" / str(report.run)
+    assert (tmp_path / "renders" / "songs" / "demo.yaml" / "latest").resolve() == record.resolve()
+    with ReadableAudioFile(str(record / report.mix.path)) as mix:  # ty: ignore[no-matching-overload]
         assert mix.frames == stem_samples(song.graph)

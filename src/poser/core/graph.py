@@ -66,7 +66,6 @@ class GraphError(Exception):
 
 def _node_problems(name: object, gain_db: object) -> list[str]:
     """Check the name and fader every kind of node carries."""
-    # A node's name becomes a file name under stems/ and images/, where `[mix]` names the mix.
     # Chain nodes carry their track's name and recipe with dots between, so dots are legal here
     # where a track's own name forbids them.
     problems: list[str] = []

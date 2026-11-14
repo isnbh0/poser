@@ -5,7 +5,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 import pytest
-from workspaces import make_workspace, write_song
+from workspaces import make_workspace, stored_stems, write_song
 
 from poser.cli import analyze, check, guide, render, sounds
 from poser.cli.common import EXIT_ALL_PASS, EXIT_BAD_CONFIG
@@ -123,7 +123,7 @@ def test_render_from_a_subdirectory_writes_at_the_workspace_root(
 
     assert render.main([song.name]) == EXIT_ALL_PASS
 
-    assert (tmp_path / "renders" / "songs" / "tune.yaml" / "stems" / "lead.wav").is_file()
+    assert len(stored_stems(tmp_path / "renders" / "songs" / "tune.yaml")) == 1
     assert not (tmp_path / "songs" / "renders").exists()
 
 

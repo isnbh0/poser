@@ -50,8 +50,8 @@ guide is current. To upgrade poser, follow [upgrading](upgrading.md).
 two renders were sample-identical. A `pass` with `REPEATABLE no` (JSON `repeatable: false`) is
 still a pass and needs no repair. Clipping is reported but does not fail the check.
 
-The demo mix is `renders/songs/demo.yaml/latest/mix.wav`; its `report.json` is beside it, and
-its spectrograms are in `latest/images/`. Analysis finds technical defects; listen to the mix to
+The demo mix is `renders/songs/demo.yaml/latest/audio/mix.wav`; its `report.json` is in
+`latest/`, and its spectrograms are in `latest/images/`. Analysis finds technical defects; listen to the mix to
 judge how it sounds.
 
 ## Composition advice

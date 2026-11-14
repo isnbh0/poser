@@ -48,7 +48,7 @@ from poser.core.names import Identifier, SongId, Suffix
 from poser.core.ports import (
     AdapterContext,
     DeliveryWriter,
-    Record,
+    RecordDraft,
     RenderFailure,
     SongBusyError,
     StagedDelivery,
@@ -129,6 +129,16 @@ def test_bundle_hashes_portability_and_later_runs(harness: Harness) -> None:
         for p in harness.destination.rglob("*")
         if p.is_file()
     }
+    (record,) = (harness.root / "renders").rglob(f"history/{result.report.run}")
+    copied = [
+        path.relative_to(record)
+        for folder in ("audio", "images")
+        for path in (record / folder).rglob("*")
+        if path.is_file()
+    ]
+    assert {Path("audio/mix.npy"), Path("images/mix.svg")} <= set(copied)
+    for name in [Path("report.json"), *copied]:
+        assert original[name] == (record / name).read_bytes(), name
     data = json.loads(manifest(harness.destination))
     assert data["listening"] == "not_auditioned"
     assert "section_payload_portability" not in data
@@ -288,13 +298,18 @@ def test_failure_outcomes_preserve_history_and_never_publish(
     elif failure == "defect":
         harness.instrument = FakeInstrument("fake", {None: FakeSound(amplitude=0.95)})
     elif failure == "missing_mix":
-        original = FileSongStore.finish_record
+        original = FileSongStore.write_record
 
-        def missing(store: FileSongStore, record: Record, text: str) -> None:
-            original(store, record, text)
-            store.mix_path().unlink()
+        @contextmanager
+        def missing(
+            store: FileSongStore, song_text: str, suffix: Suffix, *, latest: bool
+        ) -> Generator[RecordDraft]:
+            with original(store, song_text, suffix, latest=latest) as record:
+                yield record
+            for mix in (store.record_path(record.run) / "audio").glob("mix.*"):
+                mix.unlink()
 
-        monkeypatch.setattr(FileSongStore, "finish_record", missing)
+        monkeypatch.setattr(FileSongStore, "write_record", missing)
     else:
 
         def fail() -> None:
@@ -530,7 +545,7 @@ def test_destination_in_a_store_s_protected_root_is_refused_before_python(
     assert not marker.exists()
     assert export.main([str(song), "--destination", "bundle"]) == 0
     assert marker.exists()
-    assert (actual / "song.py/latest/mix.wav").exists()
+    assert (actual / "song.py/latest/audio/mix.wav").exists()
 
 
 @pytest.mark.parametrize("destination", ["POSER.md", "POSER.md/bundle"])

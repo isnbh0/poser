@@ -3,7 +3,6 @@
 import dataclasses
 import hashlib
 import json
-import os
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import override
@@ -25,7 +24,6 @@ from fakes import (
 
 from poser.core.analysis import AnalysisTools, analyze_song, measure
 from poser.core.audio import Audio, measure_peak_dbfs, stem_samples, write_raw_audio
-from poser.core.cache import Stamp
 from poser.core.graph import DelayNode, EffectNode, Graph, TrackNode, Wire
 from poser.core.loading import LoadedSong
 from poser.core.names import Identifier, SongId, TrackName
@@ -45,6 +43,7 @@ from poser.core.report import (
     Report,
     bar_dbfs,
     report_failed,
+    report_to_data,
 )
 from poser.core.song import Note, Song, Track
 from poser.core.statuses import StemStatus
@@ -123,14 +122,27 @@ class Setup:
         )
 
     def record(self, run: int) -> Path:
-        return self.store.records() / str(run)
+        return self.store.record_path(run)
 
-    def latest(self) -> list[Path]:
-        """The latest results of a full analysis of the two-track song."""
-        images = [
-            self.store.image_path(name, self.visualizer.suffix) for name in (LEAD, BASS, None)
-        ]
-        return [self.store.report_path(), self.store.mix_path(), *images]
+    def mix_path(self) -> Path:
+        """The latest record's mix."""
+        latest = self.store.latest()
+        assert latest is not None, "no latest record"
+        return latest / f"audio/mix{self.audio_files.suffix}"
+
+    def stored_stem(self, song: Song, index: int) -> Path:
+        """The stored stem of the song's index'th node."""
+        key = node_key_of(song, index, self)
+        assert key is not None
+        stored = self.store.find(key)
+        assert stored is not None
+        return stored.stem_path(0)
+
+    def forget(self, song: Song, index: int) -> None:
+        """Drop the object holding the song's index'th node, as if it was never rendered."""
+        key = node_key_of(song, index, self)
+        assert key is not None
+        del self.store.state.units[key]
 
 
 def tree(directory: Path) -> list[str]:
@@ -198,30 +210,27 @@ def test_full_analysis_writes_latest_results_and_a_record(tmp_path: Path) -> Non
     assert all(node.status is AnalysisStatus.ANALYZED for node in report.nodes)
     assert not report_failed(report)
     assert report.mix is not None
-    assert report.mix.path == str(setup.store.mix_path())
-    images = [node.spectrogram for node in report.nodes] + [report.mix.spectrogram]
-    assert images == [str(path) for path in setup.latest()[2:]]
-    for path in setup.latest():
-        assert path.is_file()
-    latest = json.loads(setup.store.report_path().read_text())
-    assert latest["run"] == 1
-    assert latest["mix"]["spectrogram"] == report.mix.spectrogram
-
     record = setup.record(1)
+    assert setup.store.latest() == record
+    assert report.mix.path == "audio/mix.npy"
+    images = [node.spectrogram for node in report.nodes] + [report.mix.spectrogram]
+    assert images == ["images/node-0.png", "images/node-1.png", "images/mix.png"]
+    for relative in (report.mix.path, *images):
+        assert relative is not None
+        assert not Path(relative).is_absolute()
+        assert (record / relative).is_file()
     assert tree(record) == [
+        "audio",
+        "audio/mix.npy",
         "images",
-        "images/[mix].png",
-        "images/bass.png",
-        "images/lead.png",
+        "images/mix.png",
+        "images/node-0.png",
+        "images/node-1.png",
         "report.json",
         "song.json",
     ]
     kept = json.loads((record / "report.json").read_text())
-    kept_images = [node["spectrogram"] for node in kept["nodes"]] + [kept["mix"]["spectrogram"]]
-    assert kept_images == [
-        str(record / "images" / name) for name in ("lead.png", "bass.png", "[mix].png")
-    ]
-    assert {**kept, "nodes": None, "mix": None} == {**latest, "nodes": None, "mix": None}
+    assert kept == report_to_data(report)
 
 
 def test_mix_is_the_gain_weighted_sum_of_the_stems(tmp_path: Path) -> None:
@@ -229,7 +238,7 @@ def test_mix_is_the_gain_weighted_sum_of_the_stems(tmp_path: Path) -> None:
 
     report = setup.analyze(make_song(gain=-6.0))
 
-    mix = setup.audio_files.read(setup.store.mix_path(), stem_samples(make_song().graph()))
+    mix = setup.audio_files.read(setup.mix_path(), stem_samples(make_song().graph()))
     assert np.allclose(mix.samples, 0.5 * 10 ** (-6 / 20) + 0.2)
     lead, bass = report.nodes
     assert lead.gain_db == -6.0
@@ -239,66 +248,51 @@ def test_mix_is_the_gain_weighted_sum_of_the_stems(tmp_path: Path) -> None:
 
 def test_stray_stem_does_not_enter_the_mix(tmp_path: Path) -> None:
     setup = Setup(tmp_path)
-    stray = setup.store.stem_path(TrackName("removed"))
-    write_raw_audio(stray, np.full((2, stem_samples(make_song().graph())), 0.25, dtype=np.float32))
+    with setup.store.write_unit("f" * 64) as draft:
+        frames = stem_samples(make_song().graph())
+        write_raw_audio(draft.stem_path(0), np.full((2, frames), 0.25, dtype=np.float32))
+        draft.describe(0, StemStatus.RENDERED, -12.0)
 
     setup.analyze()
 
-    mix = setup.audio_files.read(setup.store.mix_path(), stem_samples(make_song().graph()))
+    mix = setup.audio_files.read(setup.mix_path(), stem_samples(make_song().graph()))
     assert np.allclose(mix.samples, 0.7)
 
 
-def test_report_keys_are_the_stamp_keys(tmp_path: Path) -> None:
+def test_report_keys_are_the_keys_of_the_stored_objects(tmp_path: Path) -> None:
     setup = Setup(tmp_path)
 
     lead, bass = setup.analyze().nodes
 
-    for report_node, name in ((lead, LEAD), (bass, BASS)):
-        stamp = setup.store.read_stamp(name)
-        assert isinstance(stamp, Stamp)
-        assert (report_node.node_key, report_node.sound_key) == (stamp.track_key, stamp.sound_key)
+    for index, report_node in enumerate((lead, bass)):
+        assert report_node.node_key == node_key_of(make_song(), index, setup)
+        assert report_node.node_key is not None
+        assert setup.store.find(report_node.node_key) is not None
+        assert report_node.sound_key is not None
 
 
 def spoil(setup: Setup, case: str) -> Song:
     """Spoil the bass stem one way and return the song to analyze."""
-    stem = setup.store.stem_path(BASS)
+    stem = setup.stored_stem(make_song(), 1)
     frames = stem_samples(make_song().graph())
     match case:
         case "missing" | "missing_and_unresolved":
-            stem.unlink()
-        case "no_stamp":
-            setup.store.forget_stamp(BASS)
-        case "garbage_stamp":
-            setup.store.spoil_stamp(BASS)
-        case "stem_changed" | "stem_and_song_changed":
-            info = stem.stat()
-            write_raw_audio(stem, np.full((2, frames), 0.3, dtype=np.float32))
-            os.utime(stem, ns=(info.st_atime_ns, info.st_mtime_ns + 10**9))
+            setup.forget(make_song(), 1)
         case "sound_changed" | "song_and_sound_changed":
             setup.instrument = make_instrument(pad_identity="pad, edited")
-        case "wrong_length" | "wrong_length_and_sound_changed":
-            _restamp(setup, np.full((2, frames - 1), 0.2, dtype=np.float32))
+        case "wrong_length":
+            write_raw_audio(stem, np.full((2, frames - 1), 0.2, dtype=np.float32))
         case "not_finite":
             samples = np.full((2, frames), 0.2, dtype=np.float32)
             samples[:, 1000] = np.nan
-            _restamp(setup, samples)
-    if case == "wrong_length_and_sound_changed":
-        setup.instrument = make_instrument(pad_identity="pad, edited")
-    if case in {"song_changed", "stem_and_song_changed", "song_and_sound_changed"}:
+            write_raw_audio(stem, samples)
+    if case in {"song_changed", "song_and_sound_changed"}:
         return make_song(pitch=62)
     if case == "unknown_instrument":
         return make_song(bass="other")
     if case in {"unresolved", "missing_and_unresolved"}:
         return make_song(bass="fake:gone")
     return make_song()
-
-
-def _restamp(setup: Setup, samples: np.ndarray) -> None:
-    """Replace the bass stem and stamp it with its current keys, as a render would."""
-    stamp = setup.store.read_stamp(BASS)
-    assert isinstance(stamp, Stamp)
-    write_raw_audio(setup.store.stem_path(BASS), samples)
-    setup.store.write_stamp(BASS, stamp)
 
 
 FRAMES = stem_samples(make_song().graph())
@@ -308,24 +302,12 @@ FRAMES = stem_samples(make_song().graph())
     ("case", "status", "detail"),
     [
         ("missing", AnalysisStatus.MISSING_STEM, None),
-        ("missing_and_unresolved", AnalysisStatus.MISSING_STEM, None),
-        ("no_stamp", AnalysisStatus.STALE_STEM, "stem has no render stamp"),
-        ("garbage_stamp", AnalysisStatus.STALE_STEM, "stem has no render stamp"),
-        ("stem_changed", AnalysisStatus.STALE_STEM, "stem changed after it was rendered"),
-        ("stem_and_song_changed", AnalysisStatus.STALE_STEM, "stem changed after it was rendered"),
-        ("song_changed", AnalysisStatus.STALE_STEM, "song changed since this stem was rendered"),
-        # The node key digests the sound, so a changed sound is named before the song is.
-        (
-            "song_and_sound_changed",
-            AnalysisStatus.STALE_STEM,
-            "sound changed since this stem was rendered",
-        ),
-        ("sound_changed", AnalysisStatus.STALE_STEM, "sound changed since this stem was rendered"),
-        (
-            "wrong_length_and_sound_changed",
-            AnalysisStatus.STALE_STEM,
-            "sound changed since this stem was rendered",
-        ),
+        # A node that cannot be planned has no key to look up, so the plan's reason comes first.
+        ("missing_and_unresolved", AnalysisStatus.STALE_STEM, "no sound named 'gone'"),
+        # A changed input changes the key, so no object holds the node's stem.
+        ("song_changed", AnalysisStatus.MISSING_STEM, None),
+        ("song_and_sound_changed", AnalysisStatus.MISSING_STEM, None),
+        ("sound_changed", AnalysisStatus.MISSING_STEM, None),
         ("unresolved", AnalysisStatus.STALE_STEM, "no sound named 'gone'"),
         ("unknown_instrument", AnalysisStatus.STALE_STEM, "no instrument 'other' in poser.toml"),
         ("wrong_length", AnalysisStatus.STALE_STEM, f"{FRAMES - 1} samples, expected {FRAMES}"),
@@ -357,7 +339,7 @@ def test_unusable_stem_fails_the_run_and_removes_earlier_results(
     assert (bass.peak_dbfs, bass.integrated_lufs, bass.bands_db, bass.bar_dbfs) == (None,) * 4
     assert report.mix is None
     assert report_failed(report)
-    assert not [path for path in setup.latest() if path.exists()]
+    assert setup.store.latest() is None
     assert report.run == 2
     assert tree(setup.record(2)) == ["report.json", "song.json"]
     assert json.loads((setup.record(2) / "report.json").read_text())["mix"] is None
@@ -367,7 +349,7 @@ def test_records_number_on_and_hold_the_song_and_its_digest(tmp_path: Path) -> N
     setup = Setup(tmp_path)
 
     runs = [setup.analyze().run, setup.analyze(make_song(gain=-3.0)).run]
-    setup.store.discard(BASS)
+    setup.forget(make_song(), 1)
     failed = setup.analyze()
 
     assert [*runs, failed.run] == [1, 2, 3]
@@ -456,7 +438,7 @@ def test_gain_turns_a_clipping_mix_clean(tmp_path: Path) -> None:
 
     assert report.mix is not None
     assert report.mix.defects == ()
-    mix = setup.audio_files.read(setup.store.mix_path(), FRAMES)
+    mix = setup.audio_files.read(setup.mix_path(), FRAMES)
     assert np.allclose(mix.samples, 0.6 * 10 ** (-6 / 20) * 2, rtol=1e-6)
     assert not report_failed(report)
 
@@ -480,7 +462,7 @@ def test_mixer_returning_the_wrong_length_raises(tmp_path: Path) -> None:
         pass
 
 
-def test_visualizer_error_propagates_and_leaves_the_record_unfinished(tmp_path: Path) -> None:
+def test_visualizer_error_propagates_and_publishes_no_record(tmp_path: Path) -> None:
     setup = Setup(tmp_path, visualizer=FakeVisualizer(OSError("disk full")))
 
     with pytest.raises(OSError, match="disk full"):
@@ -488,9 +470,11 @@ def test_visualizer_error_propagates_and_leaves_the_record_unfinished(tmp_path: 
 
     with setup.store.lock():
         pass
-    assert tree(setup.record(1)) == ["song.json"]
+    assert not setup.record(1).exists()
+    assert setup.store.latest() is None
+    assert not list((setup.store.directory / "drafts").glob("*"))
     setup.visualizer.raises = None
-    assert setup.analyze().run == 2
+    assert setup.analyze().run == 1
 
 
 # Graph songs (C17): the record holds the wiring and mode, and digests it as the song text.
@@ -520,7 +504,7 @@ def test_a_graph_song_is_analyzed_and_its_record_holds_the_wiring(tmp_path: Path
     driven = report.nodes[1]
     assert driven.kind == "effect"
     assert driven.upstream == ("lead",)
-    mix = setup.audio_files.read(setup.store.mix_path(), FRAMES)
+    mix = setup.audio_files.read(setup.mix_path(), FRAMES)
     # The mix sums the leaves: the driven lead and the dry bass, each at its own gain.
     assert np.allclose(mix.samples, 0.5 * 10 ** (-6 / 20) + 0.2)
 
@@ -551,8 +535,8 @@ def test_rewiring_changes_the_record_digest_and_reanalysis_keeps_it(tmp_path: Pa
     assert again.run == 3
 
 
-# The feedback regime: cycle members' keys come from the group digest, so analysis reads the same
-# stamps rendering wrote.
+# The feedback regime: cycle members' keys come from the group digest, so analysis finds the same
+# object rendering published.
 
 
 def loop_graph() -> Graph:
@@ -577,7 +561,7 @@ def loop_graph() -> Graph:
 
 def test_a_feedback_graph_analyzes_through_its_group_keys(tmp_path: Path) -> None:
     """The analysis computes each member's key from the group digest, exactly what rendering
-    stamped, so a rendered feedback graph reads as current and the report stays in song order."""
+    published, so a rendered feedback graph reads as current and the report stays in song order."""
     graph = loop_graph()
     setup = Setup(
         tmp_path,

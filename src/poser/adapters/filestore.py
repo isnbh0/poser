@@ -1,14 +1,19 @@
-"""The render store on the filesystem: one directory per song, one directory per kind of file.
+"""The render store on the filesystem: one directory per song, units kept by key, records kept by
+number.
 
 A song's directory is `<renders dir>/<song id>`, and it holds:
 
 - `.lock`, held for a whole run;
-- `stems/<node><stem>`, each node's stem;
-- `stamps/<node>.json`, each stem's render stamp, with the stem file's size and modification
-  time when it was stamped;
-- `latest/`, the latest results: `report.json`, `mix<stem>`, and `images/<node or [mix]><image>`;
-- `history/<run>/`, the records: `song<record>`, `report.json`, and
-  `images/<node or [mix]><image>`.
+- `objects/<key>/`, one render unit: `meta.json`, listing each stem's status and peak, and the
+  stems `0<stem>`, `1<stem>`, ..., one per node of the unit in the unit's node order;
+- `history/<n>/`, the records, numbered from 1: `song<record>`, `report.json`, and, in a
+  complete record, `audio/mix<stem>` and `images/`;
+- `latest`, a symbolic link to `history/<n>`, present only while the newest record is complete.
+
+A unit or record is written in a `.tmp-<random>` directory beside its final place and renamed
+into place when complete, and `latest` is replaced by renaming a new link over it, so a reader
+sees each complete or not at all. `sweep` deletes the drafts an interrupted run left. Node names
+never appear in a path.
 
 Every run takes the lock, so every song directory that holds anything holds `.lock`, and
 `song` refuses an id whose directory would be inside another song's, or hold one. `lock` checks
@@ -17,38 +22,35 @@ it does, so two handles taken before either locked cannot nest. Symlinks under t
 directory are followed as the filesystem follows them.
 """
 
+import errno
 import fcntl
 import json
 import os
+import re
 import shutil
 import tempfile
-from collections.abc import Generator, Mapping
+from collections.abc import Collection, Generator, Mapping
 from contextlib import contextmanager
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from poser.adapters.loading import refuse_options
-from poser.core.cache import Stamp, StampProblem
 from poser.core.jsonvalue import JsonValue, json_object
-from poser.core.names import Identifier, NodeName, SongId, Suffix
-from poser.core.ports import AdapterContext, Record, SongBusyError
-from poser.core.song import is_int, is_number
+from poser.core.names import Identifier, SongId, Suffix
+from poser.core.ports import AdapterContext, SongBusyError, StemMeta
+from poser.core.song import is_number
 from poser.core.statuses import StemStatus
 
 LOCK_NAME = ".lock"
 SONGS_LOCK_NAME = ".songs.lock"  # The leading dot keeps it apart from every song's directory.
-STEMS_DIR = "stems"
-STAMPS_DIR = "stamps"
-LATEST_DIR = "latest"
-IMAGES_DIR = "images"
+OBJECTS_DIR = "objects"
 HISTORY_DIR = "history"
-REPORT_NAME = "report.json"
-MIX_NAME = "mix"
-MIX_IMAGE = "[mix]"  # Brackets cannot appear in a node name.
+LATEST_NAME = "latest"
+META_NAME = "meta.json"
 SONG_NAME = "song"
+DRAFT_PREFIX = ".tmp-"
 PREVIEWS_DIR = ".sound-previews"  # The leading dot keeps it apart from every song's directory.
-STAMP_KEYS = frozenset(
-    {"track_key", "sound_key", "status", "peak_dbfs", "stem_size", "stem_mtime_ns"}
-)
+
+_KEY = re.compile(r"[0-9a-f]{64}")
 
 GUIDE = """\
 ## Where results are kept
@@ -56,18 +58,17 @@ GUIDE = """\
 Each song's results are under `renders/<song path>/`, such as `renders/songs/demo.yaml/` for
 `songs/demo.yaml`:
 
-- `stems/`: each node's rendered stem, as `<node>{stem}`. A later render reuses a stem whose
-  node and sound are unchanged.
-- `latest/`: the latest analysis: `report.json`, the mix as `mix{stem}`, and an image per node
-  and one for the mix (`[mix]`) in `latest/images/`. It exists only when every node analyzed.
+- `latest`: a link to the newest record, present only when every node of that analysis
+  analyzed. The mix is `latest/audio/mix{stem}`, and the images are in `latest/images/`.
 - `history/<n>/`: one record per analysis, numbered from 1: the song as it was analyzed (`song`
-  with the record's suffix, such as `song.yaml`), that run's `report.json`, and its images in
-  the record's `images/` directory.
+  with the record's suffix, such as `song.yaml`) and that run's `report.json`, and, when every
+  node analyzed, the mix in `audio/` and an image per node and one for the mix in `images/`.
+  Paths in a report are relative to its record's directory.
+- `objects/`: rendered stems, one directory per render unit, named by a digest of everything
+  the unit's render reads. A later render reuses a unit whose digest is unchanged. poser owns
+  this directory: it does not notice a stem edited in place, and `render-song --force` renders
+  every unit again.
 """
-
-
-def _image_name(node: NodeName | None, suffix: Suffix) -> str:
-    return f"{MIX_IMAGE if node is None else node}{suffix}"
 
 
 def _write_atomic(path: Path, text: str) -> None:
@@ -77,6 +78,8 @@ def _write_atomic(path: Path, text: str) -> None:
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as output:
             output.write(text)
+            output.flush()
+            os.fsync(output.fileno())
         # mkstemp creates the file owner-only; give it the usual umask-based mode.
         umask = os.umask(0)
         os.umask(umask)
@@ -84,6 +87,32 @@ def _write_atomic(path: Path, text: str) -> None:
         temp.replace(path)
     finally:
         temp.unlink(missing_ok=True)
+
+
+def _sync_tree(directory: Path) -> None:
+    """Flush every file under `directory` to disk, so a rename publishes complete contents."""
+    for path in directory.rglob("*"):
+        if path.is_file() and not path.is_symlink():
+            fd = os.open(path, os.O_RDONLY)
+            try:
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+
+
+def _draft_dir(parent: Path) -> Path:
+    parent.mkdir(parents=True, exist_ok=True)
+    draft = Path(tempfile.mkdtemp(dir=parent, prefix=DRAFT_PREFIX))
+    # mkdtemp creates the directory owner-only; give it the usual umask-based mode.
+    umask = os.umask(0)
+    os.umask(umask)
+    draft.chmod(0o777 & ~umask)
+    return draft
+
+
+def _check_key(key: str) -> None:
+    if not (isinstance(key, str) and _KEY.fullmatch(key)):
+        raise ValueError(f"a unit key must be 64 lowercase hex digits, got {key!r}")
 
 
 def _inside_another_song(renders_dir: Path, song_id: SongId) -> str | None:
@@ -113,27 +142,94 @@ def _flock(path: Path, operation: int) -> Generator[None]:
         os.close(fd)
 
 
-def _parse_stamp(text: str) -> tuple[Stamp, int, int] | None:
-    """Return a stamp file's stamp, stem size, and stem modification time, or None."""
+def _parse_meta(text: str) -> tuple[StemMeta, ...] | None:
+    """Return the stems a unit's `meta.json` lists, or None if it is not a unit's metadata."""
     try:
         fields = json_object(json.loads(text))
     except ValueError:
         return None
-    if fields is None or set(fields) != STAMP_KEYS:
+    if fields is None or set(fields) != {"stems"} or not isinstance(fields["stems"], list):
         return None
-    size, mtime, status = fields["stem_size"], fields["stem_mtime_ns"], fields["status"]
-    track_key, sound_key, peak = fields["track_key"], fields["sound_key"], fields["peak_dbfs"]
-    if not (is_int(size) and is_int(mtime) and is_number(peak)):
-        return None
-    if not (isinstance(track_key, str) and isinstance(sound_key, str)):
-        return None
-    if not (isinstance(status, str) and status in StemStatus):
-        return None
-    try:
-        stamp = Stamp(track_key, sound_key, StemStatus(status), float(peak))
-    except ValueError:
-        return None
-    return stamp, size, mtime
+    stems: list[StemMeta] = []
+    for entry in fields["stems"]:
+        stem = json_object(entry)
+        if stem is None or set(stem) != {"status", "peak_dbfs"}:
+            return None
+        status, peak = stem["status"], stem["peak_dbfs"]
+        if not (isinstance(status, str) and status in StemStatus and is_number(peak)):
+            return None
+        stems.append(StemMeta(StemStatus(status), float(peak)))
+    return tuple(stems) or None
+
+
+class FileStoredUnit:
+    """A published unit's directory."""
+
+    def __init__(self, directory: Path, stem_suffix: Suffix, stems: tuple[StemMeta, ...]) -> None:
+        self._directory = directory
+        self._stem_suffix = stem_suffix
+        self._stems = stems
+
+    def stem_path(self, index: int) -> Path:
+        if not 0 <= index < len(self._stems):
+            raise IndexError(f"the unit has {len(self._stems)} stems, not one at {index}")
+        return self._directory / f"{index}{self._stem_suffix}"
+
+    def stems(self) -> tuple[StemMeta, ...]:
+        return self._stems
+
+
+class FileUnitDraft:
+    """A unit being written in its draft directory."""
+
+    def __init__(self, directory: Path, stem_suffix: Suffix) -> None:
+        self.directory = directory
+        self._stem_suffix = stem_suffix
+        self.described: dict[int, StemMeta] = {}
+
+    def stem_path(self, index: int) -> Path:
+        if isinstance(index, bool) or not isinstance(index, int) or index < 0:
+            raise ValueError(f"a stem index must be a non-negative integer, got {index!r}")
+        return self.directory / f"{index}{self._stem_suffix}"
+
+    def describe(self, index: int, status: StemStatus, peak_dbfs: float) -> None:
+        self.described[index] = StemMeta(status, peak_dbfs)
+
+    def meta_text(self) -> str:
+        """Return `meta.json`'s text. Raises ValueError unless every index from 0 up has been
+        described and written, and no other."""
+        count = len(self.described)
+        if count == 0 or set(self.described) != set(range(count)):
+            raise ValueError(
+                f"a unit must describe its stems from 0 up, got {sorted(self.described)}"
+            )
+        missing = [i for i in range(count) if not self.stem_path(i).is_file()]
+        if missing:
+            raise ValueError(f"the unit's draft has no stem at {missing}")
+        stems = [
+            {"status": str(meta.status), "peak_dbfs": meta.peak_dbfs}
+            for _, meta in sorted(self.described.items())
+        ]
+        return json.dumps({"stems": stems}, allow_nan=False) + "\n"
+
+
+class FileRecordDraft:
+    """A record being written in its draft directory."""
+
+    def __init__(self, directory: Path, run: int) -> None:
+        self.directory = directory
+        self.run = run
+
+    def path(self, relative: str) -> Path:
+        parts = PurePosixPath(relative).parts
+        if not parts or PurePosixPath(relative).is_absolute() or ".." in parts:
+            raise ValueError(f"a record path must stay inside the record, got {relative!r}")
+        path = self.directory.joinpath(*parts)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        return path
+
+    def relative(self, path: Path) -> str:
+        return path.relative_to(self.directory).as_posix()
 
 
 class FileSongStore:
@@ -145,16 +241,11 @@ class FileSongStore:
         self._directory = renders_dir / song_id
         self._stem_suffix = stem_suffix
 
-    def _dir(self, *parts: str) -> Path:
-        path = self._directory.joinpath(*parts)
-        path.mkdir(parents=True, exist_ok=True)
-        return path
-
     @contextmanager
     def lock(self) -> Generator[None]:
         """Hold a song's lock for a run, or raise SongBusyError at once if another run holds it.
 
-        Two runs on one song would stamp each other's stems and number the same history record.
+        Two runs on one song would publish over each other's units and number the same record.
         The operating system releases the lock when its descriptor closes, even if the process
         dies, so the lock file left on disk means nothing by itself.
         """
@@ -187,81 +278,116 @@ class FileSongStore:
         if any(self._directory.rglob(LOCK_NAME)):
             raise ValueError(_holding_another_song(self._song_id))
 
-    def _stem_file(self, node: NodeName) -> Path:
-        return self._directory / STEMS_DIR / f"{node}{self._stem_suffix}"
+    def sweep(self) -> None:
+        for parent in (self._directory / OBJECTS_DIR, self._directory / HISTORY_DIR):
+            if parent.is_dir():
+                for entry in parent.iterdir():
+                    if entry.name.startswith(DRAFT_PREFIX):
+                        shutil.rmtree(entry, ignore_errors=True)
+        if self._directory.is_dir():
+            for entry in self._directory.glob(f"{LATEST_NAME}{DRAFT_PREFIX}*"):
+                entry.unlink(missing_ok=True)
 
-    def stem_path(self, node: NodeName) -> Path:
-        self._dir(STEMS_DIR)
-        return self._stem_file(node)
-
-    def _stamp_path(self, node: NodeName) -> Path:
-        return self._directory / STAMPS_DIR / f"{node}.json"
-
-    def read_stamp(self, node: NodeName) -> Stamp | StampProblem:
+    def find(self, key: str) -> FileStoredUnit | None:
+        _check_key(key)
+        directory = self._directory / OBJECTS_DIR / key
         try:
-            text = self._stamp_path(node).read_text(encoding="utf-8")
+            text = (directory / META_NAME).read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
-            return StampProblem.MISSING
-        parsed = _parse_stamp(text)
-        if parsed is None:
-            return StampProblem.MISSING
-        stamp, size, mtime = parsed
+            return None
+        stems = _parse_meta(text)
+        if stems is None:
+            return None
+        names = {f"{index}{self._stem_suffix}" for index in range(len(stems))}
+        held = {entry.name for entry in directory.iterdir() if entry.name != META_NAME}
+        if held != names:
+            return None
+        return FileStoredUnit(directory, self._stem_suffix, stems)
+
+    @contextmanager
+    def write_unit(self, key: str, *, replace: bool = False) -> Generator[FileUnitDraft]:
+        _check_key(key)
+        objects = self._directory / OBJECTS_DIR
+        draft = FileUnitDraft(_draft_dir(objects), self._stem_suffix)
         try:
-            info = self._stem_file(node).stat()
-        except OSError:
-            return StampProblem.CHANGED
-        if (info.st_size, info.st_mtime_ns) != (size, mtime):
-            return StampProblem.CHANGED
-        return stamp
+            yield draft
+            _write_atomic(draft.directory / META_NAME, draft.meta_text())
+            _sync_tree(draft.directory)
+            self._publish(draft.directory, objects / key, replace=replace)
+        finally:
+            shutil.rmtree(draft.directory, ignore_errors=True)
 
-    def write_stamp(self, node: NodeName, stamp: Stamp) -> None:
-        info = self.stem_path(node).stat()
-        fields = {
-            "track_key": stamp.track_key,
-            "sound_key": stamp.sound_key,
-            "status": str(stamp.status),
-            "peak_dbfs": stamp.peak_dbfs,
-            "stem_size": info.st_size,
-            "stem_mtime_ns": info.st_mtime_ns,
-        }
-        self._dir(STAMPS_DIR)
-        _write_atomic(self._stamp_path(node), json.dumps(fields, allow_nan=False) + "\n")
+    def _publish(self, draft: Path, target: Path, *, replace: bool) -> None:
+        """Rename the draft to `target`. An existing complete unit there is kept unless
+        `replace`; anything else there is swapped out and deleted."""
+        try:
+            draft.rename(target)
+        except OSError as error:
+            if error.errno not in (errno.EEXIST, errno.ENOTEMPTY):
+                raise
+        else:
+            return
+        if not replace and self.find(target.name) is not None:
+            return
+        old = target.parent / f"{DRAFT_PREFIX}{os.urandom(8).hex()}"
+        target.rename(old)
+        try:
+            draft.rename(target)
+        finally:
+            shutil.rmtree(old, ignore_errors=True)
 
-    def discard(self, node: NodeName) -> None:
-        self._stamp_path(node).unlink(missing_ok=True)
-        self._stem_file(node).unlink(missing_ok=True)
+    def keep_units(self, keys: Collection[str]) -> None:
+        objects = self._directory / OBJECTS_DIR
+        if not objects.is_dir():
+            return
+        kept = set(keys)
+        for entry in objects.iterdir():
+            if not entry.name.startswith(DRAFT_PREFIX) and entry.name not in kept:
+                shutil.rmtree(entry, ignore_errors=True)
 
-    def clear_latest(self) -> None:
-        shutil.rmtree(self._directory / LATEST_DIR, ignore_errors=True)
-
-    def image_path(self, node: NodeName | None, suffix: Suffix) -> Path:
-        return self._dir(LATEST_DIR, IMAGES_DIR) / _image_name(node, suffix)
-
-    def mix_path(self) -> Path:
-        return self._dir(LATEST_DIR) / f"{MIX_NAME}{self._stem_suffix}"
-
-    def report_path(self) -> Path:
-        return self._dir(LATEST_DIR) / REPORT_NAME
-
-    def start_record(self, song_text: str, suffix: Suffix) -> Record:
-        history = self._dir(HISTORY_DIR)
-        # A record left without a report by an I/O error still counts.
+    @contextmanager
+    def write_record(
+        self, song_text: str, suffix: Suffix, *, latest: bool
+    ) -> Generator[FileRecordDraft]:
+        history = self._directory / HISTORY_DIR
+        history.mkdir(parents=True, exist_ok=True)
         taken = [int(entry.name) for entry in history.iterdir() if entry.name.isdecimal()]
         run = max(taken, default=0) + 1
-        record = history / str(run)
-        record.mkdir()
-        _write_atomic(record / f"{SONG_NAME}{suffix}", song_text)
-        return Record(run, record)
+        draft = FileRecordDraft(_draft_dir(history), run)
+        try:
+            _write_atomic(draft.path(f"{SONG_NAME}{suffix}"), song_text)
+            yield draft
+            _sync_tree(draft.directory)
+            draft.directory.rename(self.record_path(run))
+        finally:
+            shutil.rmtree(draft.directory, ignore_errors=True)
+        if latest:
+            self._point_latest(f"{HISTORY_DIR}/{run}")
+        else:
+            self.clear_latest()
 
-    def keep_image(self, record: Record, node: NodeName | None, suffix: Suffix) -> Path:
-        images = record.path / IMAGES_DIR
-        images.mkdir(exist_ok=True)
-        target = images / _image_name(node, suffix)
-        shutil.copyfile(self.image_path(node, suffix), target)
-        return target
+    def _point_latest(self, target: str) -> None:
+        """Replace `latest` with a link to `target`, relative to the song's directory, in one
+        rename."""
+        link = self._directory / LATEST_NAME
+        if link.is_dir() and not link.is_symlink():
+            shutil.rmtree(link)  # A `latest` directory from an older layout.
+        temp = self._directory / f"{LATEST_NAME}{DRAFT_PREFIX}{os.urandom(8).hex()}"
+        temp.symlink_to(target, target_is_directory=True)
+        try:
+            temp.replace(link)
+        finally:
+            temp.unlink(missing_ok=True)
 
-    def finish_record(self, record: Record, report_text: str) -> None:
-        _write_atomic(record.path / REPORT_NAME, report_text)
+    def record_path(self, run: int) -> Path:
+        return self._directory / HISTORY_DIR / str(run)
+
+    def clear_latest(self) -> None:
+        link = self._directory / LATEST_NAME
+        if link.is_symlink() or link.is_file():
+            link.unlink()
+        elif link.is_dir():
+            shutil.rmtree(link)  # A `latest` directory from an older layout.
 
 
 class FileRenderStore:

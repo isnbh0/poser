@@ -7,11 +7,11 @@ Only schema-owned artifact locations are portable.
 import hashlib
 import json
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 from typing import ClassVar
 
-from poser.core.analysis import AnalysisTools, _analyze, report_json
+from poser.core.analysis import REPORT_NAME, AnalysisTools, _analyze
 from poser.core.jsonvalue import JsonValue
 from poser.core.loading import load_song
 from poser.core.names import Identifier, SongId
@@ -30,6 +30,9 @@ from poser.core.report import Report, report_failed, report_to_data
 from poser.core.session import song_session
 from poser.core.song import SongError
 from poser.core.statuses import StemStatus
+
+# The record directories a bundle copies beside the record's report.
+RECORD_ARTIFACT_DIRS = ("audio", "images")
 
 
 def sha256(data: bytes) -> str:
@@ -272,13 +275,9 @@ class PublishedDelivery:
         song_id = data.get("song_id")
         if not isinstance(song_id, str) or f"source/{song_id}" not in sources:
             raise ValueError("published delivery requires the editable song source")
-        portable = _portable_report(self.report)
-        if portable.mix is None:
-            raise ValueError("published delivery requires a mix")
-        required = {"report.json", portable.mix.path, *sources}
-        required.update(node.spectrogram for node in portable.nodes if node.spectrogram)
-        if portable.mix.spectrogram:
-            required.add(portable.mix.spectrogram)
+        mix = self.report.mix
+        required = {REPORT_NAME, mix.path, mix.spectrogram, *sources}
+        required.update(node.spectrogram for node in self.report.nodes if node.spectrogram)
         if not required.issubset(artifacts):
             raise ValueError("published delivery is missing required artifacts")
         if any(artifacts[name] != digest for name, digest in sources.items()):
@@ -294,34 +293,9 @@ class PublishedDelivery:
                 raise ValueError("published delivery has an unsafe artifact reference")
             if not target.is_file() or sha256(target.read_bytes()) != digest:
                 raise ValueError(f"published delivery artifact does not match: {name}")
-        if json.loads((self.destination / "report.json").read_bytes()) != report_to_data(portable):
+        bundled = json.loads((self.destination / REPORT_NAME).read_bytes())
+        if bundled != report_to_data(self.report):
             raise ValueError("published delivery report does not match its successful analysis")
-
-
-def _portable_report(report: Report) -> Report:
-    if report.mix is None:
-        raise ValueError("portable report requires a mix")
-    nodes = tuple(
-        replace(
-            node,
-            spectrogram=(
-                None
-                if node.spectrogram is None
-                else f"images/node-{index}{Path(node.spectrogram).suffix}"
-            ),
-        )
-        for index, node in enumerate(report.nodes)
-    )
-    mix = replace(
-        report.mix,
-        path=f"audio/mix{Path(report.mix.path).suffix}",
-        spectrogram=(
-            None
-            if report.mix.spectrogram is None
-            else f"images/mix{Path(report.mix.spectrogram).suffix}"
-        ),
-    )
-    return replace(report, nodes=nodes, mix=mix)
 
 
 type DeliveryResult = PublishedDelivery | DeliveryFailure
@@ -343,9 +317,12 @@ def result_to_data(result: DeliveryResult) -> dict[str, JsonValue]:
 def _bundle(
     inputs: DeliveryInputs,
     report: Report,
+    record: Path,
     poser_version: str,
     song_id: SongId,
 ) -> dict[Path, bytes]:
+    """Return the bundle's files: the sources, the published record's report, audio, and images
+    under the record's own relative paths, and the manifest."""
     files: dict[Path, bytes] = {}
     sources: dict[str, JsonValue] = {}
     for snapshot in (inputs.song, *inputs.includes):
@@ -355,39 +332,11 @@ def _bundle(
         files[relative] = snapshot.data
         sources[relative.as_posix()] = sha256(snapshot.data)
 
-    def artifact(original: str, target: Path) -> str:
-        files[target] = Path(original).read_bytes()
-        return target.as_posix()
-
-    if report.mix is None:
-        raise ValueError("successful report has no mix")
-    nodes = tuple(
-        replace(
-            node,
-            spectrogram=(
-                None
-                if node.spectrogram is None
-                else artifact(
-                    node.spectrogram,
-                    Path("images") / f"node-{index}{Path(node.spectrogram).suffix}",
-                )
-            ),
-        )
-        for index, node in enumerate(report.nodes)
-    )
-    mix = replace(
-        report.mix,
-        path=artifact(report.mix.path, Path("audio") / f"mix{Path(report.mix.path).suffix}"),
-        spectrogram=(
-            None
-            if report.mix.spectrogram is None
-            else artifact(
-                report.mix.spectrogram, Path("images") / f"mix{Path(report.mix.spectrogram).suffix}"
-            )
-        ),
-    )
-    portable = replace(report, nodes=nodes, mix=mix)
-    files[Path("report.json")] = report_json(portable).encode("utf-8")
+    files[Path(REPORT_NAME)] = (record / REPORT_NAME).read_bytes()
+    for directory in RECORD_ARTIFACT_DIRS:
+        for path in sorted((record / directory).rglob("*")):
+            if path.is_file():
+                files[path.relative_to(record)] = path.read_bytes()
     configuration_bytes = inputs.configuration.data
     if configuration_bytes is None:
         raise ValueError("configuration snapshot has no bytes")
@@ -475,9 +424,10 @@ def export_song(
             )
             if report_failed(report) or report.mix is None:
                 return AnalysisFailed(f"analysis run {report.run} failed")
-            if not Path(report.mix.path).is_file():
-                return AnalysisFailed(f"reported mix is missing: {report.mix.path}")
-            files = _bundle(inputs, report, poser_version, song_id)
+            record = store.record_path(report.run)
+            if not (record / report.mix.path).is_file():
+                return AnalysisFailed(f"reported mix is missing: {record / report.mix.path}")
+            files = _bundle(inputs, report, record, poser_version, song_id)
             with writer.stage(inputs.destination, files) as staged:
                 if changed := inputs.changed():
                     return InputsChanged(f"inputs changed: {', '.join(map(str, changed))}")

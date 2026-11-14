@@ -378,7 +378,7 @@ def test_two_engine_mix_sums_the_leaves(tmp_path: Path) -> None:
     for result in results:
         assert result.status in (StemStatus.RENDERED, StemStatus.SILENT), result
 
-    analyze_song(
+    report = analyze_song(
         LoadedSong(song),
         "two-engines",
         composition.render_store(),
@@ -389,9 +389,9 @@ def test_two_engine_mix_sums_the_leaves(tmp_path: Path) -> None:
         composition.analysis_tools(),
         effects=composition.effects(),
     )
-    mix = composition.audio_files().read(
-        composition.render_store().song(song_id).mix_path(), frames
-    )
+    record = composition.render_store().song(song_id).record_path(report.run)
+    assert report.mix is not None
+    mix = composition.audio_files().read(record / report.mix.path, frames)
     assert isinstance(mix, Audio)
     gains = {str(track.name): track.gain for track in song.tracks}
     by_track = {str(result.track): result for result in results}

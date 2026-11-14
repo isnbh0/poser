@@ -9,6 +9,7 @@ from fakes import FakeInstrument, FakeSound
 from helpers import fxp_bytes, set_instrument_guide
 from workspaces import CommandWorkspace, make_workspace, write_script_song, write_song
 
+from poser.adapters.song_formats import SONG_FORMATS
 from poser.adapters.wav import WavAudioFiles
 from poser.cli import analyze, check, guide, init_workspace, render, sounds
 from poser.cli.common import (
@@ -23,7 +24,9 @@ from poser.core.audio import SILENCE_DBFS
 from poser.core.checking import CheckResult
 from poser.core.checks import CheckStatus
 from poser.core.guide import GENERATED
-from poser.core.names import Identifier, SongId
+from poser.core.loading import load_song
+from poser.core.names import Identifier, NodeName, SongId
+from poser.core.planning import Unplanned, plan, resolve_all
 from poser.core.ports import CaptureFailure
 
 SONG = "songs/tune.yaml"
@@ -35,7 +38,13 @@ def workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> CommandWorkspa
 
 
 def stem(workspace: CommandWorkspace, track: str, song: str = SONG) -> Path:
-    return workspace.renders / song / "stems" / f"{track}.wav"
+    """Where the store keeps the track's stem: its unit's object, at the track's position."""
+    composition = load(workspace.config, workspace.root / "sounds", workspace.renders)
+    graph = load_song(workspace.root / song, SONG_FORMATS).graph
+    resolved = resolve_all(graph, composition.instruments(), composition.effects())
+    unit, index = plan(graph, resolved).place(NodeName(track))
+    assert not isinstance(unit, Unplanned)
+    return workspace.renders / song / "objects" / unit.key / f"{index}.wav"
 
 
 def out(capsys: pytest.CaptureFixture[str]) -> str:
@@ -290,7 +299,8 @@ def test_analyze_table_has_a_mix_row(
     ]
     assert lines[1].split()[:3] == ["lead", "analyzed", "0.0"]
     assert lines[2].split()[:3] == ["[mix]", "written", "-"]
-    assert len(lines) == 3
+    assert lines[3] == f"record: {workspace.renders / SONG / 'history' / '1'}"
+    assert len(lines) == 4
 
 
 def test_missing_stem_fails_the_analysis(
@@ -303,7 +313,8 @@ def test_missing_stem_fails_the_analysis(
     lines = out(capsys).splitlines()
     assert lines[1].split()[:2] == ["lead", "missing_stem"]
     assert lines[2].split() == ["[mix]", "not_written", "-", "-", "-", "-", "-"]
-    assert len(lines) == 3
+    assert lines[3] == f"record: {workspace.renders / SONG / 'history' / '1'}"
+    assert len(lines) == 4
 
 
 # check-instruments

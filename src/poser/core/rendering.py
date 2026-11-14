@@ -6,15 +6,15 @@ gives each planned unit a render input and its digest as key. Each render functi
 its unit: the input and the resolved adapter whose identity the input digests, so a render cannot
 read anything its key does not cover. The instrument or effect adapter writes raw audio to a
 temporary file the core owns. The core alone makes it `Audio`, decides whether it is `rendered` or
-`silent`, writes the stem, and stamps it with the unit's key, so no adapter can get a bad stem
-stamped. A track whose sound begins late after its first note is rendered again, up to
+`silent`, and publishes the unit's stems in the store under the unit's key, so no adapter can get a
+bad stem kept. A unit whose key the store already holds is reused, and a unit that fails publishes
+nothing. A track whose sound begins late after its first note is rendered again, up to
 `RENDER_ATTEMPTS` times, because a plugin that loads its samples in the background can miss notes
 played before they arrive. If every attempt starts late by the same amount, the start is the
-sound's own and the track renders; if by different amounts, the track fails as `late_start`,
-leaving no stem or stamp. Units render in plan order, every upstream unit first, so every upstream
-stem a unit reads was written or found current in the same run. A feedback graph's cycle groups
-render one job per group, stepped through fixed blocks with previous-block feedback buffers that
-live in the job.
+sound's own and the track renders; if by different amounts, the track fails as `late_start`.
+Units render in plan order, every upstream unit first, so every upstream stem a unit reads was
+published or found in the same run. A feedback graph's cycle groups render one job per group,
+stepped through fixed blocks with previous-block feedback buffers that live in the job.
 """
 
 import tempfile
@@ -33,7 +33,7 @@ from poser.core.audio import (
     measure_peak_dbfs,
     read_raw_audio,
 )
-from poser.core.cache import DelayMemberInput, EffectMemberInput, Stamp, StemRef
+from poser.core.cache import DelayMemberInput, EffectMemberInput, StemRef
 from poser.core.loading import LoadedSong
 from poser.core.names import Identifier, NodeName, SongId
 from poser.core.performance import NoteOn, Performance
@@ -64,6 +64,7 @@ from poser.core.ports import (
     RenderRequest,
     RenderStore,
     SongStore,
+    StoredUnit,
 )
 from poser.core.session import song_session
 from poser.core.song import is_number
@@ -185,8 +186,7 @@ def delay_signal(line: np.ndarray, start: int, count: int, delay_samples: int) -
 
 @dataclass(frozen=True)
 class _RenderRun:
-    """One render's plan, store, and settings, and what it has produced so far: each node's
-    result, and the path of every stem written or found current, by unit key and position."""
+    """One render's plan, store, and settings, and each node's result so far."""
 
     plan: Plan
     store: SongStore
@@ -195,7 +195,6 @@ class _RenderRun:
     force: bool
     notify: Notify
     results: dict[NodeName, TrackResult] = field(default_factory=dict[NodeName, TrackResult])
-    stems: dict[tuple[str, int], Path] = field(default_factory=dict[tuple[str, int], Path])
 
 
 def render_song(
@@ -210,7 +209,7 @@ def render_song(
     force: bool,
     notify: Notify = ignore_progress,
 ) -> list[TrackResult]:
-    """Render each unit whose key changed since its stems were written, or every unit if forced.
+    """Render each unit whose key the store does not hold, or every unit if forced.
 
     The song's effect references are checked against the configured recipes first. Units render
     in plan order, every upstream unit first, so a unit reads stems its run just wrote or found
@@ -244,14 +243,14 @@ def _render(
     loaded.check_effects([*effects])
     graph = loaded.graph
     planned = plan(graph, resolve_all(graph, instruments, effects))
+    store.sweep()
     # Results from older stems must not survive a render.
     store.clear_latest()
     run = _RenderRun(planned, store, audio_files, timeout_s, force, notify)
     for unit in planned.units:
-        for index, result in enumerate(_render_unit(run, unit)):
+        for result in _render_unit(run, unit):
             run.results[result.track] = result
-            if result.stem is not None and not isinstance(unit, Unplanned):
-                run.stems[unit.key, index] = result.stem
+    store.keep_units(planned.keys())
     return list(run.results.values())
 
 
@@ -259,37 +258,69 @@ def _render_unit(run: _RenderRun, unit: Unit) -> tuple[TrackResult, ...]:
     """Return one result per node of the unit, in the unit's node order."""
     if (skipped := _upstream_skips(run, unit)) is not None:
         # An upstream left no stem, so this unit's inputs cannot be met this run.
-        _discard(run, unit)
         return skipped
     if isinstance(unit, Unplanned):
-        # A unit that cannot be planned leaves no stem or stamp for later steps.
-        _discard(run, unit)
         failures = ((name, *unit.failure_of(name)) for name in unit.nodes)
         return tuple(TrackResult(name, status, detail=detail) for name, status, detail in failures)
-    if not run.force and (cached := _cached(run, unit)) is not None:
-        return cached
-    _discard(run, unit)
+    stored = run.store.find(unit.key)
+    if not run.force and stored is not None and len(stored.stems()) == len(unit.nodes):
+        return _cached(unit.nodes, stored)
+    rendered: tuple[Audio, ...] | _Failed
     match unit:
         case GroupUnit():
-            return _render_group(run, unit)
+            rendered = _render_group(run, unit)
         case TrackUnit():
-            rendered = _render_track_node(run, unit)
-            sound = unit.input.sound
+            rendered = _one(_render_track_node(run, unit))
         case EffectUnit():
-            rendered = _render_effect_node(run, unit)
-            sound = unit.input.recipe
+            rendered = _one(_render_effect_node(run, unit))
         case DelayUnit():
-            rendered = _render_delay_node(run, unit)
-            # A delay has no sound; until stamps go, its stamp records the unit's key instead.
-            sound = unit.key
-    if isinstance(rendered, TrackResult):
-        return (rendered,)
-    return (_write_stem(run, unit.name, unit.key, sound, rendered),)
+            rendered = _one(_render_delay_node(run, unit))
+    if isinstance(rendered, _Failed):
+        # A failed unit publishes nothing, so its key stays absent from the store.
+        return tuple(
+            TrackResult(name, rendered.status, detail=rendered.detail) for name in unit.nodes
+        )
+    return _publish(run, unit.key, unit.nodes, rendered, replace=stored is not None)
 
 
-def _discard(run: _RenderRun, unit: Unit) -> None:
-    for name in unit.nodes:
-        run.store.discard(name)
+@dataclass(frozen=True)
+class _Failed:
+    """Why a unit produced no audio; every node of the unit fails with it."""
+
+    status: RenderFailureStatus | SoundFailureStatus
+    detail: str
+
+
+def _one(rendered: Audio | _Failed) -> tuple[Audio, ...] | _Failed:
+    return rendered if isinstance(rendered, _Failed) else (rendered,)
+
+
+def _publish(
+    run: _RenderRun,
+    key: str,
+    nodes: tuple[NodeName, ...],
+    outputs: tuple[Audio, ...],
+    *,
+    replace: bool,
+) -> tuple[TrackResult, ...]:
+    """Write a unit's finished renders as its stems, publish them under its key, and report them.
+
+    `replace` swaps out a unit the store already holds under the key, which a forced render or an
+    incomplete stored unit needs.
+    """
+    with run.store.write_unit(key, replace=replace) as draft:
+        for index, audio in enumerate(outputs):
+            run.audio_files.write(draft.stem_path(index), audio)
+            peak = measure_peak_dbfs(audio.samples)
+            status = StemStatus.SILENT if peak < SILENCE_DBFS else StemStatus.RENDERED
+            draft.describe(index, status, peak)
+    stored = run.store.find(key)
+    if stored is None:
+        raise RuntimeError(f"the store did not publish unit {key}")
+    return tuple(
+        TrackResult(name, meta.status, meta.peak_dbfs, stored.stem_path(index))
+        for index, (name, meta) in enumerate(zip(nodes, stored.stems(), strict=True))
+    )
 
 
 def _upstream_skips(run: _RenderRun, unit: Unit) -> tuple[TrackResult, ...] | None:
@@ -320,22 +351,16 @@ def _upstream_skips(run: _RenderRun, unit: Unit) -> tuple[TrackResult, ...] | No
     )
 
 
-def _cached(
-    run: _RenderRun, unit: TrackUnit | EffectUnit | DelayUnit | GroupUnit
-) -> tuple[TrackResult, ...] | None:
-    """Return every node's cached result, or None when any node's stamp misses the unit's key."""
-    cached: list[TrackResult] = []
-    for name in unit.nodes:
-        stamp = run.store.read_stamp(name)
-        if not (isinstance(stamp, Stamp) and stamp.track_key == unit.key):
-            return None
-        stem = run.store.stem_path(name)
-        cached.append(TrackResult(name, stamp.status, stamp.peak_dbfs, stem, cached=True))
-    return tuple(cached)
+def _cached(nodes: tuple[NodeName, ...], stored: StoredUnit) -> tuple[TrackResult, ...]:
+    """Return every node's result from the unit the store holds under its key."""
+    return tuple(
+        TrackResult(name, meta.status, meta.peak_dbfs, stored.stem_path(index), cached=True)
+        for index, (name, meta) in enumerate(zip(nodes, stored.stems(), strict=True))
+    )
 
 
-def _render_group(run: _RenderRun, unit: GroupUnit) -> tuple[TrackResult, ...]:
-    """Render one cycle group as a single block pass, stamping every member with the group's key.
+def _render_group(run: _RenderRun, unit: GroupUnit) -> tuple[Audio, ...] | _Failed:
+    """Render one cycle group as a single block pass, one output per member in the unit's order.
 
     The group is a strongly connected component the constructor admitted: effect and delay nodes
     holding every cycle, with the instantaneous graph acyclic. Each member's external inputs are
@@ -350,15 +375,8 @@ def _render_group(run: _RenderRun, unit: GroupUnit) -> tuple[TrackResult, ...]:
     else:
         outputs, failure = _run_group(run, unit, found)
     if failure is not None:
-        return tuple(
-            TrackResult(name, failure.status, detail=failure.detail) for name in unit.nodes
-        )
-    recipes = {name: found.sound_key for name, found in unit.resolved.items()}
-    return tuple(
-        # A delay member has no sound; until stamps go, its stamp records the group's key.
-        _write_stem(run, name, unit.key, recipes.get(name, unit.key), outputs[name])
-        for name in unit.nodes
-    )
+        return _Failed(failure.status, failure.detail)
+    return tuple(outputs[name] for name in unit.nodes)
 
 
 def _group_runner(resolved: Mapping[str, ResolvedEffectNode]) -> GroupEffect | RenderFailure:
@@ -399,7 +417,7 @@ def _run_group(
 
     The request's member inputs are summed and scaled by their wires' gains as for any node, and
     the outputs are read while the job's temporary directory still holds them; the core alone
-    makes them `Audio` and stamps them.
+    makes them `Audio` and keeps them.
     """
     frames = unit.input.frames
     members: list[EffectMember | DelayMember] = []
@@ -444,8 +462,14 @@ def _run_group(
 
 
 def _read_stem(run: _RenderRun, ref: StemRef, frames: int) -> Audio:
-    """Return the upstream stem `ref` names, which this run wrote or found current."""
-    return run.audio_files.read(run.stems[ref.unit_key, ref.index], frames)
+    """Return the upstream stem `ref` names, which this run published or found.
+
+    Units render after their upstream units, so the upstream unit exists; a missing one is a bug.
+    """
+    stored = run.store.find(ref.unit_key)
+    if stored is None:
+        raise RuntimeError(f"upstream unit {ref.unit_key} is not in the store")
+    return run.audio_files.read(stored.stem_path(ref.index), frames)
 
 
 def _sum_audio(run: _RenderRun, refs: Sequence[StemRef], frames: int, name: str) -> Audio:
@@ -469,7 +493,7 @@ def _sum_audio(run: _RenderRun, refs: Sequence[StemRef], frames: int, name: str)
     return Audio(summed)
 
 
-def _render_delay_node(run: _RenderRun, unit: DelayUnit) -> Audio | TrackResult:
+def _render_delay_node(run: _RenderRun, unit: DelayUnit) -> Audio | _Failed:
     """Render a delay node off a cycle: the pure delay equation on its summed inputs.
 
     A delay off any cycle is a straight-line node, so the equation runs here on numpy, not in a
@@ -479,14 +503,12 @@ def _render_delay_node(run: _RenderRun, unit: DelayUnit) -> Audio | TrackResult:
     try:
         audio = _sum_audio(run, unit.input.inputs, unit.input.frames, unit.name)
     except AudioFileError as error:
-        return TrackResult(
-            unit.name, RenderFailureStatus.CRASHED, detail=f"upstream wrote unusable audio: {error}"
-        )
+        return _Failed(RenderFailureStatus.CRASHED, f"upstream wrote unusable audio: {error}")
     empty = np.zeros((NUM_CHANNELS, 0), dtype=np.float32)
     return Audio(delay_line(empty, audio.samples, unit.input.delay_samples))
 
 
-def _render_track_node(run: _RenderRun, unit: TrackUnit) -> Audio | TrackResult:
+def _render_track_node(run: _RenderRun, unit: TrackUnit) -> Audio | _Failed:
     """Render a track node: the instrument plays the unit's performance into raw audio.
 
     A render whose sound begins late after its first note (`late_start_s`) is tried again, up to
@@ -496,7 +518,6 @@ def _render_track_node(run: _RenderRun, unit: TrackUnit) -> Audio | TrackResult:
     """
     adapter, sound = unit.resolved.adapter, unit.resolved.resolved
     name, performance, notify = unit.name, unit.input.performance, run.notify
-    # Only a stem written in this run can be stamped.
     with tempfile.TemporaryDirectory() as directory:
         attempt = 1
         lateness: list[float] = []
@@ -505,13 +526,12 @@ def _render_track_node(run: _RenderRun, unit: TrackUnit) -> Audio | TrackResult:
             request = RenderRequest(sound, performance, path, attempt=attempt)
             failure = adapter.render(request, run.timeout_s)
             if isinstance(failure, RenderFailure):
-                return TrackResult(name, failure.status, detail=failure.detail)
+                return _Failed(failure.status, failure.detail)
             audio = read_raw_audio(path, performance.samples)
             if isinstance(audio, AudioProblem):
-                return TrackResult(
-                    name,
+                return _Failed(
                     RenderFailureStatus.CRASHED,
-                    detail=f"instrument wrote unusable audio: {audio.message}",
+                    f"instrument wrote unusable audio: {audio.message}",
                 )
             late_s = late_start_s(audio.samples, performance)
             if late_s is None:
@@ -525,10 +545,9 @@ def _render_track_node(run: _RenderRun, unit: TrackUnit) -> Audio | TrackResult:
                         f"{RENDER_ATTEMPTS} renders; keeping it as the sound's own start"
                     )
                     return audio
-                return TrackResult(
-                    name,
+                return _Failed(
                     RenderFailureStatus.LATE_START,
-                    detail=(
+                    (
                         f"sound began late after its first note in all {RENDER_ATTEMPTS} renders, "
                         f"not all by the same amount; in the last, {late_s:.2f} s after it"
                     ),
@@ -540,7 +559,7 @@ def _render_track_node(run: _RenderRun, unit: TrackUnit) -> Audio | TrackResult:
             )
 
 
-def _render_effect_node(run: _RenderRun, unit: EffectUnit) -> Audio | TrackResult:
+def _render_effect_node(run: _RenderRun, unit: EffectUnit) -> Audio | _Failed:
     """Render an effect node: the recipe processes the unit's upstream stems into raw audio.
 
     The audio inputs are summed and scaled by their wires' gains before the call, and a control
@@ -548,38 +567,22 @@ def _render_effect_node(run: _RenderRun, unit: EffectUnit) -> Audio | TrackResul
     """
     adapter, recipe = unit.resolved.adapter, unit.resolved.resolved
     name, frames = unit.name, unit.input.frames
-    # The caller discarded the old stem and stamp, so a failure here leaves the node with neither.
     try:
         audio = _sum_audio(run, unit.input.inputs, frames, name)
         control = (
             None if unit.input.control is None else _read_stem(run, unit.input.control, frames)
         )
     except AudioFileError as error:
-        return TrackResult(
-            name, RenderFailureStatus.CRASHED, detail=f"upstream wrote unusable audio: {error}"
-        )
+        return _Failed(RenderFailureStatus.CRASHED, f"upstream wrote unusable audio: {error}")
     with tempfile.TemporaryDirectory() as directory:
         request = EffectRenderRequest(audio, recipe, Path(directory) / "audio.npy", control=control)
         failure = adapter.render(request, run.timeout_s)
         if isinstance(failure, RenderFailure):
-            return TrackResult(name, failure.status, detail=failure.detail)
+            return _Failed(failure.status, failure.detail)
         rendered = read_raw_audio(request.audio_path, frames)
     if isinstance(rendered, AudioProblem):
-        return TrackResult(
-            name,
+        return _Failed(
             RenderFailureStatus.CRASHED,
-            detail=f"effect wrote unusable audio: {rendered.message}",
+            f"effect wrote unusable audio: {rendered.message}",
         )
     return rendered
-
-
-def _write_stem(
-    run: _RenderRun, name: NodeName, key: str, sound_key: str, audio: Audio
-) -> TrackResult:
-    """Write a finished render as the node's stem, stamp it with its unit's key, and report it."""
-    stem = run.store.stem_path(name)
-    run.audio_files.write(stem, audio)
-    peak = measure_peak_dbfs(audio.samples)
-    status = StemStatus.SILENT if peak < SILENCE_DBFS else StemStatus.RENDERED
-    run.store.write_stamp(name, Stamp(key, sound_key, status, peak))
-    return TrackResult(name, status, peak, stem)

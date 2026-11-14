@@ -1,7 +1,6 @@
 """Rendering a song's tracks into stems, on fakes."""
 
 import dataclasses
-import os
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Protocol, override
@@ -25,7 +24,7 @@ from fakes import (
 from poser.core import cache, planning, rendering
 from poser.core.analysis import AnalysisTools, analyze_song
 from poser.core.audio import NUM_CHANNELS, SAMPLE_RATE, Audio
-from poser.core.cache import Stamp, StampProblem, sound_key
+from poser.core.cache import sound_key
 from poser.core.graph import BUFFER_SIZE, DelayNode, EffectNode, Graph, GraphNode, TrackNode, Wire
 from poser.core.loading import LoadedSong
 from poser.core.marks import Mark, Marks
@@ -50,11 +49,13 @@ from poser.core.planning import (
 from poser.core.ports import (
     Effect,
     EffectRenderRequest,
+    GroupRenderRequest,
     Instrument,
     RenderFailure,
     ResolvedEffect,
     SongBusyError,
     SoundFailure,
+    StemMeta,
 )
 from poser.core.rendering import TrackResult, render_song
 from poser.core.report import AnalysisStatus, NodeReport, Report
@@ -113,6 +114,7 @@ class Setup:
         self.store: FakeSongStore = self.renders.song(SONG_ID)
         self.audio_files = NpyAudioFiles()
         self.progress: list[str] = []
+        self.song: Song | Graph | None = None
 
     @property
     def instruments(self) -> Mapping[Identifier, Instrument]:
@@ -127,6 +129,7 @@ class Setup:
         return configured
 
     def render(self, song: Song | Graph, *, force: bool = False) -> list[TrackResult]:
+        self.song = song
         return render_song(
             LoadedSong(song),
             self.renders,
@@ -149,6 +152,39 @@ class Setup:
         unit, _ = self.plan(song).place(name)
         assert not isinstance(unit, Unplanned)
         return unit.key
+
+    def stored(self, name: str) -> Path | None:
+        """The stem the store holds for the named node of the last rendered song, or None."""
+        assert self.song is not None
+        unit, index = self.plan(self.song).place(name)
+        if isinstance(unit, Unplanned):
+            return None
+        found = self.store.find(unit.key)
+        return None if found is None else found.stem_path(index)
+
+    def stem(self, name: str) -> Path:
+        """The stem the store holds for the named node of the last rendered song."""
+        path = self.stored(name)
+        assert path is not None, f"no stem for {name}"
+        return path
+
+    def has_stem(self, name: str) -> bool:
+        return self.stored(name) is not None
+
+    def meta(self, name: str) -> StemMeta:
+        """The metadata the store holds for the named node's stem in the last rendered song."""
+        assert self.song is not None
+        unit, index = self.plan(self.song).place(name)
+        assert not isinstance(unit, Unplanned)
+        found = self.store.find(unit.key)
+        assert found is not None, f"no unit for {name}"
+        return found.stems()[index]
+
+    def mix(self) -> Path:
+        """The latest record's mix."""
+        latest = self.store.latest()
+        assert latest is not None, "no latest record"
+        return latest / f"audio/mix{self.renders.stem_suffix}"
 
     def analyze(self, song: Song | Graph) -> Report:
         tools = AnalysisTools(FakeMixer(), FakeMeasurer(), FakeVisualizer())
@@ -223,7 +259,7 @@ def test_sound_identity_is_in_the_track_key(tmp_path: Path) -> None:
     assert key("one") != key("two")
 
 
-def test_render_writes_stamped_stems_and_reports_their_peaks(tmp_path: Path) -> None:
+def test_render_publishes_stems_and_reports_their_peaks(tmp_path: Path) -> None:
     setup = Setup(tmp_path)
     song = make_song()
 
@@ -231,16 +267,13 @@ def test_render_writes_stamped_stems_and_reports_their_peaks(tmp_path: Path) -> 
     lead, bass = results[LEAD], results[BASS]
 
     assert same(statuses([lead, bass]), [StemStatus.RENDERED] * 2)
-    assert lead.stem == setup.store.stem_path(LEAD)
+    assert lead.stem == setup.stem(LEAD)
     assert lead.peak_dbfs == pytest.approx(20 * np.log10(0.5))
     assert not lead.cached
-    stamp = setup.store.read_stamp(LEAD)
-    assert isinstance(stamp, Stamp)
-    assert stamp.track_key == setup.key(song, LEAD)
-    assert stamp.status is StemStatus.RENDERED
-    audio = setup.audio_files.read(
-        setup.store.stem_path(BASS), perform(song.graph(), song.tracks[1]).samples
-    )
+    assert setup.store.find(setup.key(song, LEAD)) is not None
+    assert setup.meta(LEAD).status is StemStatus.RENDERED
+    assert setup.meta(LEAD).peak_dbfs == pytest.approx(lead.peak_dbfs)
+    audio = setup.audio_files.read(setup.stem(BASS), perform(song.graph(), song.tracks[1]).samples)
     assert np.allclose(audio.samples, 0.2)
 
 
@@ -284,19 +317,30 @@ def test_force_renders_every_track(tmp_path: Path) -> None:
 
 
 def test_only_changed_tracks_render_again(tmp_path: Path) -> None:
-    setup = Setup(tmp_path)
+    setup = Setup(tmp_path, make_instrument(deep=FakeSound("a deep pad", "deep", 0.3)))
     setup.render(make_song())
-    changed = make_song(bass="fake")
+    changed = make_song(bass="fake:deep")
 
     results = by_name(setup.render(changed))
 
     assert [results[LEAD].cached, results[BASS].cached] == [True, False]
-    # Nodes render in topological order, so the pad plays before the default sound each pass.
+    # Nodes render in topological order, so the pad plays before the default sound.
     assert [request.sound.ref.name for request in setup.instrument.renders] == [
         "pad",
         None,
-        None,
+        "deep",
     ]
+
+
+def test_a_track_with_the_same_input_as_a_stored_unit_reuses_it(tmp_path: Path) -> None:
+    setup = Setup(tmp_path)
+    setup.render(make_song())
+
+    results = by_name(setup.render(make_song(bass="fake")))
+
+    assert [results[LEAD].cached, results[BASS].cached] == [True, True]
+    assert results[BASS].stem == results[LEAD].stem
+    assert len(setup.instrument.renders) == 2
 
 
 def test_gain_edit_reuses_every_stem(tmp_path: Path) -> None:
@@ -319,24 +363,30 @@ def test_changed_sound_identity_renders_again(tmp_path: Path) -> None:
     assert [results[LEAD].cached, results[BASS].cached] == [True, False]
 
 
-def test_changed_stem_or_spoiled_stamp_renders_again(tmp_path: Path) -> None:
+def test_a_missing_object_renders_again_and_the_rest_stay_cached(tmp_path: Path) -> None:
     setup = Setup(tmp_path)
     song = make_song()
     setup.render(song)
-    stem = setup.store.stem_path(LEAD)
-    info = stem.stat()
-    setup.audio_files.write(
-        stem, setup.audio_files.read(stem, perform(song.graph(), song.tracks[0]).samples)
-    )
-    os.utime(stem, ns=(info.st_atime_ns, info.st_mtime_ns + 10**9))
-    setup.store.spoil_stamp(BASS)
-    assert setup.store.read_stamp(LEAD) is StampProblem.CHANGED
+    del setup.store.state.units[setup.key(song, LEAD)]
 
-    results = setup.render(song)
+    results = by_name(setup.render(song))
+
+    assert [results[LEAD].cached, results[BASS].cached] == [False, True]
+    assert setup.has_stem(LEAD)
+    assert len(setup.instrument.renders) == 3
+
+
+def test_force_replaces_every_object(tmp_path: Path) -> None:
+    setup = Setup(tmp_path)
+    song = make_song()
+    setup.render(song)
+
+    results = setup.render(song, force=True)
 
     assert [result.cached for result in results] == [False, False]
-    assert isinstance(setup.store.read_stamp(LEAD), Stamp)
-    assert isinstance(setup.store.read_stamp(BASS), Stamp)
+    assert setup.has_stem(LEAD)
+    assert setup.has_stem(BASS)
+    assert len(setup.instrument.renders) == 4
 
 
 @pytest.mark.parametrize("status", sorted(set(RenderFailureStatus) - CORE_RENDER_FAILURES))
@@ -356,11 +406,11 @@ def test_render_failure_passes_through_and_leaves_no_stem(
     assert lead.status is StemStatus.RENDERED
     assert bass == TrackResult(BASS, status, detail="the worker failed")
     assert bass.status is status
-    assert not setup.store.stem_path(BASS).exists()
-    assert setup.store.read_stamp(BASS) is StampProblem.MISSING
+    assert not setup.has_stem(BASS)
+    assert not setup.has_stem(BASS)
 
 
-def test_unresolved_sound_removes_the_earlier_stem_and_stamp(tmp_path: Path) -> None:
+def test_unresolved_sound_drops_the_earlier_object(tmp_path: Path) -> None:
     setup = Setup(tmp_path)
     setup.render(make_song())
 
@@ -370,8 +420,8 @@ def test_unresolved_sound_removes_the_earlier_stem_and_stamp(tmp_path: Path) -> 
     assert lead.cached
     assert bass.status is SoundFailureStatus.UNKNOWN_SOUND
     assert bass.detail == "no sound named 'gone'"
-    assert not setup.store.stem_path(BASS).exists()
-    assert setup.store.read_stamp(BASS) is StampProblem.MISSING
+    assert not setup.has_stem(BASS)
+    assert not setup.has_stem(BASS)
 
 
 @pytest.mark.parametrize("bad", ["wrong_length", "nan", "no_file"])
@@ -385,8 +435,8 @@ def test_unusable_output_is_crashed_and_leaves_no_stem(tmp_path: Path, bad: BadO
     assert bass.status is RenderFailureStatus.CRASHED
     assert bass.detail is not None
     assert bass.detail.startswith("instrument wrote unusable audio: ")
-    assert not setup.store.stem_path(BASS).exists()
-    assert setup.store.read_stamp(BASS) is StampProblem.MISSING
+    assert not setup.has_stem(BASS)
+    assert not setup.has_stem(BASS)
 
 
 def test_silent_render_writes_the_stem_and_reports_silent(tmp_path: Path) -> None:
@@ -397,9 +447,7 @@ def test_silent_render_writes_the_stem_and_reports_silent(tmp_path: Path) -> Non
     assert lead.status is StemStatus.SILENT
     assert lead.stem is not None
     assert lead.stem.is_file()
-    stamp = setup.store.read_stamp(LEAD)
-    assert isinstance(stamp, Stamp)
-    assert stamp.status is StemStatus.SILENT
+    assert setup.meta(LEAD).status is StemStatus.SILENT
 
 
 def late_song() -> Song:
@@ -421,9 +469,9 @@ def test_a_late_start_renders_again_and_keeps_the_first_on_time_attempt(tmp_path
         "lead: sound began 0.50 s after its first note; rendering again (attempt 2 of 3)",
         "lead: sound began 0.25 s after its first note; rendering again (attempt 3 of 3)",
     ]
-    assert isinstance(setup.store.read_stamp(LEAD), Stamp)
+    assert setup.has_stem(LEAD)
     song = late_song()
-    stem = setup.audio_files.read(setup.store.stem_path(LEAD), lead_frames(song))
+    stem = setup.audio_files.read(setup.stem(LEAD), lead_frames(song))
     assert np.all(stem.samples == np.float32(0.5))
 
 
@@ -439,8 +487,8 @@ def test_every_attempt_starting_late_is_late_start_and_leaves_no_stem(tmp_path: 
     )
     assert attempts(setup) == [1, 2, 3]
     assert len(setup.progress) == 2
-    assert not setup.store.stem_path(LEAD).exists()
-    assert setup.store.read_stamp(LEAD) is StampProblem.MISSING
+    assert not setup.has_stem(LEAD)
+    assert not setup.has_stem(LEAD)
 
 
 def test_a_start_late_by_the_same_amount_every_time_is_the_sounds_own(tmp_path: Path) -> None:
@@ -460,7 +508,7 @@ def test_a_start_late_by_the_same_amount_every_time_is_the_sounds_own(tmp_path: 
             "sound's own start"
         ),
     ]
-    assert isinstance(setup.store.read_stamp(LEAD), Stamp)
+    assert setup.has_stem(LEAD)
 
 
 def test_a_late_start_leaves_its_chain_upstream_failed(tmp_path: Path) -> None:
@@ -475,7 +523,7 @@ def test_a_late_start_leaves_its_chain_upstream_failed(tmp_path: Path) -> None:
 
     assert results[LEAD].status is RenderFailureStatus.LATE_START
     assert results[DRIVE].status is RenderFailureStatus.UPSTREAM_FAILED
-    assert setup.store.read_stamp(DRIVE) is StampProblem.MISSING
+    assert not setup.has_stem(DRIVE)
 
 
 def test_a_late_start_tries_again_on_the_next_render(tmp_path: Path) -> None:
@@ -608,7 +656,7 @@ def test_planning_runs_before_the_old_stem_is_discarded(
 ) -> None:
     setup = Setup(tmp_path)
     setup.render(make_song())
-    stamp = setup.store.read_stamp(LEAD)
+    units = dict(setup.store.state.units)
 
     def refuse(graph: Graph, timed: object, pitches: PitchSupport) -> None:
         raise RuntimeError("perform failed")
@@ -617,22 +665,19 @@ def test_planning_runs_before_the_old_stem_is_discarded(
     with pytest.raises(RuntimeError, match="perform failed"):
         setup.render(make_song(), force=True)
 
-    assert setup.store.stem_path(LEAD).is_file()
-    assert setup.store.read_stamp(LEAD) == stamp
+    assert setup.store.state.units == units
 
 
-def test_render_clears_the_latest_results(tmp_path: Path) -> None:
+def test_render_clears_latest_and_keeps_the_records(tmp_path: Path) -> None:
     setup = Setup(tmp_path)
-    latest = [setup.store.mix_path(), setup.store.report_path()]
-    latest.append(setup.store.image_path(LEAD, setup.renders.stem_suffix))
-    for path in latest:
-        path.write_text("old")
-    record = setup.store.start_record("song", setup.renders.stem_suffix)
+    with setup.store.write_record("song", setup.renders.stem_suffix, latest=True) as draft:
+        run = draft.run
+    assert setup.store.latest() == setup.store.record_path(run)
 
     setup.render(make_song())
 
-    assert not [path for path in latest if path.exists()]
-    assert record.path.is_dir()
+    assert setup.store.latest() is None
+    assert setup.store.record_path(run).is_dir()
 
 
 def test_render_refuses_to_start_while_the_song_is_locked(tmp_path: Path) -> None:
@@ -667,18 +712,18 @@ def test_stems_are_byte_identical_across_the_render_format_bump(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A format bump changes only cache keys: one re-render, then stems the machine cannot tell
-    apart, and after that every stamp reports cached again."""
+    apart, and after that every unit is cached again."""
     setup = Setup(tmp_path)
     song = make_song()
     monkeypatch.setattr(cache, "RENDER_FORMAT", 2)
     setup.render(song)
-    before = {name: setup.store.stem_path(name).read_bytes() for name in (LEAD, BASS)}
+    before = {name: setup.stem(name).read_bytes() for name in (LEAD, BASS)}
 
     monkeypatch.setattr(cache, "RENDER_FORMAT", 3)
     bumped = by_name(setup.render(song))
 
     assert [result.cached for result in bumped.values()] == [False, False]
-    assert {name: setup.store.stem_path(name).read_bytes() for name in (LEAD, BASS)} == before
+    assert {name: setup.stem(name).read_bytes() for name in (LEAD, BASS)} == before
 
     again = by_name(setup.render(song))
 
@@ -722,7 +767,12 @@ def test_render_order_is_topological_and_report_order_is_song_order(tmp_path: Pa
     assert [result.track for result in rendered] == ["bass", "lead"]
     assert [node.name for node in report.nodes] == [node.name for node in graph.nodes]
     assert [node.name for node in report.nodes] == ["lead", "bass"]
-    assert store.stem_path(BASS).is_file()
+    graph = LoadedSong(song).graph
+    unit, index = plan(graph, resolve_all(graph, instruments, {})).place(BASS)
+    assert not isinstance(unit, Unplanned)
+    stored = store.find(unit.key)
+    assert stored is not None
+    assert stored.stem_path(index).is_file()
 
 
 # Effect chains (RC1, C6, C8, C9, C10, C18): wired rendering, exercised headlessly.
@@ -765,7 +815,7 @@ def test_a_chain_renders_track_then_effect_and_the_mix_sums_the_leaf(tmp_path: P
     assert same(statuses([lead, drive]), [StemStatus.RENDERED] * 2)
     assert not lead.cached
     assert not drive.cached
-    stem = setup.audio_files.read(setup.store.stem_path(DRIVE), lead_frames(song))
+    stem = setup.audio_files.read(setup.stem(DRIVE), lead_frames(song))
     # The effect's output is the track's stem, scaled by the recipe's amount.
     assert np.allclose(stem.samples, 1.0)
     again = by_name(setup.render(song))
@@ -778,7 +828,7 @@ def test_a_chain_renders_track_then_effect_and_the_mix_sums_the_leaf(tmp_path: P
     assert nodes[DRIVE].upstream == ("lead",)
     assert nodes[DRIVE].kind == "effect"
     assert nodes[DRIVE].gain_db == -6.0  # The fader compiled onto the chain's leaf.
-    mix = setup.audio_files.read(setup.store.mix_path(), lead_frames(song))
+    mix = setup.audio_files.read(setup.mix(), lead_frames(song))
     # The mix sums the leaf, at the leaf's gain_db, and never the track's dry stem.
     assert np.allclose(mix.samples, 0.5 * 2.0 * 10 ** (-6 / 20) + 0.2)
 
@@ -794,7 +844,7 @@ def test_a_gain_edit_renders_nothing_and_reaches_only_the_mix(tmp_path: Path) ->
     assert len(drive_effect.renders) == 1
     report = setup.analyze(chain_song(gain=-6.0))
     assert report.mix is not None
-    mix = setup.audio_files.read(setup.store.mix_path(), lead_frames(chain_song()))
+    mix = setup.audio_files.read(setup.mix(), lead_frames(chain_song()))
     assert np.allclose(mix.samples, 0.5 * 2.0 * 10 ** (-6 / 20) + 0.2)
 
 
@@ -807,7 +857,7 @@ def test_changing_the_effect_re_renders_exactly_the_effect_node(tmp_path: Path) 
 
     assert [results[LEAD].cached, results[DRIVE].cached] == [True, False]
     assert len(setup.instrument.renders) == 2  # No new instrument render at all.
-    stem = setup.audio_files.read(setup.store.stem_path(DRIVE), lead_frames(chain_song()))
+    stem = setup.audio_files.read(setup.stem(DRIVE), lead_frames(chain_song()))
     assert np.allclose(stem.samples, 1.5)
 
 
@@ -867,8 +917,8 @@ def test_an_effect_that_fails_leaves_its_downstream_upstream_failed(tmp_path: Pa
     detail = results[crush].detail
     assert detail is not None
     assert "lead.drive" in detail
-    assert not setup.store.stem_path(crush).exists()
-    assert setup.store.read_stamp(crush) is StampProblem.MISSING
+    assert not setup.has_stem(crush)
+    assert not setup.has_stem(crush)
 
     report = setup.analyze(song)
     nodes = by_node(report)
@@ -930,9 +980,10 @@ def graph_of(nodes: tuple[GraphNode, ...], wires: tuple[Wire, ...]) -> Graph:
 
 
 def key_of(setup: Setup, name: str) -> str:
-    stamp = setup.store.read_stamp(NodeName(name))
-    assert isinstance(stamp, Stamp)
-    return stamp.track_key
+    assert setup.song is not None
+    key = setup.key(setup.song, name)
+    assert setup.store.find(key) is not None
+    return key
 
 
 def test_a_bus_is_a_leaf_whose_sends_scale_and_sum_into_the_mix(tmp_path: Path) -> None:
@@ -958,12 +1009,12 @@ def test_a_bus_is_a_leaf_whose_sends_scale_and_sum_into_the_mix(tmp_path: Path) 
     report = setup.analyze(bus_graph(0.0))
 
     assert same(statuses(list(loud.values())), [StemStatus.RENDERED] * 4)
-    bus_stem = setup.audio_files.read(setup.store.stem_path(NodeName("drums")), FRAMES)
+    bus_stem = setup.audio_files.read(setup.stem(NodeName("drums")), FRAMES)
     # The bus stem is the three sends at their wire gains; no bus node renders its own sound.
     assert np.allclose(bus_stem.samples, dry * (2 + 10 ** (0 / 20)))
     assert by_node(report)[NodeName("drums")].upstream == ("kick", "snare", "hat")
     assert report.mix is not None
-    mix = setup.audio_files.read(setup.store.mix_path(), FRAMES)
+    mix = setup.audio_files.read(setup.mix(), FRAMES)
     # The mix sums the bus, the only leaf, at the bus's gain_db, and nothing dry.
     assert np.allclose(mix.samples, dry * 3 * 10 ** (-6 / 20))
 
@@ -971,7 +1022,7 @@ def test_a_bus_is_a_leaf_whose_sends_scale_and_sum_into_the_mix(tmp_path: Path) 
     faded = bus_graph(0.0, hat_gain_db=-12.0)
     assert all(result.cached for result in setup.render(faded))
     assert setup.analyze(faded).mix is not None
-    faded_mix = setup.audio_files.read(setup.store.mix_path(), FRAMES)
+    faded_mix = setup.audio_files.read(setup.mix(), FRAMES)
     assert np.allclose(faded_mix.samples, mix.samples)
 
     # A send at -12 dB instead of 0 dB is in the downstream key: the bus re-renders, the rest not.
@@ -984,7 +1035,7 @@ def test_a_bus_is_a_leaf_whose_sends_scale_and_sum_into_the_mix(tmp_path: Path) 
     ]
     quiet_report = setup.analyze(bus_graph(-12.0))
     assert quiet_report.mix is not None
-    quiet_mix = setup.audio_files.read(setup.store.mix_path(), FRAMES)
+    quiet_mix = setup.audio_files.read(setup.mix(), FRAMES)
     assert not np.allclose(quiet_mix.samples, mix.samples)
     assert np.allclose(quiet_mix.samples, dry * (2 + 10 ** (-12 / 20)) * 10 ** (-6 / 20))
 
@@ -1013,7 +1064,7 @@ def test_a_control_edge_keys_the_duck_on_both_sides(tmp_path: Path) -> None:
     (request,) = duck_effect.renders
     assert request.control is not None
     assert float(np.max(np.abs(request.control.samples))) == pytest.approx(0.2)
-    stem = setup.audio_files.read(setup.store.stem_path(NodeName("duck")), FRAMES)
+    stem = setup.audio_files.read(setup.stem(NodeName("duck")), FRAMES)
     assert np.allclose(stem.samples, 0.5 * (1 - 0.2))
     duck_key, pad_key, kick_key = (key_of(setup, name) for name in ("duck", "pad", "kick"))
 
@@ -1043,7 +1094,7 @@ def test_fan_out_splits_into_two_independently_cached_leaves(tmp_path: Path) -> 
 
     setup.render(graph_of(nodes, wires))
     setup.analyze(graph_of(nodes, wires))
-    mix = setup.audio_files.read(setup.store.mix_path(), FRAMES)
+    mix = setup.audio_files.read(setup.mix(), FRAMES)
     # Both branches are leaves, so the mix sums them, each at its leaf's gain_db.
     assert np.allclose(mix.samples, 0.5 * 2.0 + 0.5)
 
@@ -1057,7 +1108,7 @@ def test_fan_out_splits_into_two_independently_cached_leaves(tmp_path: Path) -> 
     ]
     assert results[NodeName("lead.right")].cached
     assert len(right_effect.renders) == 1  # The sibling never rendered again.
-    stem = setup.audio_files.read(setup.store.stem_path(NodeName("lead.left")), FRAMES)
+    stem = setup.audio_files.read(setup.stem(NodeName("lead.left")), FRAMES)
     assert np.allclose(stem.samples, 1.5)
 
 
@@ -1080,7 +1131,7 @@ def test_an_effect_that_takes_no_control_wire_reports_load_failed(tmp_path: Path
     assert detail is not None
     assert "'drive'" in detail
     assert "sidechain" in detail
-    assert not setup.store.stem_path(NodeName("wettened")).exists()
+    assert not setup.has_stem(NodeName("wettened"))
 
 
 # The feedback regime (RC5, C20, B3, C22, C-cycles): one block pass per cycle group, on fakes.
@@ -1120,7 +1171,7 @@ def loop_setup(tmp_path: Path) -> tuple[Setup, FakeEffect, FakeEffect]:
 
 
 def stem_of(setup: Setup, name: NodeName, frames: int) -> Audio:
-    return setup.audio_files.read(setup.store.stem_path(name), frames)
+    return setup.audio_files.read(setup.stem(name), frames)
 
 
 def reference_loop(
@@ -1167,15 +1218,11 @@ def test_a_feedback_render_is_deterministic(tmp_path: Path) -> None:
     setup, _, _ = loop_setup(tmp_path)
     setup.render(loop_graph())
     before = {
-        node.name: setup.store.stem_path(NodeName(node.name)).read_bytes()
-        for node in loop_graph().nodes
+        node.name: setup.stem(NodeName(node.name)).read_bytes() for node in loop_graph().nodes
     }
 
     setup.render(loop_graph(), force=True)
-    after = {
-        node.name: setup.store.stem_path(NodeName(node.name)).read_bytes()
-        for node in loop_graph().nodes
-    }
+    after = {node.name: setup.stem(NodeName(node.name)).read_bytes() for node in loop_graph().nodes}
 
     assert before == after
 
@@ -1294,7 +1341,7 @@ def test_a_group_whose_external_upstream_fails_fails_whole(tmp_path: Path) -> No
     assert results[LOOP_SUM].status is RenderFailureStatus.UPSTREAM_FAILED
     assert results[LOOP_SUM].detail == "upstream 'track' did not render"
     assert results[LATE].detail == "upstream 'loop' did not render"
-    assert not setup.store.stem_path(LATE).exists()
+    assert not setup.has_stem(LATE)
 
 
 class RefusingEffect(FakeEffect):
@@ -1439,7 +1486,7 @@ def test_a_fractional_pitch_on_a_semitone_instrument_is_unsupported_pitch(tmp_pa
     )
     assert setup.instrument.renders == []
     assert results[DRIVE].status is RenderFailureStatus.UPSTREAM_FAILED
-    assert not setup.store.stem_path(LEAD).exists()
+    assert not setup.has_stem(LEAD)
 
 
 def test_a_fractional_pitch_on_a_continuous_instrument_renders(tmp_path: Path) -> None:
@@ -1515,15 +1562,14 @@ def plan_songs() -> list[Song | Graph]:
 
 
 @pytest.mark.parametrize("song", plan_songs(), ids=["song", "chain", "loop"])
-def test_a_render_stamps_the_keys_of_its_plan(tmp_path: Path, song: Song | Graph) -> None:
+def test_a_render_keeps_exactly_the_objects_of_its_plan(tmp_path: Path, song: Song | Graph) -> None:
     setup, _, _ = loop_setup(tmp_path)
     results = setup.render(song)
 
     assert all(result.status is StemStatus.RENDERED for result in results)
-    for name, key in plan_keys(setup, LoadedSong(song).graph):
-        stamp = setup.store.read_stamp(NodeName(name))
-        assert isinstance(stamp, Stamp)
-        assert stamp.track_key == key
+    keys = {key for _, key in plan_keys(setup, LoadedSong(song).graph)}
+    assert None not in keys
+    assert set(setup.store.state.units) == keys
 
 
 def test_an_instrument_receives_the_performance_its_unit_holds(tmp_path: Path) -> None:
@@ -1580,3 +1626,88 @@ def test_a_cycle_of_delays_alone_fails_load_failed(tmp_path: Path) -> None:
     for name in ("one", "two"):
         assert found[NodeName(name)].status is RenderFailureStatus.LOAD_FAILED
         assert "only delay nodes" in (found[NodeName(name)].detail or "")
+
+
+# The content-addressed store: objects by key.
+
+
+def test_renaming_a_node_renders_nothing_and_reports_under_the_new_name(tmp_path: Path) -> None:
+    setup = Setup(tmp_path)
+    first = by_name(setup.render(make_song()))
+    renamed = Song(bpm=120, tracks=(Track("lead", "fake", NOTE), Track("low", "fake:pad", NOTE)))
+
+    results = by_name(setup.render(renamed))
+
+    low = results[TrackName("low")]
+    assert BASS not in results
+    assert low.cached
+    assert low.stem == first[BASS].stem
+    assert len(setup.instrument.renders) == 2
+
+
+class FailingGroupEffect(FakeEffect):
+    """A fake effect whose block pass writes every output and then reports a crash."""
+
+    @override
+    def render_group(self, request: GroupRenderRequest, timeout_s: float) -> RenderFailure | None:
+        super().render_group(request, timeout_s)
+        return RenderFailure(RenderFailureStatus.CRASHED, "the group crashed")
+
+
+def test_a_failure_inside_a_cycle_group_publishes_no_object(tmp_path: Path) -> None:
+    sum_effect = FailingGroupEffect("sum", identity="sum", amount=1.0)
+    setup = Setup(tmp_path, effects=(sum_effect, FakeEffect("drive", identity="drive")))
+    graph = loop_graph()
+
+    results = by_name(setup.render(graph))
+
+    assert sum_effect.group_renders
+    for name in (LOOP_SUM, LATE, LOOP_DRIVE):
+        assert results[name].status is RenderFailureStatus.CRASHED
+        assert not setup.has_stem(name)
+    assert setup.key(graph, LOOP_SUM) not in setup.store.state.units
+    assert not list((setup.store.directory / "drafts").glob("*"))
+
+
+def test_a_mid_song_failure_keeps_the_earlier_units_for_the_next_render(tmp_path: Path) -> None:
+    failure = RenderFailure(RenderFailureStatus.CRASHED, "the worker failed")
+    song = Song(
+        bpm=120,
+        tracks=(
+            Track("a", "fake", NOTE),
+            Track("b", "fake:pad", NOTE),
+            Track("c", "fake:deep", NOTE),
+        ),
+    )
+    deep = FakeSound("a deep pad", "deep", 0.3)
+    setup = Setup(
+        tmp_path,
+        make_instrument(pad=FakeSound("a pad", "pad", 0.2, render_failure=failure), deep=deep),
+    )
+    first = by_name(setup.render(song))
+    assert [first[TrackName(name)].status for name in "abc"] == [
+        StemStatus.RENDERED,
+        RenderFailureStatus.CRASHED,
+        StemStatus.RENDERED,
+    ]
+    setup.instrument = make_instrument(deep=deep)
+
+    second = by_name(setup.render(song))
+
+    assert [second[TrackName(name)].cached for name in "abc"] == [True, False, True]
+    assert [request.sound.ref.name for request in setup.instrument.renders] == ["pad"]
+
+
+def test_a_render_removes_the_objects_outside_its_plan(tmp_path: Path) -> None:
+    setup = Setup(tmp_path, make_instrument(deep=FakeSound("a deep pad", "deep", 0.3)))
+    setup.render(make_song())
+    old = setup.stem(BASS)
+    old_key = setup.key(make_song(), BASS)
+
+    setup.render(make_song(bass="fake:deep"))
+
+    assert old_key not in setup.store.state.units
+    assert not old.exists()
+    assert set(setup.store.state.units) == {
+        setup.key(make_song(bass="fake:deep"), name) for name in (LEAD, BASS)
+    }

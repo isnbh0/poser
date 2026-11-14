@@ -15,11 +15,10 @@ from poser.adapters.song_formats import SONG_FORMATS
 from poser.cli import init_workspace
 from poser.cli.guide import main, workspace_guide
 from poser.compose import Composition, load, parse_config
-from poser.core.cache import Stamp
 from poser.core.graph import Graph
 from poser.core.guide import GENERATED, GuideBlock, compose_guide, observed_advice
 from poser.core.loading import load_song
-from poser.core.names import NodeName, SongId
+from poser.core.names import SongId
 from poser.core.ports import AdapterContext, AdviceProvider, ConfigError, Guided
 from poser.core.rendering import TrackResult, render_song
 from poser.core.song import Song
@@ -148,9 +147,8 @@ def test_guidance_toggle_preserves_rendered_bytes_keys_and_cache(
     )
     song = load_song(path, SONG_FORMATS)
     song_id = SongId("song.yaml")
-    node = NodeName("voice")
     song_store = store.song(song_id)
-    baseline_stamp = None
+    baseline_units = None
     baseline_bytes = None
     baseline_result = None
     baseline_request = None
@@ -182,20 +180,20 @@ def test_guidance_toggle_preserves_rendered_bytes_keys_and_cache(
             )
 
         result = render()
-        stamp = song_store.read_stamp(node)
-        assert isinstance(stamp, Stamp)
-        assert stamp.status is StemStatus.RENDERED
-        stem_bytes = song_store.stem_path(node).read_bytes()
-        if baseline_stamp is None:
-            baseline_stamp, baseline_bytes, baseline_result = stamp, stem_bytes, result
+        units = dict(song_store.state.units)
+        ((key, metas),) = units.items()
+        assert metas[0].status is StemStatus.RENDERED
+        stored = song_store.find(key)
+        assert stored is not None
+        stem_bytes = stored.stem_path(0).read_bytes()
+        if baseline_units is None:
+            baseline_units, baseline_bytes, baseline_result = units, stem_bytes, result
             assert len(instrument.renders) == 1
             baseline_request = instrument.renders[0]
         else:
             # Toggling alone must hit the earlier mode's cache, not invoke the instrument.
             assert instrument.renders == []
-            assert stamp.track_key == baseline_stamp.track_key
-            assert stamp.sound_key == baseline_stamp.sound_key
-            assert stamp == baseline_stamp
+            assert units == baseline_units
             assert stem_bytes == baseline_bytes
             assert all(item.cached for item in result)
             assert [dataclasses.replace(item, cached=False) for item in result] == baseline_result
@@ -206,8 +204,8 @@ def test_guidance_toggle_preserves_rendered_bytes_keys_and_cache(
         assert baseline_request is not None
         assert request.sound == baseline_request.sound
         assert request.performance == baseline_request.performance
-        assert song_store.read_stamp(node) == baseline_stamp
-        assert song_store.stem_path(node).read_bytes() == baseline_bytes
+        assert dict(song_store.state.units) == baseline_units
+        assert stored.stem_path(0).read_bytes() == baseline_bytes
 
 
 def test_scsynth_guide_is_required_package_data_without_side_effects(

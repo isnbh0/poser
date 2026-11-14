@@ -270,6 +270,10 @@ class Plan:
         """Return the node's unit and its position among the unit's nodes."""
         return self._places[name]
 
+    def keys(self) -> frozenset[str]:
+        """Return the key of every planned unit."""
+        return frozenset(unit.key for unit in self.units if not isinstance(unit, Unplanned))
+
 
 def plan(graph: Graph, resolutions: Mapping[str, Resolution]) -> Plan:
     """Divide the graph into units in `graph.groups()` order and plan each one.

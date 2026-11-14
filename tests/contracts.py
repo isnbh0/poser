@@ -4,7 +4,6 @@ Every audio a suite passes is at least TAIL_S long, the precondition of measurer
 """
 
 import dataclasses
-import os
 import threading
 from collections.abc import Callable
 from pathlib import Path
@@ -20,9 +19,8 @@ from poser.core.audio import (
     Audio,
     read_raw_audio,
 )
-from poser.core.cache import Stamp, StampProblem
 from poser.core.graph import Graph
-from poser.core.names import Identifier, NodeName, SongId, Suffix, TrackName
+from poser.core.names import Identifier, SongId, Suffix, TrackName
 from poser.core.performance import PitchSupport, perform
 from poser.core.ports import (
     AudioFileError,
@@ -42,6 +40,7 @@ from poser.core.ports import (
     SoundCapture,
     SoundFailure,
     SoundListing,
+    StemMeta,
     Visualizer,
 )
 from poser.core.report import BANDS, Levels
@@ -271,68 +270,109 @@ def check_record_writer_contract(writer: object, sample_song: Song | Graph) -> N
     )
 
 
-def _rewrite(path: Path, data: bytes) -> None:
-    """Write new contents and move the modification time forward, as a later write would."""
-    info = path.stat()
-    path.write_bytes(data)
-    os.utime(path, ns=(info.st_atime_ns, info.st_mtime_ns + 10**9))
+class _InterruptedError(Exception):
+    """Raised inside a store's context to stand in for a failure mid-write."""
 
 
-def check_render_store_contract(
-    make: Callable[[Path], object],
-    tmp_path: Path,
-    spoil_stamp: Callable[[SongStore, NodeName], None],
-) -> None:
-    """Check a RenderStore built by `make(root)` and its song stores.
+KEY_A, KEY_B, KEY_C = ("a" * 64, "b" * 64, "c" * 64)
 
-    `spoil_stamp(store, track)` replaces the track's stamp with garbage, since only the adapter
-    knows where its stamps live.
-    """
+
+def _interrupt_unit(store: SongStore, key: str) -> None:
+    with store.write_unit(key) as draft:
+        draft.stem_path(0).write_bytes(b"partial")
+        draft.describe(0, StemStatus.RENDERED, -6.0)
+        raise _InterruptedError
+
+
+def _interrupt_record(store: SongStore, suffix: Suffix) -> None:
+    with store.write_record("interrupted", suffix, latest=True) as record:
+        record.path("report.json").write_text("partial", encoding="utf-8")
+        raise _InterruptedError
+
+
+def check_render_store_contract(make: Callable[[Path], object], tmp_path: Path) -> None:
+    """Check a RenderStore built by `make(root)` and its song stores."""
     renders = make(tmp_path / "renders")
     assert isinstance(renders, RenderStore)
     suffix = renders.stem_suffix
     assert isinstance(suffix, Suffix)
-    png = Suffix(".png")
     store = renders.song(SongId("songs/contract.yaml"))
     assert isinstance(store, SongStore)
-    lead = TrackName("lead")
-    stamp = Stamp("a" * 64, "b" * 64, StemStatus.RENDERED, -6.0)
 
-    stem = store.stem_path(lead)
-    assert stem.parent.is_dir()
-    assert store.read_stamp(lead) is StampProblem.MISSING
-    stem.write_bytes(b"first stem")
-    store.write_stamp(lead, stamp)
-    assert store.read_stamp(lead) == stamp
-    _rewrite(stem, b"second, longer stem")
-    assert store.read_stamp(lead) is StampProblem.CHANGED
-    store.write_stamp(lead, stamp)
-    spoil_stamp(store, lead)
-    assert store.read_stamp(lead) is StampProblem.MISSING, "a garbage stamp was not MISSING"
+    # A unit is found only once it publishes, with its stems in order.
+    assert store.find(KEY_A) is None
+    with store.write_unit(KEY_A) as draft:
+        for index, data in enumerate((b"first stem", b"second stem")):
+            path = draft.stem_path(index)
+            assert path.parent.is_dir()
+            path.write_bytes(data)
+            draft.describe(index, StemStatus.RENDERED if index == 0 else StemStatus.SILENT, -6.0)
+        assert store.find(KEY_A) is None, "a unit was found before it published"
+    unit = store.find(KEY_A)
+    assert unit is not None, "a published unit was not found"
+    assert unit.stems() == (
+        StemMeta(StemStatus.RENDERED, -6.0),
+        StemMeta(StemStatus.SILENT, -6.0),
+    )
+    assert unit.stem_path(0).read_bytes() == b"first stem"
+    assert unit.stem_path(1).read_bytes() == b"second stem"
 
-    store.write_stamp(lead, stamp)
-    store.discard(lead)
-    assert not stem.exists(), "discard left the stem"
-    assert store.read_stamp(lead) is StampProblem.MISSING, "discard left the stamp"
+    # An exception publishes nothing.
+    with pytest.raises(_InterruptedError):
+        _interrupt_unit(store, KEY_B)
+    assert store.find(KEY_B) is None, "an exception left a unit"
+    store.sweep()
 
-    # clear_latest removes the latest results and nothing else.
-    stem.write_bytes(b"stem")
-    store.write_stamp(lead, stamp)
-    record = store.start_record("song text", Suffix(".yaml"))
-    latest = [store.image_path(lead, png), store.image_path(None, png)]
-    latest += [store.mix_path(), store.report_path()]
-    for path in latest:
-        assert path.parent.is_dir()
-        path.write_bytes(b"latest")
-    store.clear_latest()
-    assert not [path for path in latest if path.exists()]
-    # The latest paths stay writable after clear_latest.
-    again = [store.image_path(lead, png), store.image_path(None, png)]
-    again += [store.mix_path(), store.report_path()]
-    missing = [path for path in again if not path.parent.is_dir()]
-    assert not missing, f"no parent directory after clear_latest: {missing}"
-    assert store.read_stamp(lead) == stamp
-    assert (record.path / "song.yaml").read_text(encoding="utf-8") == "song text"
+    # Without replace, an existing unit is kept; with it, the unit is replaced.
+    with store.write_unit(KEY_A) as draft:
+        draft.stem_path(0).write_bytes(b"other")
+        draft.describe(0, StemStatus.RENDERED, -1.0)
+    kept = store.find(KEY_A)
+    assert kept is not None
+    assert kept.stem_path(0).read_bytes() == b"first stem", "write_unit replaced a unit"
+    with store.write_unit(KEY_A, replace=True) as draft:
+        draft.stem_path(0).write_bytes(b"forced")
+        draft.describe(0, StemStatus.RENDERED, -1.0)
+    replaced = store.find(KEY_A)
+    assert replaced is not None
+    assert replaced.stems() == (StemMeta(StemStatus.RENDERED, -1.0),)
+    assert replaced.stem_path(0).read_bytes() == b"forced", "replace kept the old unit"
+
+    # keep_units deletes exactly the units not given.
+    for key in (KEY_B, KEY_C):
+        with store.write_unit(key) as draft:
+            draft.stem_path(0).write_bytes(key.encode())
+            draft.describe(0, StemStatus.RENDERED, -3.0)
+    store.keep_units({KEY_A, KEY_C})
+    assert store.find(KEY_A) is not None
+    assert store.find(KEY_B) is None, "keep_units kept a unit outside the keys"
+    assert store.find(KEY_C) is not None, "keep_units deleted a kept unit"
+
+    # Records count up from 1, hold the song text and what the draft wrote, and an exception
+    # publishes no record and uses no number.
+    records = renders.song(SongId("songs/records.yaml"))
+    with records.write_record("song 1", Suffix(".yaml"), latest=True) as record:
+        assert record.run == 1
+        image = record.path("images/node-0.png")
+        assert image.parent.is_dir()
+        image.write_bytes(b"image")
+        assert record.relative(image) == "images/node-0.png"
+        record.path("report.json").write_text("report 1", encoding="utf-8")
+    first = records.record_path(1)
+    assert (first / "song.yaml").read_text(encoding="utf-8") == "song 1"
+    assert (first / "images" / "node-0.png").read_bytes() == b"image"
+    assert (first / "report.json").read_text(encoding="utf-8") == "report 1"
+    with pytest.raises(_InterruptedError):
+        _interrupt_record(records, suffix)
+    assert not records.record_path(2).exists(), "an exception left a record"
+    records.sweep()
+    for run in (2, 3):
+        with records.write_record(f"song {run}", suffix, latest=False) as record:
+            assert record.run == run, f"record {record.run} published where {run} was next"
+        text = (records.record_path(run) / f"song{suffix}").read_text(encoding="utf-8")
+        assert text == f"song {run}"
+    assert (first / "song.yaml").read_text(encoding="utf-8") == "song 1", "a record changed"
+    records.clear_latest()
 
     with store.lock():
         with pytest.raises(SongBusyError), renders.song(SongId("songs/contract.yaml")).lock():
@@ -342,43 +382,23 @@ def check_render_store_contract(
     with store.lock():
         pass
 
-    counted = renders.song(SongId("songs/counted.yaml"))
-    records = [counted.start_record(f"song {n}", suffix) for n in range(3)]
-    assert [record.run for record in records] == [1, 2, 3]
-    for n, record in enumerate(records):
-        assert (record.path / f"song{suffix}").read_text(encoding="utf-8") == f"song {n}"
-        counted.finish_record(record, f"report {n}")
-        assert [
-            path
-            for path in record.path.rglob("*")
-            if path.is_file() and path.read_text(encoding="utf-8") == f"report {n}"
-        ]
-
-    counted.image_path(lead, png).write_bytes(b"track image")
-    counted.image_path(None, png).write_bytes(b"mix image")
-    kept_track = counted.keep_image(records[0], lead, png)
-    kept_mix = counted.keep_image(records[0], None, png)
-    assert kept_track.read_bytes() == b"track image"
-    assert kept_mix.read_bytes() == b"mix image"
-
-    # No track name, image suffix, or record suffix makes two files share a path.
-    names = [TrackName(name) for name in ("song", "mix", "lead")]
-    clashing = renders.song(SongId("songs/clashing.yaml"))
-    record = clashing.start_record("song text", suffix)
-    paths = [clashing.mix_path(), clashing.report_path(), record.path / f"song{suffix}"]
-    paths += [clashing.stem_path(name) for name in names]
-    paths += [store.stem_path(lead)]
-    for image_suffix in {suffix, png}:
-        for name in [*names, None]:
-            image = clashing.image_path(name, image_suffix)
-            assert image.parent.is_dir()
-            image.write_bytes(b"image")
-            paths += [image, clashing.keep_image(record, name, image_suffix)]
+    # No two songs' units or records, and no preview, share a path.
+    paths = [unit.stem_path(0), first / "song.yaml", first / "report.json"]
+    other = renders.song(SongId("songs/other.yaml"))
+    with other.write_unit(KEY_A) as draft:
+        draft.stem_path(0).write_bytes(b"other song")
+        draft.describe(0, StemStatus.RENDERED, -6.0)
+    with other.write_record("song", Suffix(".yaml"), latest=True) as record:
+        record.path("report.json").write_text("report", encoding="utf-8")
+    other_unit = other.find(KEY_A)
+    assert other_unit is not None
+    paths += [other_unit.stem_path(0), other.record_path(1) / "song.yaml"]
     preview = renders.preview_path(Identifier("lead"), Identifier("song"))
     assert preview.parent.is_dir()
     paths.append(preview)
     shared = sorted({str(path) for path in paths if paths.count(path) > 1})
     assert not shared, f"two files share a path: {shared}"
+    assert unit.stem_path(0).read_bytes() == b"forced", "another song's unit replaced this one's"
 
 
 def check_mixer_contract(mixer: object) -> None:

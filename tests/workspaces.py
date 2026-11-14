@@ -153,3 +153,8 @@ def write_script_song(path: Path, sound: str, marker: Path | None = None) -> Pat
         f"    return Song(120, (Track('lead', {sound!r}, (Note(0, 60, 1, 100),)),))\n"
     )
     return path
+
+
+def stored_stems(song_dir: Path) -> list[Path]:
+    """Every stem a song's render directory holds, across its objects, in path order."""
+    return sorted((song_dir / "objects").glob("*/[0-9]*.wav"))

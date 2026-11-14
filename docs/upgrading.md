@@ -15,6 +15,16 @@ uv run check-instruments
 If a command fails after the upgrade, find its message below, newest change first, and apply the
 fix. A change listed here applies to every studio that pinned a poser commit from before it.
 
+## Render store layout
+
+- **Symptom:** `latest/mix.wav` is missing, or a report's `path` and `spectrogram` values are not
+  absolute.
+  **Cause:** each analysis is now a numbered record in `history/`, laid out like an export
+  bundle, and `latest` is a link to the newest complete record.
+  **Fix:** the mix is `latest/audio/mix.wav`, and report paths are relative to the record. Old
+  `stems/`, `stamps/`, and `latest/` directories in a song's render directory may be deleted;
+  poser no longer reads them, and every track renders again once.
+
 ## Fixed adapters and no report sections
 
 - **Symptom:** a command fails with `adapters.<key>: unknown key` for `record_writer`,

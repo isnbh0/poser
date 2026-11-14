@@ -116,7 +116,8 @@ Exit codes, for both `render-song` and `analyze-song`:
 `uv run analyze-song <song> --json` mixes leaf stems with each leaf node's `gain_db` and prints
 the report, which names the files it wrote: the mix, and a spectrogram per node and for the mix.
 Every analysis keeps a numbered record, even a failed one, holding the song as analyzed and that
-run's report and images. Report fields whose meaning is not obvious from their names:
+run's report, mix, and images. `latest` in the song's render directory links to the newest record
+in which every node analyzed. Report fields whose meaning is not obvious from their names:
 
 | Field | Meaning |
 |---|---|
@@ -130,6 +131,8 @@ run's report and images. Report fields whose meaning is not obvious from their n
 | `bands_db` | Level in each frequency band, relative and uncalibrated |
 | `bar_dbfs` | RMS level of each 4-beat span, up to the song's last beat |
 | `detail` | Why a node has no measurements |
+| `spectrogram` | The node's or the mix's spectrogram, as a path relative to the record directory |
+| `path` | The mix's audio file, as a path relative to the record directory |
 
 Node measurements are of that node's own output: the sound as played, or the effect's output
 before its `gain_db`; mix measurements include leaf faders.
@@ -145,7 +148,8 @@ its first note is rendered again, up to three times in all, and `render-song` an
 print a line for each retry. A track that starts at the same moment in all three renders is kept, as
 starting late by design; `late_start` means every attempt started late, not all by the same amount,
 so the track left no stem. Node statuses from `analyze-song`: `analyzed`, `missing_stem`, and
-`stale_stem`, which means the stem no longer matches the song or its sound; `detail` says why.
+`stale_stem`, which means the stem cannot be read or the node cannot be planned; `detail` says
+which.
 
 Defects fail the analysis: `silent`, for a node or the mix; `clipping`, for mix samples beyond
 full scale; and `headroom`, for a mix peak above -1 dBFS.

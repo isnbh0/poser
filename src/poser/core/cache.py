@@ -9,14 +9,12 @@ so a key covers everything its render reads and nothing else.
 import math
 import re
 from dataclasses import dataclass
-from enum import StrEnum
 
 from poser.core.audio import NUM_CHANNELS, SAMPLE_RATE, STEM_BIT_DEPTH
 from poser.core.graph import Wire, WireKind
 from poser.core.jsonvalue import JsonValue, digest
 from poser.core.names import NodeName
 from poser.core.performance import Performance, performance_to_data
-from poser.core.statuses import StemStatus
 
 # Raise whenever rendering code changes what a stem contains for the same inputs, so every
 # existing key stops matching.
@@ -266,33 +264,3 @@ def _refs(owner: str, value: object) -> tuple[StemRef, ...]:
 def _check_name(owner: str, value: object) -> None:
     if not isinstance(value, NodeName):
         raise ValueError(f"{owner} must be a NodeName, got {value!r}")
-
-
-@dataclass(frozen=True)
-class Stamp:
-    """The inputs a stem was rendered from, and what the render measured."""
-
-    track_key: str
-    sound_key: str
-    status: StemStatus
-    peak_dbfs: float
-
-    def __post_init__(self) -> None:
-        for field in ("track_key", "sound_key"):
-            key = getattr(self, field)
-            if not (isinstance(key, str) and _KEY.fullmatch(key)):
-                raise ValueError(f"Stamp.{field} must be 64 lowercase hex digits, got {key!r}")
-        if not isinstance(self.status, StemStatus):
-            raise ValueError(f"Stamp.status must be a StemStatus, got {self.status!r}")
-        peak = self.peak_dbfs
-        if not (isinstance(peak, int | float) and not isinstance(peak, bool)) or not (
-            math.isfinite(peak)
-        ):
-            raise ValueError(f"Stamp.peak_dbfs must be a finite number, got {peak!r}")
-
-
-class StampProblem(StrEnum):
-    """Why a stem's stamp does not vouch for it."""
-
-    MISSING = "stem has no render stamp"
-    CHANGED = "stem changed after it was rendered"

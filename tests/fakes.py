@@ -5,7 +5,7 @@ import os
 import shutil
 import tempfile
 import threading
-from collections.abc import Generator, Mapping, Sequence
+from collections.abc import Collection, Generator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -15,10 +15,9 @@ from urllib.parse import quote
 import numpy as np
 
 from poser.core.audio import Audio, AudioProblem, read_raw_audio, write_raw_audio
-from poser.core.cache import Stamp, StampProblem
 from poser.core.graph import BUFFER_SIZE, Graph, instantaneous_order
 from poser.core.jsonvalue import Json, JsonValue, json_object
-from poser.core.names import Identifier, NodeName, SongId, Suffix
+from poser.core.names import Identifier, SongId, Suffix
 from poser.core.performance import NoteOff, PitchSupport
 from poser.core.ports import (
     AudioFileError,
@@ -30,7 +29,6 @@ from poser.core.ports import (
     EffectRenderRequest,
     GroupRenderRequest,
     MixInput,
-    Record,
     RenderFailure,
     RenderFailureStatus,
     RenderRequest,
@@ -39,6 +37,7 @@ from poser.core.ports import (
     SongBusyError,
     SoundFailure,
     SoundListing,
+    StemMeta,
 )
 from poser.core.rendering import delay_line, delay_signal
 from poser.core.report import BANDS, Levels
@@ -428,57 +427,70 @@ class FakeEffect:
 _HELD: set[Path] = set()
 _HELD_LOCK = threading.Lock()
 
-type StampEntry = tuple[str, tuple[int, int]]
+
+class FakeStoredUnit:
+    """A published unit: stems in a directory, their metadata in memory."""
+
+    def __init__(self, directory: Path, stem_suffix: Suffix, stems: tuple[StemMeta, ...]) -> None:
+        self.directory = directory
+        self._stem_suffix = stem_suffix
+        self._stems = stems
+
+    def stem_path(self, index: int) -> Path:
+        assert 0 <= index < len(self._stems), f"no stem at {index}"
+        return self.directory / f"stem-{index}{self._stem_suffix}"
+
+    def stems(self) -> tuple[StemMeta, ...]:
+        return self._stems
 
 
-def _file_key(path: Path) -> tuple[int, int]:
-    info = path.stat()
-    return (info.st_size, info.st_mtime_ns)
+class FakeUnitDraft:
+    def __init__(self, directory: Path, stem_suffix: Suffix) -> None:
+        self.directory = directory
+        self._stem_suffix = stem_suffix
+        self.described: dict[int, StemMeta] = {}
+
+    def stem_path(self, index: int) -> Path:
+        return self.directory / f"stem-{index}{self._stem_suffix}"
+
+    def describe(self, index: int, status: StemStatus, peak_dbfs: float) -> None:
+        self.described[index] = StemMeta(status, peak_dbfs)
 
 
-def _image_name(node: NodeName | None, suffix: Suffix) -> str:
-    # `[` is never in a node name, so the mix's image cannot share a node's.
-    return f"{'[mix]' if node is None else node}{suffix}"
+class FakeRecordDraft:
+    def __init__(self, directory: Path, run: int) -> None:
+        self.directory = directory
+        self.run = run
+
+    def path(self, relative: str) -> Path:
+        assert not Path(relative).is_absolute()
+        assert ".." not in Path(relative).parts
+        path = self.directory / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        return path
+
+    def relative(self, path: Path) -> str:
+        return path.relative_to(self.directory).as_posix()
 
 
-def _stamp_text(stamp: Stamp) -> str:
-    return json.dumps(
-        {
-            "track_key": stamp.track_key,
-            "sound_key": stamp.sound_key,
-            "status": str(stamp.status),
-            "peak_dbfs": stamp.peak_dbfs,
-        }
-    )
+@dataclass
+class FakeSongState:
+    """What a fake song store keeps in memory: each unit's metadata and the latest record."""
 
-
-def _parse_stamp(text: str) -> Stamp | None:
-    try:
-        data = json_object(json.loads(text))
-        if data is None:
-            return None
-        status, peak = data["status"], data["peak_dbfs"]
-        if not (isinstance(status, str) and isinstance(peak, int | float)):
-            return None
-        return Stamp(str(data["track_key"]), str(data["sound_key"]), StemStatus(status), peak)
-    except (ValueError, KeyError):
-        return None
+    units: dict[str, tuple[StemMeta, ...]]
+    latest: int | None = None
 
 
 class FakeSongStore:
-    """One song's files in a flat layout, with stamps kept in memory."""
+    """One song's files in a flat layout, with unit metadata and the latest record in memory.
 
-    def __init__(
-        self, directory: Path, stem_suffix: Suffix, stamps: dict[Path, StampEntry]
-    ) -> None:
+    Units are `units/<key>/stem-<i>`, records are `records/<n>/`, and drafts are under `drafts/`.
+    """
+
+    def __init__(self, directory: Path, stem_suffix: Suffix, state: FakeSongState) -> None:
         self.directory = directory
         self._stem_suffix = stem_suffix
-        self._stamps = stamps
-
-    def _path(self, *parts: str) -> Path:
-        path = self.directory.joinpath(*parts)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        return path
+        self.state = state
 
     @contextmanager
     def lock(self) -> Generator[None]:
@@ -492,73 +504,72 @@ class FakeSongStore:
             with _HELD_LOCK:
                 _HELD.discard(self.directory)
 
-    def stem_path(self, node: NodeName) -> Path:
-        return self._path("stems", f"{node}{self._stem_suffix}")
+    def _draft(self) -> Path:
+        drafts = self.directory / "drafts"
+        drafts.mkdir(parents=True, exist_ok=True)
+        return Path(tempfile.mkdtemp(dir=drafts))
 
-    def read_stamp(self, node: NodeName) -> Stamp | StampProblem:
-        stem = self.stem_path(node)
-        entry = self._stamps.get(stem)
-        if entry is None:
-            return StampProblem.MISSING
-        text, key = entry
-        stamp = _parse_stamp(text)
-        if stamp is None:
-            return StampProblem.MISSING
-        if not stem.is_file() or _file_key(stem) != key:
-            return StampProblem.CHANGED
-        return stamp
+    def sweep(self) -> None:
+        shutil.rmtree(self.directory / "drafts", ignore_errors=True)
 
-    def write_stamp(self, node: NodeName, stamp: Stamp) -> None:
-        stem = self.stem_path(node)
-        self._stamps[stem] = (_stamp_text(stamp), _file_key(stem))
+    def find(self, key: str) -> FakeStoredUnit | None:
+        stems = self.state.units.get(key)
+        if stems is None:
+            return None
+        return FakeStoredUnit(self.directory / "units" / key, self._stem_suffix, stems)
 
-    def forget_stamp(self, node: NodeName) -> None:
-        """Remove the node's stamp and keep its stem."""
-        self._stamps.pop(self.stem_path(node), None)
+    @contextmanager
+    def write_unit(self, key: str, *, replace: bool = False) -> Generator[FakeUnitDraft]:
+        draft = FakeUnitDraft(self._draft(), self._stem_suffix)
+        try:
+            yield draft
+            count = len(draft.described)
+            assert count
+            assert set(draft.described) == set(range(count))
+            target = self.directory / "units" / key
+            if key in self.state.units and not replace:
+                return
+            self.state.units.pop(key, None)
+            shutil.rmtree(target, ignore_errors=True)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            draft.directory.rename(target)
+            self.state.units[key] = tuple(meta for _, meta in sorted(draft.described.items()))
+        finally:
+            shutil.rmtree(draft.directory, ignore_errors=True)
 
-    def spoil_stamp(self, node: NodeName) -> None:
-        """Replace the node's stamp with text that is not a stamp."""
-        stem = self.stem_path(node)
-        self._stamps[stem] = ("garbage", _file_key(stem))
-
-    def discard(self, node: NodeName) -> None:
-        stem = self.stem_path(node)
-        self._stamps.pop(stem, None)
-        stem.unlink(missing_ok=True)
-
-    def clear_latest(self) -> None:
-        shutil.rmtree(self.directory / "latest", ignore_errors=True)
-
-    def image_path(self, node: NodeName | None, suffix: Suffix) -> Path:
-        return self._path("latest", "images", _image_name(node, suffix))
-
-    def mix_path(self) -> Path:
-        return self._path("latest", f"mix{self._stem_suffix}")
-
-    def report_path(self) -> Path:
-        return self._path("latest", "report.json")
+    def keep_units(self, keys: Collection[str]) -> None:
+        for key in [key for key in self.state.units if key not in keys]:
+            del self.state.units[key]
+            shutil.rmtree(self.directory / "units" / key, ignore_errors=True)
 
     def records(self) -> Path:
         return self.directory / "records"
 
-    def start_record(self, song_text: str, suffix: Suffix) -> Record:
+    @contextmanager
+    def write_record(
+        self, song_text: str, suffix: Suffix, *, latest: bool
+    ) -> Generator[FakeRecordDraft]:
         records = self.records()
         records.mkdir(parents=True, exist_ok=True)
         runs = [int(entry.name) for entry in records.iterdir() if entry.name.isdigit()]
-        run = max(runs, default=0) + 1
-        path = records / str(run)
-        path.mkdir()
-        (path / f"song{suffix}").write_text(song_text, encoding="utf-8")
-        return Record(run, path)
+        draft = FakeRecordDraft(self._draft(), max(runs, default=0) + 1)
+        try:
+            draft.path(f"song{suffix}").write_text(song_text, encoding="utf-8")
+            yield draft
+            draft.directory.rename(self.record_path(draft.run))
+        finally:
+            shutil.rmtree(draft.directory, ignore_errors=True)
+        self.state.latest = draft.run if latest else None
 
-    def keep_image(self, record: Record, node: NodeName | None, suffix: Suffix) -> Path:
-        kept = record.path / "images" / _image_name(node, suffix)
-        kept.parent.mkdir(exist_ok=True)
-        shutil.copyfile(self.image_path(node, suffix), kept)
-        return kept
+    def record_path(self, run: int) -> Path:
+        return self.records() / str(run)
 
-    def finish_record(self, record: Record, report_text: str) -> None:
-        (record.path / "report.json").write_text(report_text, encoding="utf-8")
+    def latest(self) -> Path | None:
+        """The latest record's directory, or None."""
+        return None if self.state.latest is None else self.record_path(self.state.latest)
+
+    def clear_latest(self) -> None:
+        self.state.latest = None
 
 
 class FakeRenderStore:
@@ -567,7 +578,7 @@ class FakeRenderStore:
     def __init__(self, root: Path, stem_suffix: str = ".npy") -> None:
         self.root = root
         self._stem_suffix = Suffix(stem_suffix)
-        self._stamps: dict[Path, StampEntry] = {}
+        self._songs: dict[SongId, FakeSongState] = {}
 
     @property
     def stem_suffix(self) -> Suffix:
@@ -575,7 +586,8 @@ class FakeRenderStore:
 
     def song(self, song_id: SongId) -> FakeSongStore:
         directory = self.root / "songs" / quote(song_id, safe="")
-        return FakeSongStore(directory, self._stem_suffix, self._stamps)
+        state = self._songs.setdefault(song_id, FakeSongState({}))
+        return FakeSongStore(directory, self._stem_suffix, state)
 
     def preview_path(self, instrument: Identifier, name: Identifier) -> Path:
         path = self.root / "previews" / f"{instrument}.{name}{self._stem_suffix}"

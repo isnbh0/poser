@@ -20,7 +20,6 @@ from poser.core.ports import (
     EffectRenderRequest,
     GroupRenderRequest,
     MixInput,
-    Record,
     RenderFailure,
     ResolvedEffect,
     ResolvedSound,
@@ -71,8 +70,6 @@ def test_types_refuse_what_their_rules_forbid() -> None:
         TrackResult(TrackName("lead"), StemStatus.RENDERED, peak_dbfs=-6.0)
     with pytest.raises(ValueError, match="description must not be empty"):
         SaveRequest(FAKE, Identifier("pad"), "  ", None, replace=False)
-    with pytest.raises(ValueError, match="positive"):
-        Record(0, Path("records/0"))
     with pytest.raises(ValueError, match="root"):
         AdapterContext("root", Path("sounds"), Path("renders"))  # ty: ignore[invalid-argument-type]
 

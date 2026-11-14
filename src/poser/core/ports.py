@@ -6,14 +6,13 @@ adapter-owned payloads as `Json`, names as name types, and failure statuses as e
 every collection is a tuple, so nothing a receiver does to a value can change what another sees.
 """
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol, cast, runtime_checkable
 
 from poser.core.audio import Audio
-from poser.core.cache import Stamp, StampProblem
 from poser.core.graph import Graph, Wire
 from poser.core.jsonvalue import Json
 from poser.core.names import Identifier, NodeName, SongId, Suffix
@@ -23,7 +22,12 @@ from poser.core.reading import Reading, ReadingValue, Rejected, ScoreRequest
 from poser.core.report import Levels
 from poser.core.song import Song, is_int, is_number
 from poser.core.sounds import SoundEntry, SoundRef
-from poser.core.statuses import CORE_RENDER_FAILURES, RenderFailureStatus, SoundFailureStatus
+from poser.core.statuses import (
+    CORE_RENDER_FAILURES,
+    RenderFailureStatus,
+    SoundFailureStatus,
+    StemStatus,
+)
 
 
 def _require(
@@ -766,24 +770,70 @@ class SongBusyError(Exception):
 
 
 @dataclass(frozen=True)
-class Record:
-    """One kept analysis."""
+class StemMeta:
+    """What a render measured of one stem it kept: its status and its peak."""
 
-    run: int  # 1 for the first record, then one above the highest kept.
-    path: Path  # The record's directory.
+    status: StemStatus
+    peak_dbfs: float
 
     def __post_init__(self) -> None:
-        if not (is_int(self.run) and self.run >= 1):
-            raise ValueError(f"Record.run must be a positive integer, got {self.run!r}")
-        _require("Record", "path", self.path, Path)
+        _require("StemMeta", "status", self.status, StemStatus)
+        if not is_number(self.peak_dbfs):
+            raise ValueError(f"StemMeta.peak_dbfs must be a finite number, got {self.peak_dbfs!r}")
+
+
+@runtime_checkable
+class StoredUnit(Protocol):
+    """A published render unit: one stem per node of the unit, in the unit's node order."""
+
+    def stem_path(self, index: int) -> Path:
+        """The stem of the unit's node at `index`."""
+        ...
+
+    def stems(self) -> tuple[StemMeta, ...]:
+        """What the render measured of each stem, in the unit's node order."""
+        ...
+
+
+@runtime_checkable
+class UnitDraft(Protocol):
+    """A unit being written, invisible to `find` until it publishes."""
+
+    def stem_path(self, index: int) -> Path:
+        """Where the stem of the unit's node at `index` goes. Parent exists on return."""
+        ...
+
+    def describe(self, index: int, status: StemStatus, peak_dbfs: float) -> None:
+        """Record what the render measured of the stem at `index`."""
+        ...
+
+
+@runtime_checkable
+class RecordDraft(Protocol):
+    """An analysis record being written, invisible until it publishes."""
+
+    @property
+    def run(self) -> int:
+        """The number the record publishes under: 1 for the first, then one above the highest."""
+        ...
+
+    def path(self, relative: str) -> Path:
+        """Where the record's file at the POSIX path `relative` goes, inside the draft. Parent
+        exists on return. Raises ValueError for a path that leaves the record."""
+        ...
+
+    def relative(self, path: Path) -> str:
+        """The POSIX path of a file in the draft, from the record's root."""
+        ...
 
 
 @runtime_checkable
 class SongStore(Protocol):
     """Everything kept for one song between and during runs.
 
-    A store keeps every kind of file it writes apart, so that no track name, image suffix, or
-    record suffix makes two files share a path.
+    Rendered units are kept by key, so a unit that exists is current: a changed input is a
+    different key. Units and records appear only complete, each by one rename, and node names
+    never appear in a path.
     """
 
     def lock(self) -> AbstractContextManager[None]:
@@ -791,50 +841,38 @@ class SongStore(Protocol):
         holds it. Released when the process dies."""
         ...
 
-    def stem_path(self, node: NodeName) -> Path:
-        """Where the node's stem lives. Parent exists on return."""
+    def sweep(self) -> None:
+        """Delete the drafts an interrupted run left. The caller holds the lock."""
         ...
 
-    def read_stamp(self, node: NodeName) -> Stamp | StampProblem:
-        """The node's stamp, MISSING when there is none or it cannot be read, or CHANGED when
-        the stem is no longer the file the stamp recorded."""
+    def find(self, key: str) -> StoredUnit | None:
+        """The published unit with this key, or None."""
         ...
 
-    def write_stamp(self, node: NodeName, stamp: Stamp) -> None:
-        """Called right after the stem is written; records that this stem is the one stamped.
-        Atomic."""
+    def write_unit(self, key: str, *, replace: bool = False) -> AbstractContextManager[UnitDraft]:
+        """Write a unit, publishing it under `key` when the context exits cleanly and deleting
+        it when the context raises. Every index from 0 up must be described. An existing unit
+        under the key is kept unless `replace` is true."""
         ...
 
-    def discard(self, node: NodeName) -> None:
-        """Remove the stamp, then the stem."""
+    def keep_units(self, keys: Collection[str]) -> None:
+        """Delete every published unit whose key is not in `keys`."""
+        ...
+
+    def write_record(
+        self, song_text: str, suffix: Suffix, *, latest: bool
+    ) -> AbstractContextManager[RecordDraft]:
+        """Write the next record, holding the song text as `song<suffix>`, publishing it when
+        the context exits cleanly and deleting it when the context raises. On publishing, the
+        latest record becomes this one if `latest` is true, and none otherwise."""
+        ...
+
+    def record_path(self, run: int) -> Path:
+        """The directory of the published record numbered `run`."""
         ...
 
     def clear_latest(self) -> None:
-        """Remove the latest report, mix, and images, and nothing else."""
-        ...
-
-    def image_path(self, node: NodeName | None, suffix: Suffix) -> Path:
-        """A node's latest image, or the mix's for None. Parent exists on return."""
-        ...
-
-    def mix_path(self) -> Path:
-        """The latest mix. Parent exists on return."""
-        ...
-
-    def report_path(self) -> Path:
-        """The latest report. Parent exists on return."""
-        ...
-
-    def start_record(self, song_text: str, suffix: Suffix) -> Record:
-        """Create the next record holding the song text as `song<suffix>`."""
-        ...
-
-    def keep_image(self, record: Record, node: NodeName | None, suffix: Suffix) -> Path:
-        """Copy image_path(node, suffix) into the record and return the copy's path."""
-        ...
-
-    def finish_record(self, record: Record, report_text: str) -> None:
-        """Write the record's report."""
+        """Leave no latest record. Records themselves are kept."""
         ...
 
 
