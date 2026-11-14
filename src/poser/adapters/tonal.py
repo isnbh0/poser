@@ -248,16 +248,34 @@ def create_tonal(options: Mapping[str, JsonValue], _context: AdapterContext) -> 
     return TonalFramework(float(window))
 
 
-KEY_PATTERN = re.compile(r"([A-G])([#b]?) (major|minor)")
+type KeyMode = Literal["major", "minor", "dorian", "phrygian", "lydian", "mixolydian", "locrian"]
+
+# The modes a `key` mark may state. Each key has one spelling, so `ionian` and `aeolian` are out.
+KEY_MODES: tuple[KeyMode, ...] = (
+    "major",
+    "minor",
+    "dorian",
+    "phrygian",
+    "lydian",
+    "mixolydian",
+    "locrian",
+)
+KEY_MODES_BY_NAME: Mapping[str, KeyMode] = {mode: mode for mode in KEY_MODES}
+KEY_MODE_LIST = f"{', '.join(KEY_MODES[:-1])}, or {KEY_MODES[-1]}"
+
+KEY_PATTERN = re.compile(rf"([A-G])([#b]?) ({'|'.join(KEY_MODES)})")
 ACCIDENTALS = {"": 0, "#": 1, "b": -1}
-KEY_REJECTION = "must be a tonic A to G with optional # or b, then major or minor, such as A minor"
+KEY_REJECTION = (
+    f"must be a tonic A to G with optional # or b, then {KEY_MODE_LIST}, such as A minor"
+)
 
 KEY_GUIDE = """\
 ## Key marks
 
 The `key` layer states the author's key, written as a tonic `A` to `G` with an optional `#` or
-`b`, a space, and `major` or `minor`, such as `A minor`, `F# major`, or `Bb minor`. `read-song`
-shows it above the readings, as written. It never changes `tonal`'s reading.
+`b`, a space, and a mode, such as `A minor`, `F# major`, or `D dorian`. The modes are `major`,
+`minor`, `dorian`, `phrygian`, `lydian`, `mixolydian`, and `locrian`. `read-song` shows it above
+the readings, as written. It never changes `tonal`'s reading.
 """
 
 
@@ -266,13 +284,13 @@ class KeyMark:
     """A key an author states in a `key` mark."""
 
     tonic: int  # 0 is C, 11 is B.
-    mode: Mode
+    mode: KeyMode
 
     def __post_init__(self) -> None:
         if not (is_int(self.tonic) and 0 <= self.tonic <= 11):
             raise ValueError(f"KeyMark.tonic must be an int from 0 to 11, got {self.tonic!r}")
-        if self.mode not in MODES:
-            raise ValueError(f"KeyMark.mode must be major or minor, got {self.mode!r}")
+        if self.mode not in KEY_MODES:
+            raise ValueError(f"KeyMark.mode must be {KEY_MODE_LIST}, got {self.mode!r}")
 
     @property
     def name(self) -> str:
@@ -286,7 +304,7 @@ class KeyMark:
 
 
 class KeyVocabulary:
-    """The `key` vocabulary: reads stated major and minor keys such as `A minor`."""
+    """The `key` vocabulary: reads stated keys such as `A minor` or `D dorian`."""
 
     @property
     def name(self) -> Identifier:
@@ -302,7 +320,7 @@ class KeyVocabulary:
             return Rejected(KEY_REJECTION)
         letter, accidental, mode = match.groups()
         tonic = (LETTER_SEMITONES[letter] + ACCIDENTALS[accidental]) % 12
-        return KeyMark(tonic, "major" if mode == "major" else "minor")
+        return KeyMark(tonic, KEY_MODES_BY_NAME[mode])
 
 
 def create_key(options: Mapping[str, JsonValue], _context: AdapterContext) -> KeyVocabulary:

@@ -13,6 +13,8 @@ from poser.adapters.tonal import (
     EVEN,
     GUIDE,
     KEY_GUIDE,
+    KEY_MODES,
+    KEY_REJECTION,
     NO_FIT,
     SILENCE,
     TOO_FEW,
@@ -25,6 +27,7 @@ from poser.adapters.tonal import (
 )
 from poser.core.graph import Graph
 from poser.core.loading import load_song
+from poser.core.music import MODES as SCALES
 from poser.core.names import NodeName
 from poser.core.ports import AdapterContext, ConfigError, Vocabulary
 from poser.core.reading import (
@@ -242,19 +245,36 @@ def test_the_guide_states_every_reason() -> None:
 
 # The key vocabulary: stated keys in a `key` mark layer.
 
-KEY_REASON = "must be a tonic A to G with optional # or b, then major or minor, such as A minor"
+KEY_REASON = (
+    "must be a tonic A to G with optional # or b, then major, minor, dorian, phrygian, lydian, "
+    "mixolydian, or locrian, such as A minor"
+)
 LETTER_CLASSES = {"C": 0, "D": 2, "E": 4, "F": 5, "G": 7, "A": 9, "B": 11}
 ACCIDENTAL_STEPS = {"": 0, "#": 1, "b": -1}
 KEY_GRID = [
     (f"{letter}{accidental} {mode}", (pitch + step) % 12, mode)
     for letter, pitch in LETTER_CLASSES.items()
     for accidental, step in ACCIDENTAL_STEPS.items()
-    for mode in ("major", "minor")
+    for mode in KEY_MODES
 ]
 
 
-def test_the_key_grid_has_42_labels() -> None:
-    assert len(KEY_GRID) == 42
+def test_the_key_grid_has_147_labels() -> None:
+    assert len(KEY_GRID) == 147
+
+
+def test_the_key_modes_are_seven_modes_of_the_scale_table() -> None:
+    assert len(KEY_MODES) == len(set(KEY_MODES)) == 7
+    assert set(KEY_MODES) <= set(SCALES)
+
+
+def test_the_key_rejection_is_the_stated_reason() -> None:
+    assert KEY_REJECTION == KEY_REASON
+
+
+def test_the_key_guide_names_every_mode() -> None:
+    for mode in KEY_MODES:
+        assert f"`{mode}`" in KEY_GUIDE
 
 
 @pytest.mark.parametrize(("text", "tonic", "mode"), KEY_GRID)
@@ -280,7 +300,11 @@ def test_accidentals_wrap_around_the_octave(text: str, tonic: int) -> None:
         "a minor",
         "A Minor",
         "A  minor",
-        "A dorian",
+        "D Dorian",
+        "C ionian",
+        "A aeolian",
+        "A harmonic_minor",
+        "C major_pentatonic",
         "H major",
         "A## major",
         " A minor",
@@ -308,6 +332,8 @@ def test_a_key_mark_writes_its_name_tonic_and_mode() -> None:
     assert mark.describe() == "A minor"
     assert mark.to_data() == {"key": "A minor", "tonic": 9, "mode": "minor"}
     assert KeyMark(10, "major").describe() == "A# major"
+    assert KeyMark(2, "dorian").describe() == "D dorian"
+    assert KeyMark(2, "dorian").to_data() == {"key": "D dorian", "tonic": 2, "mode": "dorian"}
 
 
 @pytest.mark.parametrize(
@@ -318,8 +344,9 @@ def test_a_key_mark_writes_its_name_tonic_and_mode() -> None:
         (1.0, "major", "KeyMark.tonic"),
         (True, "major", "KeyMark.tonic"),
         ("C", "major", "KeyMark.tonic"),
-        (0, "dorian", "KeyMark.mode"),
         (0, "Major", "KeyMark.mode"),
+        (0, "ionian", "KeyMark.mode"),
+        (0, "harmonic_minor", "KeyMark.mode"),
     ],
 )
 def test_a_key_mark_validates_like_a_tonal_key(tonic: object, mode: object, message: str) -> None:
@@ -327,6 +354,13 @@ def test_a_key_mark_validates_like_a_tonal_key(tonic: object, mode: object, mess
         KeyMark(tonic, mode)  # ty: ignore[invalid-argument-type]
     with pytest.raises(ValueError, match=message.replace("KeyMark", "TonalKey")):
         TonalKey(tonic, mode, 0.9, 0.0)  # ty: ignore[invalid-argument-type]
+
+
+@pytest.mark.parametrize("mode", [mode for mode in KEY_MODES if mode not in ("major", "minor")])
+def test_a_key_mark_accepts_a_mode_a_tonal_key_refuses(mode: str) -> None:
+    assert KeyMark(0, mode).mode == mode  # ty: ignore[invalid-argument-type]
+    with pytest.raises(ValueError, match="must be major or minor"):
+        TonalKey(0, mode, 0.9, 0.0)  # ty: ignore[invalid-argument-type]
 
 
 def test_the_key_factory_builds_a_vocabulary_and_takes_no_options() -> None:
