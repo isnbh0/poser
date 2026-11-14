@@ -7,13 +7,16 @@ from dataclasses import FrozenInstanceError, replace
 from pathlib import Path
 from typing import cast
 
+import numpy as np
 import pytest
 from matplotlib import image
 from matplotlib.figure import Figure
+from matplotlib.lines import Line2D
 from matplotlib.patches import Rectangle
 
 from poser.adapters import piano_roll
 from poser.core.graph import DelayNode, EffectNode, Graph, Wire
+from poser.core.meter import Meter, MeterSpan
 from poser.core.piano_roll import PianoRoll, PianoRollPanel, project_piano_roll
 from poser.core.rules import ControlChange, Note
 from poser.core.song import Song, Track
@@ -222,3 +225,56 @@ def test_a_fractional_pitch_draws_at_its_exact_height(tmp_path: Path) -> None:
     path = tmp_path / "quarter.png"
     piano_roll.write_png(roll, path)
     assert image.imread(path).size > 0
+
+
+def metered_song() -> Song:
+    tracks = (
+        Track("lead", "synth", (Note(0, 60, 21, 100),)),
+        Track("bass", "bass", (Note(7, 36, 1, 64),)),
+    )
+    return Song(120, tracks, meter=Meter((MeterSpan(0, 7),)))
+
+
+def bar_lines(figure: Figure) -> list[list[float]]:
+    """Return the beats of the vertical lines on each panel."""
+    panels = []
+    for axes in figure.axes:
+        assert all(isinstance(line, Line2D) for line in axes.lines)
+        panels.append([float(np.asarray(line.get_xdata())[0]) for line in axes.lines])
+    return panels
+
+
+def test_projection_gives_the_declared_bar_starts() -> None:
+    assert project_piano_roll(metered_song().graph()).bars == (0, 7, 14)
+    assert project_piano_roll(song().graph()).bars == ()
+
+
+@pytest.mark.parametrize(
+    "bars", [(-1, 4), (0, float("inf")), (0, float("nan")), (4, 0), (0, 4, 4), ("0",), 4, None]
+)
+def test_piano_roll_refuses_bad_bars(bars: object) -> None:
+    with pytest.raises(ValueError, match="Bars"):
+        PianoRoll(120, (), cast("tuple[float, ...]", bars))
+
+
+def test_piano_roll_copies_bars() -> None:
+    assert PianoRoll(120, (), cast("tuple[float, ...]", [0, 3.5])).bars == (0, 3.5)
+
+
+def test_figure_draws_a_line_at_each_bar_start_on_every_panel() -> None:
+    figure = piano_roll.build_figure(project_piano_roll(metered_song().graph()))
+    try:
+        assert bar_lines(figure) == [[0, 7, 14], [0, 7, 14]]
+        for axes in figure.axes:
+            assert all(line.get_zorder() < axes.patches[0].get_zorder() for line in axes.lines)
+            assert axes.get_xlim() == (0, 21)
+    finally:
+        figure.clear()
+
+
+def test_figure_draws_no_lines_without_bars() -> None:
+    figure = piano_roll.build_figure(project_piano_roll(song().graph()))
+    try:
+        assert bar_lines(figure) == [[], []]
+    finally:
+        figure.clear()

@@ -73,7 +73,7 @@ GUIDE = """\
 The `tonal` framework reads the major or minor key of each window of the song, by correlating
 how long each pitch class sounds with the Krumhansl-Kessler key profiles. Windows are
 `window_beats` long (default 16, at least 1); the last window ends at the song's end. The
-default assumes four 4-beat bars per window, the same assumption `bar_dbfs` makes. Set it with
+default assumes four bars of four beats. Set it with
 `frameworks = [{ use = "tonal", window_beats = 8 }]` in `[adapters]`.
 
 Each note counts for the beats it sounds in the window, whatever its velocity, under its

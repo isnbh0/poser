@@ -14,7 +14,7 @@ from poser.core.analysis import measure
 from poser.core.audio import NUM_CHANNELS, SAMPLE_RATE, Audio, stem_samples
 from poser.core.names import TrackName
 from poser.core.ports import MixInput
-from poser.core.report import BANDS
+from poser.core.report import BANDS, level_spans
 from poser.core.song import Note, Song, Track
 
 PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
@@ -131,7 +131,8 @@ def rising_chord() -> np.ndarray:
 
 
 def test_measure_with_the_standard_measurer_gives_the_old_measurements() -> None:
-    measured = measure(Audio(rising_chord()), MEASURED_SONG.graph(), StandardMeasurer())
+    graph = MEASURED_SONG.graph()
+    measured = measure(Audio(rising_chord()), graph, StandardMeasurer(), level_spans(graph))
     assert measured.peak_dbfs == pytest.approx(-6.08500058477018, abs=1e-6)
     assert measured.integrated_lufs == pytest.approx(-12.88901437814406, abs=1e-6)
     assert measured.clipped_samples == 0
@@ -146,7 +147,7 @@ def test_measure_with_the_standard_measurer_gives_the_old_measurements() -> None
         },
         abs=0.011,
     )
-    assert measured.bar_dbfs == pytest.approx((-25.67, -17.22), abs=0.011)
+    assert measured.span_dbfs == pytest.approx((-25.67, -17.22), abs=0.011)
 
 
 def test_standard_measurer_gives_no_loudness_for_silence() -> None:
@@ -157,12 +158,14 @@ def test_standard_measurer_gives_no_loudness_for_silence() -> None:
 
 @pytest.mark.parametrize("bpm", [90, 100, 140])
 @pytest.mark.parametrize("bars", [1, 3, 8])
-def test_bar_count_ends_at_the_last_beat(bpm: float, bars: int) -> None:
+def test_span_count_ends_at_the_last_beat(bpm: float, bars: int) -> None:
     note = Note(beat=0, pitch=60, length=4 * bars, velocity=100)
     song = Song(bpm=bpm, tracks=(Track("lead", "Serum", (note,)),))
     audio = Audio(np.full((2, stem_samples(song.graph())), 0.5, dtype=np.float32))
 
-    assert len(measure(audio, song.graph(), StandardMeasurer()).bar_dbfs) == bars
+    graph = song.graph()
+    measured = measure(audio, graph, StandardMeasurer(), level_spans(graph))
+    assert len(measured.span_dbfs) == bars
 
 
 def test_spectrogram_has_a_log_axis_from_20_hz_to_20_khz_and_a_db_scale() -> None:

@@ -145,7 +145,7 @@ and images; otherwise it is `incomplete`, with no `mix` key. Every node has `nam
   `unsupported_pitch`, or `upstream_failed`. It has `sound_key` and `detail`, and no `node_key`.
 
 `measurements` holds `peak_dbfs`, `integrated_lufs`, `clipped_samples`, `bands_db`, and
-`bar_dbfs`, for a node and for the mix. Fields whose meaning is not obvious from their names:
+`span_dbfs`, for a node and for the mix. Fields whose meaning is not obvious from their names:
 
 | Field | Meaning |
 |---|---|
@@ -157,7 +157,8 @@ and images; otherwise it is `incomplete`, with no `mix` key. Every node has `nam
 | `peak_dbfs` | Highest sample level, in dB relative to full scale |
 | `integrated_lufs` | Loudness over the whole song; null when the audio is too short to measure |
 | `bands_db` | Level in each frequency band, relative and uncalibrated |
-| `bar_dbfs` | RMS level of each 4-beat span, up to the song's last beat |
+| `spans` | The beat spans the levels cover, up to the song's last beat, each with `beat` and `end`: the declared bars, each with its bar `number`, where the song declares a meter, and 4-beat spans where it declares none |
+| `span_dbfs` | RMS level of each entry of `spans` |
 | `detail` | Why a node has no measurements |
 | `spectrogram` | The node's or the mix's spectrogram, as a path relative to the record directory |
 | `path` | The mix's audio file, as a path relative to the record directory |
@@ -252,8 +253,8 @@ latency compensation.
 `uv run piano-roll <song> --output artifacts/piano-roll.png` writes a static PNG of authored
 notes, without loading plugins or rendering audio. Each source track has a panel in source order,
 with beats horizontally and MIDI pitch vertically. Rectangle widths show authored durations, and
-opacity rises with velocity. Tempo and track names are shown. Any configured song format works,
-including direct graphs.
+opacity rises with velocity. A line marks each declared bar start. Tempo and track names are
+shown. Any configured song format works, including direct graphs.
 `--config path/to/poser.toml` selects a workspace explicitly; the song may be outside it.
 
 Choose a `.png` output path; missing parents are created. Existing destinations are refused

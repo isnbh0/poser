@@ -40,6 +40,8 @@ def build_figure(roll: PianoRoll) -> Figure:
             pitches = [note.pitch for note in panel.notes]
             axes.set_ylim(min(pitches) - 1 if pitches else 48, max(pitches) + 1 if pitches else 72)
             color = colormaps["tab20"](index % 20)
+            for beat in roll.bars:
+                axes.axvline(beat, color="0.8", linewidth=0.6, zorder=0)
             for note in panel.notes:
                 axes.add_patch(
                     Rectangle(

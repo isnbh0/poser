@@ -20,6 +20,7 @@ from poser.core.report import (
     Defect,
     IncompleteReport,
     Levels,
+    LevelSpan,
     MeasuredNode,
     Measurements,
     MixReport,
@@ -38,6 +39,7 @@ from poser.core.statuses import (
 
 KEY = "0123456789abcdef" * 4
 BANDS_DB = dict.fromkeys(BANDS, -20.0)
+SPANS = (LevelSpan(0, 4), LevelSpan(4, 8))
 
 
 def _make[T](factory: Callable[..., T], *args: object, **kwargs: object) -> T:
@@ -56,7 +58,7 @@ def _measurements(**changes: object) -> dict[str, object]:
         "integrated_lufs": -14.0,
         "clipped_samples": 0,
         "bands_db": dict(BANDS_DB),
-        "bar_dbfs": [-10.0, -12.0],
+        "span_dbfs": [-10.0, -12.0],
     }
     return {**fields, **changes}
 
@@ -368,7 +370,7 @@ def test_levels() -> None:
 
 def test_measurements() -> None:
     measurements = _make(Measurements, **_measurements())
-    assert measurements.bar_dbfs == (-10.0, -12.0)
+    assert measurements.span_dbfs == (-10.0, -12.0)
     assert _make(Measurements, **_measurements(integrated_lufs=None)).integrated_lufs is None
     for changes in (
         {"peak_dbfs": math.inf},
@@ -379,8 +381,8 @@ def test_measurements() -> None:
         {"clipped_samples": 1.0},
         {"bands_db": {**BANDS_DB, "air": 0.0}},
         {"bands_db": {**BANDS_DB, "sub": math.nan}},
-        {"bar_dbfs": [math.nan]},
-        {"bar_dbfs": "loud"},
+        {"span_dbfs": [math.nan]},
+        {"span_dbfs": "loud"},
     ):
         _bad(Measurements, **_measurements(**changes))
 
@@ -463,12 +465,15 @@ def test_mix_report() -> None:
 def test_reports() -> None:
     node = _make(AnalyzedNode, **_analyzed())
     mix = _make(MixReport, **_mix())
-    report = _make(CompleteReport, "demo", 1, KEY, [node], mix)
+    report = _make(CompleteReport, "demo", 1, KEY, SPANS, [node], mix)
     assert report.nodes == (node,)
-    _bad(CompleteReport, "demo", 1, KEY, [node, "lead"], mix)
-    _bad(CompleteReport, "demo", 1, KEY, "lead", mix)
-    _bad(CompleteReport, "demo", 1, KEY, (node,), None)
-    _bad(CompleteReport, "demo", 1, KEY, (node,), {"path": "mix.wav"})
+    _bad(CompleteReport, "demo", 1, KEY, SPANS, [node, "lead"], mix)
+    _bad(CompleteReport, "demo", 1, KEY, SPANS, "lead", mix)
+    _bad(CompleteReport, "demo", 1, KEY, SPANS, (node,), None)
+    _bad(CompleteReport, "demo", 1, KEY, SPANS, (node,), {"path": "mix.wav"})
+    _bad(CompleteReport, "demo", 1, KEY, SPANS[:1], (node,), mix)
+    _bad(CompleteReport, "demo", 1, KEY, [(0, 4), (4, 8)], (node,), mix)
+    _bad(CompleteReport, "demo", 1, KEY, None, (node,), mix)
     failed = _make(
         UnplannedNode,
         **_node(),
@@ -476,10 +481,10 @@ def test_reports() -> None:
         status=SkipStatus.UPSTREAM_FAILED,
         detail="upstream 'a' did not render",
     )
-    assert _make(IncompleteReport, "demo", 1, KEY, [failed]).nodes == (failed,)
-    _bad(IncompleteReport, "demo", 1, KEY, [failed, "lead"])
-    _bad(IncompleteReport, "demo", 1, KEY, [failed, node])
-    _bad(IncompleteReport, "demo", 1, KEY, ())
+    assert _make(IncompleteReport, "demo", 1, KEY, SPANS, [failed]).nodes == (failed,)
+    _bad(IncompleteReport, "demo", 1, KEY, SPANS, [failed, "lead"])
+    _bad(IncompleteReport, "demo", 1, KEY, SPANS, [failed, node])
+    _bad(IncompleteReport, "demo", 1, KEY, SPANS, ())
 
 
 def test_collections_are_immutable_copies() -> None:
@@ -489,8 +494,8 @@ def test_collections_are_immutable_copies() -> None:
     bands["sub"] = 0.0
     bars.append(0.0)
     assert measurements.bands_db["sub"] == -20.0
-    assert measurements.bar_dbfs == (-10.0, -12.0)
-    assert isinstance(measurements.bar_dbfs, tuple)
+    assert measurements.span_dbfs == (-10.0, -12.0)
+    assert isinstance(measurements.span_dbfs, tuple)
     with pytest.raises(TypeError):
         measurements.bands_db["sub"] = 0.0  # ty: ignore[invalid-assignment]
 
@@ -499,7 +504,7 @@ def test_collections_are_immutable_copies() -> None:
     node = _make(AnalyzedNode, **_analyzed(upstream=upstream, defects=defects))
     mix = _make(MixReport, **_mix(defects=defects))
     nodes = [node]
-    report = _make(CompleteReport, "demo", 1, KEY, nodes, mix)
+    report = _make(CompleteReport, "demo", 1, KEY, SPANS, nodes, mix)
     defects.append(Defect.CLIPPING)
     upstream.append("drums")
     nodes.append(node)
@@ -507,6 +512,7 @@ def test_collections_are_immutable_copies() -> None:
     assert node.defects == (Defect.SILENT,)
     assert mix.defects == (Defect.SILENT,)
     assert report.nodes == (node,)
+    assert _make(CompleteReport, "demo", 1, KEY, list(SPANS), (node,), mix).spans == SPANS
     for value in (node, mix):
         assert isinstance(value.defects, tuple)
 

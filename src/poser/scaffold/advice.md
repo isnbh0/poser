@@ -8,7 +8,7 @@ Invite the person to audition and give feedback.
 
 ## Judging a revision
 
-Compare a revision against an earlier record, and treat a band or bar difference under 1 dB as
+Compare a revision against an earlier record, and treat a band or span difference under 1 dB as
 possible render noise. Use `run` and `song_sha256` to tell versions apart, and `node_key` and
 `sound_key` to see which nodes changed between records. Compare relative band levels between
 nodes and versions. To clear `headroom`, lower track `gain` for a `Song`, or the appropriate

@@ -17,6 +17,7 @@ from poser.core.report import (
     BANDS,
     AnalyzedNode,
     CompleteReport,
+    LevelSpan,
     Measurements,
     MixReport,
     report_to_data,
@@ -164,7 +165,9 @@ def test_readme_analysis_example_matches_serialized_report() -> None:
         "lead", "track", (), 0.0, "0" * 64, "1" * 64, measurements, (), "images/node-0.png"
     )
     mix = MixReport("audio/mix.wav", measurements, "images/mix.png", ())
-    serialized = report_to_data(CompleteReport("example", 1, "2" * 64, (node,), mix))
+    serialized = report_to_data(
+        CompleteReport("example", 1, "2" * 64, (LevelSpan(0, 4),), (node,), mix)
+    )
     assert isinstance(serialized, dict)
     assert isinstance(documented, dict)
     assert documented["status"] == serialized["status"] == "complete"

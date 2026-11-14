@@ -23,6 +23,14 @@ find songs \( -name '*.yaml' -o -name '*.yml' -o -name '*.py' \) -exec uv run re
 If a command fails after the upgrade, find its message below, newest change first, and apply the
 fix. A change listed here applies to every studio that last ran a poser from before it.
 
+## Levels over spans
+
+- **Symptom:** a script reading `report.json` finds no `bar_dbfs` under `measurements`.
+  **Cause:** levels are `span_dbfs`, one per entry of the report's `spans`, which gives each
+  level's beats and, where the song declares a meter, its bar number.
+  **Fix:** read `span_dbfs`. For a song without a meter the values are the old `bar_dbfs` values,
+  except that the last one stops at the song's last beat and no longer includes the tail.
+
 ## No initialization journal
 
 - **Symptom:** a studio has a `.poser-init/` directory and a `.poser-init/` line in `.gitignore`.

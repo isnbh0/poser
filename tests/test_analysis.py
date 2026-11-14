@@ -23,9 +23,16 @@ from fakes import (
 )
 
 from poser.core.analysis import AnalysisTools, analyze_song, measure
-from poser.core.audio import Audio, measure_peak_dbfs, stem_samples, write_raw_audio
+from poser.core.audio import (
+    SAMPLE_RATE,
+    Audio,
+    measure_peak_dbfs,
+    stem_samples,
+    write_raw_audio,
+)
 from poser.core.graph import DelayNode, EffectNode, Graph, TrackNode, Wire
 from poser.core.loading import LoadedSong
+from poser.core.meter import Meter, MeterSpan
 from poser.core.names import Identifier, SongId, TrackName
 from poser.core.planning import Unplanned, plan, resolve_all
 from poser.core.ports import (
@@ -38,18 +45,21 @@ from poser.core.ports import (
 from poser.core.rendering import Rendered, render_song
 from poser.core.report import (
     BANDS,
+    LEVEL_FLOOR_DBFS,
     AnalyzedNode,
     CompleteReport,
     Defect,
     IncompleteReport,
     Levels,
+    LevelSpan,
     MeasuredNode,
     Report,
     UnplannedNode,
     UnrenderedNode,
-    bar_dbfs,
+    level_spans,
     report_failed,
     report_to_data,
+    span_dbfs,
 )
 from poser.core.song import Note, Song, Track
 from poser.core.statuses import (
@@ -178,7 +188,9 @@ def node_key_of(song: Song, index: int, setup: Setup) -> str | None:
 # Measuring
 
 
-def test_measure_takes_peak_clipping_and_bars_from_the_audio_and_levels_from_the_measurer() -> None:
+def test_measure_takes_peak_clipping_and_spans_from_the_audio_and_levels_from_the_measurer() -> (
+    None
+):
     song = Song(bpm=120, tracks=(Track("lead", "fake", (Note(0, 60, 8, 100),)),))
     samples = np.zeros((2, stem_samples(song.graph())), dtype=np.float32)
     samples[:, :96000] = 0.5
@@ -187,13 +199,57 @@ def test_measure_takes_peak_clipping_and_bars_from_the_audio_and_levels_from_the
     samples[1, 20] = -1.25
     levels = Levels(-9.0, dict.fromkeys(BANDS, -3.0))
 
-    measurements = measure(Audio(samples), song.graph(), FakeMeasurer(levels))
+    graph = song.graph()
+    measurements = measure(Audio(samples), graph, FakeMeasurer(levels), level_spans(graph))
 
     assert measurements.peak_dbfs == measure_peak_dbfs(samples)
     assert measurements.clipped_samples == 2
-    assert measurements.bar_dbfs == tuple(bar_dbfs(samples, 2.0, 2))
+    assert measurements.span_dbfs == tuple(span_dbfs(samples, [(0.0, 2.0), (2.0, 4.0)]))
+    assert measurements.span_dbfs == (-6.02, -12.04)
     assert measurements.integrated_lufs == -9.0
     assert measurements.bands_db == levels.bands_db
+
+
+def test_the_last_level_stops_at_the_last_beat_and_leaves_out_the_tail() -> None:
+    graph = Song(bpm=120, tracks=(Track("lead", "fake", (Note(0, 60, 10, 100),)),)).graph()
+    samples = np.zeros((2, stem_samples(graph)), dtype=np.float32)
+    last = int(graph.seconds(10) * SAMPLE_RATE)
+    samples[:, : int(graph.seconds(8) * SAMPLE_RATE)] = 0.5
+    samples[:, last:] = 0.5
+    assert samples.shape[1] > last
+
+    measurements = measure(Audio(samples), graph, FakeMeasurer(), level_spans(graph))
+
+    assert measurements.span_dbfs == (-6.02, -6.02, LEVEL_FLOOR_DBFS)
+
+
+def test_a_metered_song_has_one_level_per_declared_bar(tmp_path: Path) -> None:
+    song = Song(
+        bpm=120,
+        tracks=(Track("lead", "fake", (Note(3, 60, 3, 100),)),),
+        meter=Meter((MeterSpan(0, 3),)),
+    )
+    late = FakeInstrument("fake", {None: FakeSound(quiet_frames=SAMPLE_RATE * 3 // 2)})
+    setup = Setup(tmp_path, song=song, instrument=late)
+
+    report = setup.analyze_complete(song)
+
+    assert report.spans == (LevelSpan(0, 3, 1), LevelSpan(3, 6, 2))
+    for levels in (report.nodes[0].measurements.span_dbfs, report.mix.measurements.span_dbfs):
+        assert levels[0] == LEVEL_FLOOR_DBFS
+        assert levels[1] > -40
+    data = json.loads(setup.record(report.run).joinpath("report.json").read_text())
+    assert data["spans"] == [{"beat": 0, "end": 3, "number": 1}, {"beat": 3, "end": 6, "number": 2}]
+
+
+def test_an_incomplete_report_keeps_the_spans(tmp_path: Path) -> None:
+    setup = Setup(tmp_path)
+    setup.forget(make_song(), 0)
+
+    report = setup.analyze()
+
+    assert isinstance(report, IncompleteReport)
+    assert report.spans == level_spans(make_song().graph())
 
 
 def test_analysis_refuses_a_store_whose_stems_the_audio_files_cannot_read(

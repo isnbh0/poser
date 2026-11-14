@@ -8,8 +8,7 @@ in the report are relative to the record.
 
 import hashlib
 import json
-import math
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
 import numpy as np
@@ -42,24 +41,24 @@ from poser.core.ports import (
 )
 from poser.core.rendering import require_stem_format
 from poser.core.report import (
-    BAR_BEATS,
     MIX_NAME,
     AnalyzedNode,
     CompleteReport,
     IncompleteReport,
+    LevelSpan,
     MeasuredNode,
     Measurements,
     MixReport,
     Report,
     UnplannedNode,
     UnrenderedNode,
-    bar_dbfs,
+    level_spans,
     mix_defects,
     report_to_data,
     silent_defects,
+    span_dbfs,
 )
 from poser.core.session import song_session
-from poser.core.song import song_last_beat
 from poser.core.statuses import UnrenderedStatus
 
 # The report's name in a record.
@@ -67,19 +66,20 @@ REPORT_NAME = "report.json"
 NOT_RENDERED_DETAIL = "render-song has not rendered this node's current inputs"
 
 
-def measure(audio: Audio, graph: Graph, measurer: Measurer) -> Measurements:
-    """Measure audio: its peak, clipping, and bar levels here, and its loudness and bands through
-    the measurer."""
+def measure(
+    audio: Audio, graph: Graph, measurer: Measurer, spans: Sequence[LevelSpan]
+) -> Measurements:
+    """Measure audio: its peak, clipping, and the level of each span here, and its loudness and
+    bands through the measurer. `spans` are the graph's `level_spans`."""
     samples = audio.samples
     levels = measurer.measure(audio)
-    # Counted in beats, so a bar starting exactly at the last beat is never included.
-    bars = math.ceil(song_last_beat(graph) / BAR_BEATS)
+    bounds = [(graph.seconds(span.beat), graph.seconds(span.end)) for span in spans]
     return Measurements(
         peak_dbfs=measure_peak_dbfs(samples),
         integrated_lufs=levels.integrated_lufs,
         clipped_samples=int(np.count_nonzero(np.abs(samples) > 1.0)),
         bands_db=levels.bands_db,
-        bar_dbfs=tuple(bar_dbfs(samples, graph.seconds(BAR_BEATS), bars)),
+        span_dbfs=tuple(span_dbfs(samples, bounds)),
     )
 
 
@@ -139,6 +139,7 @@ def _analyze(
     loaded.check_effects([*effects])
     graph = loaded.graph
     frames = stem_samples(graph)
+    spans = level_spans(graph)
     resolutions = resolve_all(graph, instruments, effects)
     planned = plan(graph, resolutions)
     store.sweep()
@@ -191,7 +192,7 @@ def _analyze(
                 incomplete.append(failures[name])
                 continue
             audio = stems[name]
-            measurements = measure(audio, graph, tools.measurer)
+            measurements = measure(audio, graph, tools.measurer, spans)
             upstream = tuple(wire.from_name for wire in graph.incoming(node.name))
             defects = tuple(silent_defects(measurements))
             if complete:
@@ -225,10 +226,10 @@ def _analyze(
                 )
 
         if complete:
-            mix = _mix(graph, stems, frames, audio_files, tools, record)
-            report = CompleteReport(song_name, record.run, song_sha256, tuple(analyzed), mix)
+            mix = _mix(graph, stems, frames, spans, audio_files, tools, record)
+            report = CompleteReport(song_name, record.run, song_sha256, spans, tuple(analyzed), mix)
         else:
-            report = IncompleteReport(song_name, record.run, song_sha256, tuple(incomplete))
+            report = IncompleteReport(song_name, record.run, song_sha256, spans, tuple(incomplete))
         record.path(REPORT_NAME).write_text(report_json(report), encoding="utf-8")
     return report
 
@@ -237,6 +238,7 @@ def _mix(
     graph: Graph,
     stems: Mapping[NodeName, Audio],
     frames: int,
+    spans: tuple[LevelSpan, ...],
     audio_files: AudioFiles,
     tools: AnalysisTools,
     record: RecordDraft,
@@ -253,7 +255,7 @@ def _mix(
     tools.visualizer.draw(mixed, mix_image, MIX_NAME)
     mix_path = record.path(f"audio/{MIX_NAME}{audio_files.suffix}")
     audio_files.write(mix_path, mixed)
-    measurements = measure(mixed, graph, tools.measurer)
+    measurements = measure(mixed, graph, tools.measurer, spans)
     return MixReport(
         record.relative(mix_path),
         measurements,

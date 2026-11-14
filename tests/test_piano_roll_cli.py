@@ -227,10 +227,11 @@ def test_outside_direct_graph(
     outside = workspace.parent / f"{workspace.name}-outside.py"
     outside.write_text(
         "from poser.core.graph import Graph, TrackNode\n"
+        "from poser.core.meter import Meter, MeterSpan\n"
         "from poser.core.song import Note\n"
         "def build():\n"
         "    return Graph(120, (TrackNode('lead', sound='synth', "
-        "notes=(Note(0, 60, 2, 100),)),))\n"
+        "notes=(Note(0, 60, 2, 100),)),), meter=Meter((MeterSpan(0, 1.5),)))\n"
     )
     rolls: list[PianoRoll] = []
     original = Composition.piano_roll_drawer
@@ -252,6 +253,7 @@ def test_outside_direct_graph(
     assert output.read_bytes().startswith(PNG)
     assert rolls[0].panels[0].name == "lead"
     assert rolls[0].panels[0].notes[0].pitch == 60
+    assert rolls[0].bars == (0, 1.5)
 
 
 def test_competing_regular_file(tmp_path: Path) -> None:
