@@ -58,12 +58,19 @@ def _same_beat(first: float, second: float) -> bool:
     return math.isclose(first, second, rel_tol=0.0, abs_tol=1e-9)
 
 
+def _ends_bar(end: float, bar: Bar) -> bool:
+    return _same_beat(bar.end, end) or (bar.line is not None and _same_beat(bar.line, end))
+
+
 def _span(start: float, end: float, bars: Sequence[Bar]) -> str:
     """A range of beats, naming its bars when it starts on a bar's start, ends on a bar's end,
-    and every beat between lies in a bar."""
+    and every beat between lies in a bar.
+
+    A bar a sliver joined also ends, for a range, on the bar line the sliver runs past.
+    """
     beats = f"beats {_beat(start)}-{_beat(end)}"
     first = next((i for i, bar in enumerate(bars) if _same_beat(bar.beat, start)), None)
-    last = next((i for i, bar in enumerate(bars) if _same_beat(bar.end, end)), None)
+    last = next((i for i, bar in enumerate(bars) if _ends_bar(end, bar)), None)
     if first is None or last is None or last < first:
         return beats
     covered = bars[first : last + 1]

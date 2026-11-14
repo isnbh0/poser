@@ -56,3 +56,7 @@ advice when `[guidance] advice` is enabled.
 - `make check-instruments` checks that each instrument in the root `poser.toml` loads and sounds.
 - To try the commands, run `uv --project <this repo> run init-workspace --setup surge` in a
   scratch directory outside the repo, then run the other commands there the same way.
+- To run an existing studio's commands against this checkout instead of the poser its
+  `pyproject.toml` names, run `uv run --with-editable <this repo> <command>` from the studio.
+  There, `uv run --with-editable <this repo> python -c "import poser; print(poser.__file__)"`
+  prints which poser is in use.

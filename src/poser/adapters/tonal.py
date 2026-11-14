@@ -372,7 +372,10 @@ The check tests which notes sound, never which note is home, so `C major`, `A mi
 `D dorian` all pass over the same passage. `minor` allows nine of the twelve pitch classes, so
 a wrong `minor` label often passes, and so does a label a fourth or fifth from the true key. A
 blues in dominant sevenths contradicts `major` and agrees with `mixolydian`. A line in the wrong
-key passes under a thick texture; `--track` checks the line alone.
+key passes under a thick texture; `--track` checks the line alone, which is how to find one part
+that disagrees with a key the full mix satisfies. Where that track is otherwise silent in a
+mark's span, its notes that ring briefly into the span from before it are all that is checked,
+and together they can pass {little} beats and give a warning.
 """.format(
     limit=f"{KEY_OUTSIDE_LIMIT:.0%}",
     little=f"{TOO_LITTLE_BEATS:g}",

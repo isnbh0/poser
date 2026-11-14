@@ -34,14 +34,25 @@ class MeterSpan:
             object.__setattr__(self, "end", float(self.end))
 
 
+# A final remainder shorter than this joins the bar before it, so notes that ring a hair past the
+# last bar line add no bar.
+SLIVER_BEATS = 0.25
+
+
 def _bar_count(start: float, end: float, bar: float) -> int:
-    """Return how many bars of `bar` beats, counted from `start`, begin before `end`."""
+    """Return how many bars a stretch from `start` to `end` is cut into, in bars of `bar` beats.
+
+    A bar begins every `bar` beats from `start`, before `end`. A last bar that would be shorter
+    than SLIVER_BEATS, and shorter than half of `bar`, is not counted when a bar precedes it.
+    """
     count = max(1, math.ceil((end - start) / bar))
     # Division can round across a bar's start, which multiplication places.
     if count > 1 and start + (count - 1) * bar >= end:
         count -= 1
     elif start + count * bar < end:
         count += 1
+    if count > 1 and end - (start + (count - 1) * bar) < min(SLIVER_BEATS, bar / 2):
+        count -= 1
     return count
 
 
@@ -57,7 +68,8 @@ class Stretch:
         """Return the `(start, end)` beats of each bar, or nothing for an unmetered stretch.
 
         The last bar ends at the stretch's end, so it is short when the stretch is not a whole
-        number of bars.
+        number of bars. A remainder shorter than SLIVER_BEATS, and shorter than half a bar, makes
+        the last bar that much longer instead of forming a bar of its own.
         """
         if self.bar is None:
             return ()
@@ -68,11 +80,16 @@ class Stretch:
 
 @dataclass(frozen=True)
 class Bar:
-    """One bar: its number, counted from 1 over the song's metered stretches, and its beats."""
+    """One bar: its number, counted from 1 over the song's metered stretches, and its beats.
+
+    `line` is the beat a whole bar would end on, set only on a bar a sliver joined, which ends
+    after it.
+    """
 
     number: int
     beat: float
     end: float
+    line: float | None = None
 
 
 @dataclass(frozen=True, init=False)
@@ -134,10 +151,17 @@ class Meter:
     def bars(self, end: float) -> tuple[Bar, ...]:
         """Return every bar of a song ending at beat `end`, numbered from 1 in song order.
 
-        Unmetered stretches have no bars and do not advance the number.
+        Unmetered stretches have no bars and do not advance the number. A bar a sliver joined
+        carries the bar line it runs past as `line`.
         """
-        beats = [bar for stretch in self.stretches(end) for bar in stretch.bars()]
-        return tuple(Bar(number, start, stop) for number, (start, stop) in enumerate(beats, 1))
+        bars: list[Bar] = []
+        for stretch in self.stretches(end):
+            for start, stop in stretch.bars():
+                # Only a bar a sliver joined is longer than its stretch's bars.
+                joined = stretch.bar is not None and stop - start > stretch.bar
+                line = start + stretch.bar if joined and stretch.bar is not None else None
+                bars.append(Bar(len(bars) + 1, start, stop, line))
+        return tuple(bars)
 
     def beat_of(self, number: int) -> float:
         """Return the beat on which bar `number` starts, numbered as `bars` numbers them.

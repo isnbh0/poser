@@ -29,9 +29,12 @@ fix. A change listed here applies to every studio that last ran a poser from bef
   **Cause:** levels are `span_dbfs`, one per entry of the report's `spans`, which gives each
   level's beats and, where the song declares a meter, its bar number.
   **Fix:** read `span_dbfs`. For a song without a meter the spans are the old 4-beat bars, except
-  that the last one stops at the song's last beat and no longer includes the tail. Each span's
-  bounds are computed from its own beats, so a bound can move by one sample and a value can
-  differ slightly from the old `bar_dbfs` value.
+  that the last one stops at the song's last beat and no longer includes the tail, and a last
+  span that would be shorter than 0.25 beats joins the one before it. Each span's bounds are
+  computed from its own beats, so a bound can move by one sample and a value can differ slightly
+  from the old `bar_dbfs` value. No command reads the studio's own prose, so also search it for
+  the old name, as in `grep -rn bar_dbfs .`, and for text that calls the levels bars: song
+  docstrings, notes, and instrument notes in `poser.toml`.
 
 ## No initialization journal
 
@@ -136,7 +139,9 @@ fix. A change listed here applies to every studio that last ran a poser from bef
 
 - **New:** a `key` layer, such as `{beat: 0, end: 64, text: A minor}`, states the song's key, and
   `read-song` shows it above `tonal`'s inferred key. Studios on the `western` preset read it
-  automatically; a studio with a pinned `vocabularies` list adds `"key"` to it.
+  automatically; a studio with a pinned `vocabularies` list adds `"key"` to it. A key names any
+  of the seven modes, as in `D dorian`, so search the songs for marks and comments where `minor`
+  or `major` stood in for a mode, as in `grep -rnE "minor|major" songs`.
 
 - **New:** `read-song` compares each `key` and `chords` mark with the notes inside its span, and
   prints `warning: <detail>` under a mark the notes contradict and `unchecked: <reason>` under
@@ -151,8 +156,10 @@ fix. A change listed here applies to every studio that last ran a poser from bef
   beats, such as `{beat: 0, bar: 4}`, in Python `meter=Meter([MeterSpan(0, 4)])`. `read-song`
   prints the meter and names the bars each range of beats covers, as in
   `beats 0-16 (bars 1-4)`, and `--json` carries the metered stretches as `meter`.
-  `Meter.beat_of` gives the beat a bar starts on. Meter never changes audio, and a song without
-  one loads, renders, and prints as before.
+  `Meter.beat_of` gives the beat a bar starts on. A remainder shorter than 0.25 beats after the
+  last bar line joins the bar before it, so a song whose last notes ring just past that line
+  declares a plain `{beat: 0, bar: 4}` and gains no extra bar. Meter never changes audio, and a
+  song without one loads, renders, and prints as before.
 
 - **New:** `tonal` reads windows of whole declared bars: where a song declares a meter, a window
   is `window_bars` bars, four unless set beside `window_beats` under `[adapters] frameworks`,

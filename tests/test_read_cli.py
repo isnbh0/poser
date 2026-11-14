@@ -188,6 +188,14 @@ def test_a_range_names_bars_only_when_every_beat_in_it_lies_in_a_bar() -> None:
     assert read._span(4, 10, changed) == "beats 4-10"
 
 
+def test_a_range_names_a_last_bar_that_a_sliver_joined() -> None:
+    bars = Meter([MeterSpan(0, 4)]).bars(176.0036)
+    assert read._span(160, 176.0036, bars) == "beats 160-176.0036 (bars 41-44)"
+    # A mark placed by bar ends on the bar line the sliver runs past.
+    assert read._span(172, 176, bars) == "beats 172-176 (bar 44)"
+    assert read._span(172, 175, bars) == "beats 172-175"
+
+
 def test_a_range_matches_bars_whose_beats_print_the_same() -> None:
     bars = Meter([MeterSpan(0, 1.1)]).bars(11)
 
@@ -636,6 +644,25 @@ def test_a_meter_prints_before_the_marks_with_bar_numbers(
         "  beats 0-16 (bars 1-4): C major (r 0.90)\n"
         "  beats 16-27 (bars 5-7): F# major (r 0.90)\n"
     )
+
+
+def test_notes_ringing_just_past_the_last_bar_line_add_no_bar(
+    workspace: CommandWorkspace, capsys: pytest.CaptureFixture[str]
+) -> None:
+    raised = [(beat + 16, pitch + 6, length) for beat, pitch, length in CADENCE[:-1]]
+    path = write(
+        workspace.root / "ringing.yaml",
+        track("keys", [*CADENCE, *raised, (23, 78, 9.0036)]),
+        marks={"parts": [{"beat": 16, "end": 32, "text": "ending"}]},
+        meter=[{"beat": 0, "bar": 4}],
+    )
+
+    assert read.main([str(path)]) == 0
+
+    out = capsys.readouterr().out
+    assert "  beats 16-32 (bars 5-8): ending\n" in out
+    assert out.splitlines()[-1].startswith("  beats 16-32.0036 (bars 5-8): ")
+    assert "bar 9" not in out
 
 
 def test_changing_and_fractional_meters_number_bars_across_gaps(

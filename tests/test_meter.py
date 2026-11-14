@@ -8,6 +8,7 @@ import pytest
 
 from poser.core.meter import (
     NO_METER,
+    SLIVER_BEATS,
     Bar,
     Meter,
     MeterSpan,
@@ -216,10 +217,13 @@ def test_stretches_and_bars_cover_the_song(seed: int) -> None:
         assert bars[-1][1] == stretch.end
         for (_, stop), (start, _) in itertools.pairwise(bars):
             assert stop == start
-        for start, stop in bars:
-            assert 0 < stop - start <= stretch.bar
         # Every bar but the last is whole.
         assert all(stop - start == stretch.bar for start, stop in bars[:-1])
+        # The last is short, whole, or longer by a sliver; only a lone bar is a sliver itself.
+        sliver = min(SLIVER_BEATS, stretch.bar / 2)
+        length = bars[-1][1] - bars[-1][0]
+        assert 0 < length < stretch.bar + sliver
+        assert length >= sliver or len(bars) == 1
         numbered += bars
 
     bars = meter.bars(end)
@@ -227,6 +231,53 @@ def test_stretches_and_bars_cover_the_song(seed: int) -> None:
     assert [bar.number for bar in bars] == list(range(1, len(numbered) + 1))
     for bar in bars:
         assert meter.beat_of(bar.number) == bar.beat
+        assert bar.line is None or bar.beat < bar.line < bar.end
+
+
+def test_a_sliver_past_the_last_bar_line_joins_the_bar_before_it() -> None:
+    """Humanized last notes ring to beat 176.0036 in a song of 44 four-beat bars."""
+    bars = Meter([MeterSpan(0, 4)]).bars(176.0036)
+    assert len(bars) == 44
+    assert bars[-2] == Bar(43, 168.0, 172.0)
+    assert bars[-1] == Bar(44, 172.0, 176.0036, line=176.0)
+
+
+@pytest.mark.parametrize(
+    ("end", "last"),
+    [
+        (8 + SLIVER_BEATS / 2, (4, 8 + SLIVER_BEATS / 2)),
+        (8 + SLIVER_BEATS, (8, 8 + SLIVER_BEATS)),
+        (9, (8, 9)),
+    ],
+)
+def test_only_a_remainder_under_a_sliver_joins(end: float, last: tuple[float, float]) -> None:
+    (stretch,) = Meter([MeterSpan(0, 4)]).stretches(end)
+    assert stretch.bars()[-1] == last
+
+
+def test_a_sliver_with_no_bar_before_it_is_a_bar() -> None:
+    assert Meter([MeterSpan(0, 4)]).bars(0.1) == (Bar(1, 0.0, 0.1),)
+    after_a_change = Meter([MeterSpan(0, 4), MeterSpan(8, 3)]).bars(8.1)
+    assert after_a_change[-1] == Bar(3, 8.0, 8.1)
+
+
+def test_a_remainder_of_half_a_tiny_bar_is_a_bar() -> None:
+    assert Stretch(0.0, 0.625, 0.25).bars() == ((0.0, 0.25), (0.25, 0.5), (0.5, 0.625))
+    assert Stretch(0.0, 0.5625, 0.25).bars() == ((0.0, 0.25), (0.25, 0.5625))
+
+
+def test_beat_of_counts_a_span_whose_end_leaves_a_sliver_as_bars_does() -> None:
+    meter = Meter([MeterSpan(0, 4, 16.1), MeterSpan(16.1, 3)])
+    bars = meter.bars(22.1)
+    assert [(bar.number, bar.beat, bar.end) for bar in bars] == [
+        (1, 0, 4),
+        (2, 4, 8),
+        (3, 8, 12),
+        (4, 12, 16.1),
+        (5, 16.1, 19.1),
+        (6, 19.1, 22.1),
+    ]
+    assert [meter.beat_of(bar.number) for bar in bars] == [bar.beat for bar in bars]
 
 
 def test_a_fractional_bar_length_divides_exactly() -> None:

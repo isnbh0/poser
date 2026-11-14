@@ -398,6 +398,18 @@ def test_a_last_beat_on_a_boundary_adds_no_empty_span(meter: tuple[MeterSpan, ..
     assert [(span.beat, span.end) for span in spans] == [(0, 4), (4, 8)]
 
 
+def test_a_sliver_past_the_last_span_joins_it() -> None:
+    assert bounds(level_spans(ending_at(16.0036).graph())) == [
+        (0, 4, None),
+        (4, 8, None),
+        (8, 12, None),
+        (12, 16.0036, None),
+    ]
+    metered = level_spans(ending_at(176.0036, MeterSpan(0, 4)).graph())
+    assert len(metered) == 44
+    assert bounds(metered)[-1] == (172, 176.0036, 44)
+
+
 @pytest.mark.parametrize(
     ("beat", "end", "number"),
     [(4, 4, None), (-1, 4, None), (0, float("inf"), None), (0, 4, 0), (0, 4, 1.0), (0, 4, True)],

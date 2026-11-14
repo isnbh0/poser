@@ -77,7 +77,9 @@ layer with its name; see Framework readings.
 A song may declare its meter as spans, each giving the length of a bar in beats from its `beat`,
 such as `{beat: 0, bar: 4}`; a `bar` may be fractional, such as 3.5. A span without `end` lasts
 until the next span or the song's end. Beats no span covers have no meter. A span that is not a
-whole number of bars ends with a short bar. Meter never changes audio. In Python, write
+whole number of bars ends with a short bar, except that a remainder shorter than 0.25 beats joins
+the bar before it, so notes that ring just past the last bar line add no bar. Meter never changes
+audio. In Python, write
 `meter=Meter([MeterSpan(0, 7)])`. Bars are numbered from 1 across the song's spans, and
 `Meter.beat_of` gives the beat a bar starts on, for placing notes and marks by bar:
 `Mark(meter.beat_of(5), meter.beat_of(9), "Am")` covers bars 5 to 8. `read-song` prints these bar
@@ -157,7 +159,7 @@ and images; otherwise it is `incomplete`, with no `mix` key. Every node has `nam
 | `peak_dbfs` | Highest sample level, in dB relative to full scale |
 | `integrated_lufs` | Loudness over the whole song; null when the audio is too short to measure |
 | `bands_db` | Level in each frequency band, relative and uncalibrated |
-| `spans` | The beat spans the levels cover, up to the song's last beat, each with `beat` and `end`: the declared bars, each with its bar `number`, where the song declares a meter, and 4-beat spans where it declares none |
+| `spans` | The beat spans the levels cover, up to the song's last beat, each with `beat` and `end`: the declared bars, each with its bar `number`, where the song declares a meter, and 4-beat spans where it declares none. A last span that would be shorter than 0.25 beats joins the one before it |
 | `span_dbfs` | RMS level of each entry of `spans` |
 | `detail` | Why a node has no measurements |
 | `spectrogram` | The node's or the mix's spectrogram, as a path relative to the record directory |
@@ -276,7 +278,8 @@ with a line for each metered stretch up to the song's end, such as `beats 0-84: 
 Every range of beats it then prints, for marks and for readings, names its bars when it starts on
 a bar's start, ends on a bar's end, and every beat between lies in a bar, as in
 `beats 84-112 (bars 13-19)` or `beats 112-116 (bar 20)`; any other range, such as one that
-crosses beats with no meter, prints beats only.
+crosses beats with no meter, prints beats only. A last bar that runs a sliver past its bar line
+is also named by a range that ends on that line.
 
 It next prints each of the song's mark layers, up to the song's end, with
 each mark's text as written. A layer named like a configured vocabulary shows that vocabulary's

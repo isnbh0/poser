@@ -94,6 +94,13 @@ bass has to sound, so `C/F#` passes over a C major triad, and the bass is not ch
 the lowest note. `sus` and a triad are not told apart: `Csus4` passes over a C major triad, and
 `C` passes over C, F, and G. A label that shares most of its tones with the notes passes, such
 as `Am` or `Em` over a C major triad. An unaccompanied scale run can contradict a true label.
+
+With `--track`, a mark is checked against that track alone. Checking one part at a time finds a
+single part that disagrees with a chord the full mix satisfies, such as a wrong bass note. Where
+the track is otherwise silent in a mark's span, its notes that ring briefly over the bar line
+from the previous chord are all that is checked: several notes each overhanging by under 0.1
+beats can sum past the {little}-beat minimum and give a warning that the chord's tones sound for
+0% of the time.
 """.format(
     floor=f"{CHORD_TONE_FLOOR:.0%}",
     limit=f"{CHORD_CLASH_LIMIT:.0%}",

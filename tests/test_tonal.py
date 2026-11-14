@@ -274,6 +274,15 @@ def test_a_metered_sliver_joins_the_window_before_it() -> None:
     assert bounds(42, [MeterSpan(0, 7)]) == [(0, 28), (28, 42)]
 
 
+def test_a_sliver_past_the_last_bar_line_adds_no_window() -> None:
+    windows = bounds(176.0036, [MeterSpan(0, 4)])
+    assert len(windows) == 11
+    assert windows[-1] == (160, 176.0036)
+    # One bar past a whole window is still its own bar, read with the window before it.
+    assert bounds(20.0036, [MeterSpan(0, 4)]) == [(0, 20.0036)]
+    assert bounds(24.0036, [MeterSpan(0, 4)]) == [(0, 16), (16, 24.0036)]
+
+
 def test_a_remainder_of_exactly_half_a_window_stays_its_own_window() -> None:
     assert bounds(40) == [(0, 16), (16, 32), (32, 40)]
     assert bounds(39) == [(0, 16), (16, 39)]
