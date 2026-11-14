@@ -1416,6 +1416,81 @@ def test_integer_pitch_node_keys_are_pinned() -> None:
     ]
 
 
+def rendered_keys(setup: Setup, song: Song | Graph) -> list[tuple[str, str]]:
+    """Render a song and return each node's stamped key, sorted by node name."""
+    results = setup.render(song)
+    assert all(result.status is StemStatus.RENDERED for result in results)
+    keys: list[tuple[str, str]] = []
+    for result in results:
+        stamp = setup.store.read_stamp(result.track)
+        assert isinstance(stamp, Stamp)
+        keys.append((result.track, stamp.track_key))
+    return sorted(keys)
+
+
+def test_song_render_keys_are_pinned(tmp_path: Path) -> None:
+    """A two-track song with notes, cc, an effect chain, and marks keeps its rendered keys."""
+    chain = (Note(0, 60, 1, 100), Note(1, 62, 0.5, 90))
+    song = Song(
+        bpm=96,
+        tracks=(
+            Track(
+                "lead",
+                "fake",
+                chain,
+                gain=-3,
+                cc=(ControlChange(0, 74, 10, "linear"), ControlChange(2, 74, 120)),
+                effects=("drive", "sum"),
+            ),
+            Track("bass", "fake:pad", NOTE, cc=(ControlChange(1, 1, 64),)),
+        ),
+        marks=KEY_MARKS,
+    )
+    setup = Setup(
+        tmp_path,
+        effects=(FakeEffect("drive", identity="drive"), FakeEffect("sum", identity="sum")),
+    )
+
+    assert rendered_keys(setup, song) == [
+        ("bass", "62c578156609e4aee275cefc7b13b9b3533830897d1c6c25fa91e85ad181ec4b"),
+        ("lead", "fb4b39687bfec5c9d155eecfb5f32e6de7b919623f5e34104460ed6a36428d75"),
+        ("lead.drive", "bf5828be8ed480828c3712fe184d6b1604725f318fe093c66ef97d1b7beb9caa"),
+        ("lead.sum", "361d561de326f2d27d568345faecda649283b1d9780af9907623b9052b29cbb1"),
+    ]
+
+
+def test_graph_render_keys_are_pinned(tmp_path: Path) -> None:
+    """A script-style graph of a track, an effect, and wires keeps its rendered keys."""
+    graph = Graph(
+        110,
+        (
+            Node("lead", "track", sound="fake", notes=NOTE, cc=(ControlChange(0, 7, 90),)),
+            Node("room", "effect", effect="drive", gain_db=-6),
+        ),
+        (Wire("lead", "room", "audio", gain_db=-2),),
+    )
+    setup = Setup(tmp_path, effects=(FakeEffect("drive", identity="drive"),))
+
+    assert rendered_keys(setup, graph) == [
+        ("lead", "2d559a5c084a9b036e43d501796f534b0749a9859e6d0041aa9be91e7d51ac88"),
+        ("room", "d2359ed4511f2563bc88d1c1ce502afc729023b749bd8405e3e59240993097f5"),
+    ]
+
+
+def test_cycle_render_keys_are_pinned(tmp_path: Path) -> None:
+    """A feedback cycle with an effect and a delay keeps the keys `cycle_key` gives it."""
+    setup, _, _ = loop_setup(tmp_path)
+
+    assert rendered_keys(setup, loop_graph()) == [
+        ("bass", "375ec47b880af6e0d00204dc38ede8d703a4ebfe2d7fc717588b0794fa8da574"),
+        ("late", "099a6ec06c8453a6a5326655cc54ba69be224e46f44b3c34e2d5f5a9a9ca15f7"),
+        ("loop", "bd89503f2907fd40e698cffd3bae841317e37f39e22a8d58c197b449b3625e94"),
+        ("loop.drive", "588808ec631bf214c733c180fd2cd492ae1d583ae93b87eefbf4e16251f4ebfd"),
+        ("out", "d3f4d79e392df30b46a592b350f5bf8f25aed94d949295646966e29a22504d53"),
+        ("track", "dcc0eb2b43d69efccfb42fafa667afe480d5d42daab878b146bd277e198313a5"),
+    ]
+
+
 def pitch_key(pitch: float, *, pitched: bool = True) -> str:
     note = (Note(beat=0, pitch=pitch, length=1, velocity=100),)
     graph = Song(120, (Track("lead", "fake", note, pitched=pitched),)).graph()
