@@ -12,7 +12,6 @@ from contracts import (
     check_mixer_contract,
     check_record_writer_contract,
     check_render_store_contract,
-    check_section_contract,
     check_song_format_contract,
     check_sound_capture_contract,
     check_visualizer_contract,
@@ -23,7 +22,6 @@ from fakes import (
     FakeMixer,
     FakeRecordWriter,
     FakeRenderStore,
-    FakeSection,
     FakeSongFormat,
     FakeSongStore,
     FakeSound,
@@ -40,8 +38,6 @@ from poser.core.names import Identifier, NodeName, SongId, Suffix
 from poser.core.ports import (
     Captured,
     MixInput,
-    SectionInput,
-    SectionResult,
     SongStore,
     SoundListing,
 )
@@ -103,7 +99,6 @@ def test_fake_analysis_adapters_meet_their_contracts(tmp_path: Path) -> None:
     check_mixer_contract(FakeMixer())
     check_measurer_contract(FakeMeasurer())
     check_visualizer_contract(FakeVisualizer(), tmp_path)
-    check_section_contract(FakeSection("fake", {"value": 1}, ["loud"]))
 
 
 # Broken fakes
@@ -176,12 +171,6 @@ class SilentVisualizer(FakeVisualizer):
         pass
 
 
-class DictSection(FakeSection):
-    @override
-    def track(self, request: SectionInput) -> SectionResult:
-        return cast("SectionResult", {"value": 1})
-
-
 class CountingRecordWriter(FakeRecordWriter):
     def __init__(self) -> None:
         self.calls = 0
@@ -217,7 +206,5 @@ def test_contracts_can_fail(tmp_path: Path) -> None:
         check_measurer_contract(BandlessMeasurer())
     with pytest.raises(AssertionError, match="wrote no file"):
         check_visualizer_contract(SilentVisualizer(), tmp_path)
-    with pytest.raises(AssertionError, match="track returned a dict"):
-        check_section_contract(DictSection("fake"))
     with pytest.raises(AssertionError, match="two texts for one song"):
         check_record_writer_contract(CountingRecordWriter(), gain_song())

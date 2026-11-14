@@ -198,7 +198,6 @@ def test_report_fields_exist() -> None:
         "sound_key",
         "bands_db",
         "bar_dbfs",
-        "sections",
     } <= names
 
 

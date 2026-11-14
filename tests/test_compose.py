@@ -43,14 +43,7 @@ if TYPE_CHECKING:
 
 # Test adapters, selected by import path from a module written into `tmp_path`.
 ADAPTERS = """
-from fakes import (
-    FakeInstrument,
-    FakeMixer,
-    FakeSection,
-    FakeSongFormat,
-    FakeSound,
-    FakeVisualizer,
-)
+from fakes import FakeInstrument, FakeSongFormat, FakeSound
 
 from poser.core.names import Identifier, Suffix
 
@@ -135,19 +128,22 @@ def effect(name, options, context):
     return MetaEffect(name, options.get("adapter_id"), options.get("adapter_version"))
 
 
-def mixer(options, context):
-    SEEN.append(("mixer", (options, context)))
-    return FakeMixer()
-
-
-class PlainSuffixVisualizer(FakeVisualizer):
+class Framework:
     @property
-    def suffix(self):
-        return "png"
+    def name(self):
+        return Identifier("probe")
+
+    @property
+    def guide(self):
+        return "## probe\\n\\nA fake framework.\\n"
+
+    def read(self, request):
+        raise AssertionError("never read")
 
 
-def visualizer(options, context):
-    return PlainSuffixVisualizer()
+def framework(options, context):
+    SEEN.append(("framework", (options, context)))
+    return Framework()
 
 
 class YamlFormat(FakeSongFormat):
@@ -172,20 +168,6 @@ def yaml_format(options, context):
 
 def plain_suffix_format(options, context):
     return PlainSuffixFormat()
-
-
-class PlainNameSection(FakeSection):
-    @property
-    def name(self):
-        return str(self._name)
-
-
-def section(options, context):
-    return FakeSection(options.get("name", "probe"), version=options.get("version", 1))
-
-
-def plain_name_section(options, context):
-    return PlainNameSection("probe")
 
 
 def not_a_port(options, context):
@@ -249,6 +231,11 @@ def compose(tmp_path: Path, text: str, module: str = "") -> Composition:
     return load(path, tmp_path / "sounds", tmp_path / "renders")
 
 
+def required_guide(composition: Composition) -> tuple[str, ...]:
+    """The text of the guide's required blocks: every block but advice."""
+    return tuple(block.text for block in composition.guide_blocks() if not block.advice)
+
+
 def files_under(root: Path) -> set[Path]:
     return {path for path in root.rglob("*") if "__pycache__" not in path.parts}
 
@@ -304,7 +291,8 @@ def test_a_config_without_adapters_builds_the_built_in_adapters(tmp_path: Path) 
     assert isinstance(composition.mixer(), GainMixer)
     assert isinstance(composition.measurer(), StandardMeasurer)
     assert isinstance(composition.visualizer(), SpectrogramVisualizer)
-    assert composition.sections() == ()
+    assert not hasattr(composition, "sections")
+    assert not hasattr(composition, "guide_parts")
     assert [type(framework) for framework in composition.frameworks()] == [TonalFramework]
     assert isinstance(composition.instruments()[Identifier("serum")], PedalboardInstrument)
 
@@ -343,8 +331,8 @@ CONFIG_ERRORS = {
     "adapters-not-a-table": (SERUM.replace("[", "adapters = 1\n[", 1), "adapters", "a table"),
     "unknown-adapters-key": (SERUM + "[adapters]\nstore = 'files'\n", "adapters.store", "unknown"),
     "table-without-use": (
-        SERUM + "[adapters]\nmixer = {{ gain = 1 }}\n",
-        "adapters.mixer",
+        SERUM + "[adapters]\nsong_formats = [{{ strict = 1 }}]\n",
+        "adapters.song_formats[0]",
         "a table with a string `use`",
     ),
     "list-key-not-a-list": (
@@ -358,14 +346,9 @@ CONFIG_ERRORS = {
         "must name at least one adapter",
     ),
     "unknown-built-in": (
-        SERUM + "[adapters]\nmixer = 'loud'\n",
-        "adapters.mixer",
-        "'loud' is not a built-in ('gain') or an import path",
-    ),
-    "section-not-an-import-path": (
-        SERUM + "[adapters]\nsections = ['probe']\n",
-        "adapters.sections[0]",
-        "'probe' is not an import path module:attribute",
+        SERUM + "[adapters]\nsong_formats = ['json']\n",
+        "adapters.song_formats[0]",
+        "'json' is not a built-in ('yaml', 'script') or an import path",
     ),
     "effects-not-a-table": ("effects = 3\n" + SERUM, "effects", "must be a table of effects"),
     "effect-bad-name": (
@@ -412,6 +395,19 @@ def test_load_refuses_a_config_naming_the_file_and_key(
     assert problem in str(error.value)
 
 
+def test_removed_adapter_key_is_unknown(tmp_path: Path) -> None:
+    with pytest.raises(ConfigError, match=r"adapters\.mixer: unknown key"):
+        compose(tmp_path, SERUM + '[adapters]\nmixer = "x"\n')
+
+
+@pytest.mark.parametrize(
+    "key", ["record_writer", "audio_files", "render_store", "measurer", "visualizer", "sections"]
+)
+def test_every_fixed_part_and_sections_is_an_unknown_adapters_key(tmp_path: Path, key: str) -> None:
+    with pytest.raises(ConfigError, match=rf"adapters\.{key}: unknown key"):
+        compose(tmp_path, SERUM + f'[adapters]\n{key} = "x"\n')
+
+
 def test_load_refuses_a_missing_file(tmp_path: Path) -> None:
     with pytest.raises(ConfigError, match=r"poser\.toml: cannot read: "):
         load(tmp_path / "poser.toml", tmp_path / "sounds", tmp_path / "renders")
@@ -439,7 +435,7 @@ def test_building_every_built_in_adapter_starts_no_process_and_writes_no_file(
     composition.record_writer()
     composition.render_store()
     composition.analysis_tools()
-    assert composition.guide_parts()
+    assert required_guide(composition)
 
     assert files_under(tmp_path) == before
 
@@ -487,57 +483,64 @@ def test_import_paths_build_test_adapters(tmp_path: Path, monkeypatch: pytest.Mo
         adapter = "{module}:instrument"
 
         [adapters]
-        mixer = "{module}:mixer"
         song_formats = ["yaml", "{module}:song_format"]
-        sections = ["{module}:section"]
+        frameworks = ["{module}:framework"]
         """,
         module.__name__,
     )
 
     assert type(composition.instruments()[Identifier("synth")]) is module.MetaInstrument
-    assert type(composition.mixer()).__name__ == "FakeMixer"
     assert [type(fmt).__name__ for fmt in composition.song_formats()] == [
         "YamlSongFormat",
         "FakeSongFormat",
     ]
-    assert [section.name for section in composition.sections()] == ["probe"]
+    assert [type(framework) for framework in composition.frameworks()] == [module.Framework]
 
 
-def one_mixer(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, use: str) -> Composition:
+def one_framework(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, use: str) -> Composition:
     module = adapters_module(tmp_path, monkeypatch)
-    text = SERUM + f'[adapters]\nmixer = "{use}"\n'
+    text = SERUM + f'[adapters]\nframeworks = ["{use}"]\n'
     return compose(tmp_path, text, module.__name__)
 
 
 @pytest.mark.parametrize(
     ("use", "problem"),
     [
-        ("{module}:not_a_port", "'{module}:not_a_port' made a object, which is not a Mixer"),
+        (
+            "{module}:not_a_port",
+            "'{module}:not_a_port' made a object, which is not a Framework",
+        ),
         ("{module}:NOT_A_FACTORY", "'{module}:NOT_A_FACTORY' is not a factory"),
         ("{module}:missing", "cannot import '{module}:missing'"),
-        ("no_such_module_for_poser:mixer", "cannot import 'no_such_module_for_poser:mixer'"),
+        (
+            "no_such_module_for_poser:framework",
+            "cannot import 'no_such_module_for_poser:framework'",
+        ),
     ],
 )
 def test_a_factory_that_cannot_build_the_port_is_a_config_error(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, use: str, problem: str
 ) -> None:
     module = adapters_module(tmp_path, monkeypatch)
-    composition = compose(tmp_path, SERUM + f'[adapters]\nmixer = "{use}"\n', module.__name__)
+    text = SERUM + f'[adapters]\nframeworks = ["{use}"]\n'
+    composition = compose(tmp_path, text, module.__name__)
 
     with pytest.raises(ConfigError) as error:
-        composition.mixer()
+        composition.frameworks()
 
     expected = problem.format(module=module.__name__)
-    assert str(error.value).startswith(f"{tmp_path / 'poser.toml'}: adapters.mixer: {expected}")
+    assert str(error.value).startswith(
+        f"{tmp_path / 'poser.toml'}: adapters.frameworks[0]: {expected}"
+    )
 
 
 def test_a_factory_raising_another_error_propagates(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    composition = one_mixer(tmp_path, monkeypatch, "{module}:raises")
+    composition = one_framework(tmp_path, monkeypatch, "{module}:raises")
 
     with pytest.raises(RuntimeError, match="the adapter has a bug"):
-        composition.mixer()
+        composition.frameworks()
 
 
 INSTRUMENT_METADATA = {
@@ -563,40 +566,15 @@ def test_instrument_metadata_is_checked_when_built(
 
 
 ADAPTER_METADATA = {
-    "visualizer-suffix": (
-        'visualizer = "{module}:visualizer"',
-        "visualizer",
-        "adapters.visualizer: suffix 'png' is not a Suffix",
-    ),
     "song-format-suffix": (
         'song_formats = ["{module}:plain_suffix_format"]',
         "song_formats",
         "adapters.song_formats[0]: suffixes entry '.json' is not a Suffix",
     ),
-    "section-version-true": (
-        'sections = [{{ use = "{module}:section", version = true }}]',
-        "sections",
-        "adapters.sections[0]: version True is not a positive int",
-    ),
-    "section-version-zero": (
-        'sections = [{{ use = "{module}:section", version = 0 }}]',
-        "sections",
-        "adapters.sections[0]: version 0 is not a positive int",
-    ),
-    "section-plain-name": (
-        'sections = ["{module}:plain_name_section"]',
-        "sections",
-        "adapters.sections[0]: name 'probe' is not an Identifier",
-    ),
     "two-yaml-formats": (
         'song_formats = ["yaml", "{module}:yaml_format"]',
         "song_formats",
         "adapters.song_formats: '.yaml' is read by both 'yaml' and '{module}:yaml_format'",
-    ),
-    "two-sections-alike": (
-        'sections = ["{module}:section", "{module}:section"]',
-        "sections",
-        "adapters.sections: two sections are named 'probe'",
     ),
 }
 
@@ -642,13 +620,14 @@ def test_options_reach_the_factory_read_only(
 
 
 def test_a_built_in_adapter_refuses_an_unknown_option(tmp_path: Path) -> None:
-    composition = compose(tmp_path, SERUM + '[adapters]\nmixer = {{ use = "gain", loud = true }}\n')
+    text = SERUM + '[adapters]\nsong_formats = [{{ use = "yaml", loud = true }}]\n'
+    composition = compose(tmp_path, text)
 
     with pytest.raises(ConfigError) as error:
-        composition.mixer()
+        composition.song_formats()
 
     assert str(error.value) == (
-        f"{tmp_path / 'poser.toml'}: adapters.mixer: "
+        f"{tmp_path / 'poser.toml'}: adapters.song_formats[0]: "
         "unknown option 'loud'; this adapter takes no options"
     )
 
@@ -763,23 +742,21 @@ def test_each_method_builds_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     adapter = "{module}:instrument"
 
     [adapters]
-    mixer = "{module}:mixer"
+    frameworks = ["{module}:framework"]
     """
     composition = compose(tmp_path, text, module.__name__)
 
     assert composition.instruments() is composition.instruments()
     assert composition.effects() is composition.effects()
+    assert composition.frameworks() is composition.frameworks()
     assert composition.mixer() is composition.mixer()
     composition.analysis_tools()
-    composition.guide_parts()
+    composition.guide_blocks()
 
-    assert [factory for factory, _ in module.SEEN] == ["instrument", "mixer"]
+    assert [factory for factory, _ in module.SEEN] == ["instrument", "framework"]
 
 
-def test_guide_parts_hold_each_guide_once_in_order(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    module = adapters_module(tmp_path, monkeypatch)
+def test_guide_blocks_hold_each_guide_once_in_order(tmp_path: Path) -> None:
     text = """
     [instruments.serum]
     adapter = "pedalboard"
@@ -789,20 +766,16 @@ def test_guide_parts_hold_each_guide_once_in_order(
     [instruments.keys]
     adapter = "pedalboard"
     path = "Missing Too.vst3"
-
-    [adapters]
-    sections = ["{module}:section"]
     """
-    composition = compose(tmp_path, text, module.__name__)
+    composition = compose(tmp_path, text)
 
-    parts = composition.guide_parts()
+    parts = required_guide(composition)
 
     instruments = composition.instruments()
     assert parts == (
         instruments[Identifier("serum")].guide,  # ty: ignore[unresolved-attribute]
         composition.render_store().guide,  # ty: ignore[unresolved-attribute]
         composition.visualizer().guide,  # ty: ignore[unresolved-attribute]
-        "## probe\n\nA fake section.\n",
         TONAL_GUIDE,
         CHORDS_GUIDE,
         KEY_GUIDE,
@@ -840,7 +813,7 @@ def test_the_neutral_preset_selects_no_framework(tmp_path: Path) -> None:
 
     assert composition.frameworks() == ()
     assert composition.config.preset == "neutral"
-    assert TONAL_GUIDE not in composition.guide_parts()
+    assert TONAL_GUIDE not in required_guide(composition)
 
 
 def test_a_list_pins_frameworks_and_records_no_preset(tmp_path: Path) -> None:
@@ -927,8 +900,8 @@ def test_no_vocabularies_key_selects_the_western_preset(tmp_path: Path) -> None:
     assert (chords.name, key.name) == ("chords", "key")
     assert composition.config.vocabulary_preset == "western"
     assert PRESETS["western"]["vocabularies"] == ("chords", "key")
-    assert CHORDS_GUIDE in composition.guide_parts()
-    assert KEY_GUIDE in composition.guide_parts()
+    assert CHORDS_GUIDE in required_guide(composition)
+    assert KEY_GUIDE in required_guide(composition)
 
 
 def test_the_neutral_preset_selects_no_vocabulary(tmp_path: Path) -> None:
@@ -938,8 +911,8 @@ def test_the_neutral_preset_selects_no_vocabulary(tmp_path: Path) -> None:
     assert composition.config.vocabulary_preset == "neutral"
     assert composition.config.preset == "western"
     assert len(composition.frameworks()) == 1
-    assert CHORDS_GUIDE not in composition.guide_parts()
-    assert KEY_GUIDE not in composition.guide_parts()
+    assert CHORDS_GUIDE not in required_guide(composition)
+    assert KEY_GUIDE not in required_guide(composition)
 
 
 def test_a_list_pins_vocabularies_and_records_no_preset(tmp_path: Path) -> None:
@@ -956,8 +929,8 @@ def test_a_list_of_key_selects_only_the_key_vocabulary(tmp_path: Path) -> None:
 
     (vocabulary,) = composition.vocabularies()
     assert isinstance(vocabulary, KeyVocabulary)
-    assert KEY_GUIDE in composition.guide_parts()
-    assert CHORDS_GUIDE not in composition.guide_parts()
+    assert KEY_GUIDE in required_guide(composition)
+    assert CHORDS_GUIDE not in required_guide(composition)
 
 
 def test_a_vocabulary_name_in_place_of_a_preset_suggests_the_list(tmp_path: Path) -> None:
@@ -1003,7 +976,7 @@ def test_an_import_path_supplies_a_vocabulary(
     (vocabulary,) = composition.vocabularies()
     assert type(vocabulary) is module.Vocabulary
     assert vocabulary.name == "chords"
-    assert "## chords labels\n" in composition.guide_parts()
+    assert "## chords labels\n" in required_guide(composition)
 
 
 @pytest.mark.parametrize(

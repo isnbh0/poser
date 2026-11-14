@@ -130,7 +130,6 @@ run's report and images. Report fields whose meaning is not obvious from their n
 | `bands_db` | Level in each frequency band, relative and uncalibrated |
 | `bar_dbfs` | RMS level of each 4-beat span, up to the song's last beat |
 | `detail` | Why a node has no measurements |
-| `sections` | Extra analysis from configured report sections, by name; each has a `version` and either `data` with its own `defects`, or an `error` |
 
 Node measurements are of that node's own output: the sound as played, or the effect's output
 before its `gain_db`; mix measurements include leaf faders.
@@ -149,8 +148,7 @@ so the track left no stem. Node statuses from `analyze-song`: `analyzed`, `missi
 `stale_stem`, which means the stem no longer matches the song or its sound; `detail` says why.
 
 Defects fail the analysis: `silent`, for a node or the mix; `clipping`, for mix samples beyond
-full scale; and `headroom`, for a mix peak above -1 dBFS. A section's defects and errors also
-fail the analysis.
+full scale; and `headroom`, for a mix peak above -1 dBFS.
 
 ## Verified delivery
 

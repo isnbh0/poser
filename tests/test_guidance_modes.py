@@ -138,10 +138,6 @@ def test_guidance_toggle_preserves_rendered_bytes_keys_and_cache(
     def load_fake(target: str) -> object:
         if target == "guidance_fakes:instrument":
             return lambda name, options, context: FakeInstrument(name, {None: FakeSound()})
-        if target == "guidance_fakes:store":
-            return lambda options, context, suffix: store
-        if target == "guidance_fakes:audio":
-            return lambda options, context: audio
         return original_loader(target)
 
     monkeypatch.setattr(compose, "load_object", load_fake)
@@ -161,8 +157,6 @@ def test_guidance_toggle_preserves_rendered_bytes_keys_and_cache(
     for enabled in (True, False, True):
         config = parse_config(
             '[instruments.synth]\nadapter = "guidance_fakes:instrument"\n'
-            '[adapters]\nrender_store = "guidance_fakes:store"\n'
-            'audio_files = "guidance_fakes:audio"\n'
             f"[guidance]\nadvice = {str(enabled).lower()}\n",
             tmp_path / "poser.toml",
         )
@@ -178,10 +172,10 @@ def test_guidance_toggle_preserves_rendered_bytes_keys_and_cache(
         ) -> list[TrackResult]:
             return render_song(
                 song,
-                configured.render_store(),
+                store,
                 song_id,
                 configured.instruments(),
-                configured.audio_files(),
+                audio,
                 effects=configured.effects(),
                 timeout_s=10,
                 force=force,

@@ -15,6 +15,19 @@ uv run check-instruments
 If a command fails after the upgrade, find its message below, newest change first, and apply the
 fix. A change listed here applies to every studio that pinned a poser commit from before it.
 
+## Fixed adapters and no report sections
+
+- **Symptom:** a command fails with `adapters.<key>: unknown key` for `record_writer`,
+  `audio_files`, `render_store`, `mixer`, `measurer`, `visualizer`, or `sections`.
+  **Cause:** these parts each have one implementation and are no longer configurable. Custom
+  implementations of the record writer, audio files, render store, mixer, measurer, visualizer,
+  and report-section ports are no longer supported.
+  **Fix:** delete the key; poser uses its built-in adapter.
+
+- **Symptom:** `report.json` no longer has `sections` keys on nodes or the mix.
+  **Cause:** report sections are removed, and section defects no longer exist.
+  **Fix:** read the remaining fields.
+
 ## Render keys digest render inputs
 
 - **Symptom:** every track renders again on the first `render` after upgrading.

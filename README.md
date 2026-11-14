@@ -79,19 +79,12 @@ adapter takes `path`, `plugin_name` for a bundle holding several plugins, `sourc
 Relative paths resolve against the directory holding `poser.toml`, and `list-sounds` notes the
 files in a source it cannot use.
 
-An optional `[adapters]` table chooses the adapter for every other part of poser. Each key takes
-a built-in name, an import path, or a table with `use` and options:
+An optional `[adapters]` table chooses the song formats, frameworks, and vocabularies. Each list
+entry takes a built-in name, an import path, or a table with `use` and options:
 
 | Key | Default |
 |---|---|
 | `song_formats` | `["yaml", "script"]` |
-| `record_writer` | `"yaml"` |
-| `audio_files` | `"wav"` |
-| `render_store` | `"files"` |
-| `mixer` | `"gain"` |
-| `measurer` | `"standard"` |
-| `visualizer` | `"spectrogram"` |
-| `sections` | `[]` |
 | `frameworks` | `"western"`, a preset name; a list pins the frameworks |
 | `vocabularies` | `"western"`, a preset name; a list pins the vocabularies |
 
@@ -144,8 +137,8 @@ and analysis, and records the bundle as not auditioned. See the
 
 ## Adapters of your own
 
-Any adapter key, and an instrument's `adapter`, can name a factory by import path,
-`module:attribute`:
+An instrument's or effect's `adapter`, and each entry of `song_formats`, `frameworks`, and
+`vocabularies`, can name a factory by import path, `module:attribute`:
 
 ```toml
 [instruments.drums]
@@ -153,11 +146,11 @@ adapter = "studio_adapters.drums:create"
 kit = "brushes"
 
 [adapters]
-sections = [{ use = "studio_adapters.sections:create", threshold = 3 }]
+frameworks = ["tonal", { use = "studio_adapters.modes:create", strict = true }]
 ```
 
-An instrument's factory takes `(name, options, context)`, the render store's takes
-`(options, context, stem_suffix)`, and every other one takes `(options, context)`. Options are the
+An instrument's or effect's factory takes `(name, options, context)`, and every other one takes
+`(options, context)`. Options are the
 table's other keys; `context` holds the workspace root and the sounds and renders directories the
 command uses. Each factory returns an object meeting its port in `poser.core.ports`, and raises
 `ConfigError` for options it cannot use.

@@ -16,7 +16,7 @@ import yaml
 
 # The test adapters. Options shape each one; an unknown option is a ConfigError, as for poser's.
 ADAPTERS = """
-from fakes import FakeInstrument, FakeMixer, FakeSection, FakeSound, SavedSounds
+from fakes import FakeInstrument, FakeSound, SavedSounds
 
 from poser.core.names import Identifier
 from poser.core.ports import ConfigError, RenderFailure, SoundListing
@@ -25,7 +25,6 @@ from poser.core.statuses import RenderFailureStatus
 SAVED = {}  # Saved sounds by instrument name, kept between commands as files would be.
 BUILT = {}  # Every instrument built, by name.
 SETUP = {}  # A function applied to each instrument built, by name.
-MIXES = []  # The frames of every mix the test mixer made.
 
 
 class ListingInstrument(FakeInstrument):
@@ -60,39 +59,6 @@ def instrument(name, options, context):
     if name in SETUP:
         SETUP[name](made)
     BUILT.setdefault(name, []).append(made)
-    return made
-
-
-class CountingMixer(FakeMixer):
-    def mix(self, stems, frames):
-        MIXES.append(frames)
-        return super().mix(stems, frames)
-
-
-def mixer(options, context):
-    if options:
-        raise ConfigError("the test mixer takes no options")
-    return CountingMixer()
-
-
-class PartSection(FakeSection):
-    def __init__(self, name, defects, raises_on):
-        super().__init__(name, data={"probe": True}, defects=defects)
-        self._raises_on = raises_on
-
-    def _result(self, part, request):
-        if part == self._raises_on:
-            raise RuntimeError(f"no {part} for {self.name}")
-        return super()._result(part, request)
-
-
-def section(options, context):
-    options = dict(options)
-    made = PartSection(
-        options.pop("name", "probe"), options.pop("defects", []), options.pop("raises_on", None)
-    )
-    if options:
-        raise ConfigError(f"unknown option {min(options)!r}")
     return made
 
 

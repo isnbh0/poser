@@ -5,7 +5,6 @@ so a stem left by a removed or renamed track cannot enter the mix.
 """
 
 import argparse
-from collections.abc import Mapping
 from pathlib import Path
 
 from poser.cli.common import (
@@ -21,33 +20,14 @@ from poser.cli.workspace import WorkspaceError, fill_path_options, song_id
 from poser.core.analysis import analyze_song, report_json
 from poser.core.loading import load_song
 from poser.core.ports import ConfigError, SongBusyError
-from poser.core.report import (
-    MixReport,
-    NodeReport,
-    Report,
-    SectionError,
-    SectionReport,
-    report_failed,
-)
+from poser.core.report import MixReport, NodeReport, Report, report_failed
 from poser.core.song import SongError
 
 PROG = "analyze-song"
-MIX_DETAIL_NAME = "mix"
 
 
 def exit_code(report: Report) -> int:
     return EXIT_SOME_FAILED if report_failed(report) else EXIT_ALL_PASS
-
-
-def section_details(owner: str, sections: Mapping[str, SectionReport]) -> list[str]:
-    """One line per section result that fails the analysis."""
-    lines: list[str] = []
-    for name, section in sections.items():
-        if isinstance(section, SectionError):
-            lines.append(f"{owner}: section {name}: {section.error}")
-        elif section.defects:
-            lines.append(f"{owner}: section {name}: {', '.join(section.defects)}")
-    return lines
 
 
 def format_table(report: Report) -> str:
@@ -73,13 +53,11 @@ def format_table(report: Report) -> str:
         rows.append(row(node.name, str(node.status), node))
         if node.detail:
             details.append(f"{node.name}: {node.detail}")
-        details += section_details(node.name, node.sections)
     # Brackets cannot appear in a node name, so this row cannot be mistaken for a node.
     if report.mix is None:
         rows.append(("[mix]", "not_written", "-", "-", "-", "-", "-"))
     else:
         rows.append(row("[mix]", "written", report.mix))
-        details += section_details(MIX_DETAIL_NAME, report.mix.sections)
     return "\n".join([*align_rows(rows), *details])
 
 

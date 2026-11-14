@@ -8,7 +8,7 @@ from workspaces import make_workspace
 from poser.adapters.chords import GUIDE as CHORDS_GUIDE
 from poser.adapters.tonal import GUIDE as TONAL_GUIDE
 from poser.adapters.tonal import KEY_GUIDE
-from poser.compose import load
+from poser.compose import Composition, load
 from poser.core.guide import (
     FIRST_INSTRUMENT_PLACEHOLDER,
     FRAMEWORKS_HEADING,
@@ -23,6 +23,11 @@ from poser.core.names import Identifier
 CORE = "# Composing\n\nWrite songs.\n\n"
 SERUM = InstrumentNote(Identifier("serum"), "pedalboard", "A wavetable synth.")
 PLAIN = InstrumentNote(Identifier("drums"), "my_adapters:drums", None)
+
+
+def required_guide(composition: Composition) -> tuple[str, ...]:
+    """The text of the guide's required blocks: every block but advice."""
+    return tuple(block.text for block in composition.guide_blocks() if not block.advice)
 
 
 def test_blocks_come_in_order_with_one_blank_line_between() -> None:
@@ -163,7 +168,7 @@ def test_the_tonal_guide_comes_with_the_tonal_framework(
         workspace.write_config(workspace.config.read_text() + "[adapters]\n" + setting)
     composition = load(workspace.config, workspace.root / "sounds", workspace.renders)
 
-    assert (TONAL_GUIDE in composition.guide_parts()) is has_tonal
+    assert (TONAL_GUIDE in required_guide(composition)) is has_tonal
 
 
 @pytest.mark.parametrize(
@@ -179,7 +184,7 @@ def test_the_chords_guide_comes_with_the_chords_vocabulary(
         workspace.write_config(workspace.config.read_text() + "[adapters]\n" + setting)
     composition = load(workspace.config, workspace.root / "sounds", workspace.renders)
 
-    assert (CHORDS_GUIDE in composition.guide_parts()) is has_chords
+    assert (CHORDS_GUIDE in required_guide(composition)) is has_chords
     listing = composition.framework_listing()
     assert (
         listing.vocabularies
@@ -209,5 +214,5 @@ def test_the_key_guide_comes_with_the_key_vocabulary(
         workspace.write_config(workspace.config.read_text() + "[adapters]\n" + setting)
     composition = load(workspace.config, workspace.root / "sounds", workspace.renders)
 
-    assert (KEY_GUIDE in composition.guide_parts()) is has_key
+    assert (KEY_GUIDE in required_guide(composition)) is has_key
     assert (Identifier("key") in composition.framework_listing().vocabularies) is has_key

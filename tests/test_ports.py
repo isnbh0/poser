@@ -4,9 +4,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-from fakes import FakeMeasurer, FakeMixer, FakeSection, FakeVisualizer
 
-from poser.core.analysis import AnalysisTools
 from poser.core.audio import Audio
 from poser.core.capturing import SaveRequest
 from poser.core.checking import CheckResult
@@ -26,7 +24,6 @@ from poser.core.ports import (
     RenderFailure,
     ResolvedEffect,
     ResolvedSound,
-    SectionResult,
     SoundFailure,
     SoundListing,
 )
@@ -62,8 +59,6 @@ def test_types_refuse_what_their_rules_forbid() -> None:
         CaptureFailure("")
     with pytest.raises(ValueError, match="gain_db"):
         MixInput(TrackName("lead"), AUDIO, float("inf"))
-    with pytest.raises(ValueError, match="defects"):
-        SectionResult(Json.of(None), ("not an identifier",))  # ty: ignore[invalid-argument-type]
     with pytest.raises(ValueError, match="no stem"):
         TrackResult(
             TrackName("lead"),
@@ -106,15 +101,6 @@ def test_collection_fields_are_tuples_that_later_changes_cannot_reach() -> None:
     problems = ["broken.fxp could not be read"]
     notes = ["presets hold 1 .txt poser cannot read"]
     listing = SoundListing(entries, problems, notes)  # ty: ignore[invalid-argument-type]
-    defects = [Identifier("loud")]
-    result = SectionResult(Json.of(None), defects)  # ty: ignore[invalid-argument-type]
-    sections = [FakeSection("one")]
-    tools = AnalysisTools(
-        FakeMixer(),
-        FakeMeasurer(),
-        FakeVisualizer(),
-        sections,  # ty: ignore[invalid-argument-type]
-    )
     peaks = [-6.0, -7.0]
     check = CheckResult(
         FAKE,
@@ -126,34 +112,19 @@ def test_collection_fields_are_tuples_that_later_changes_cannot_reach() -> None:
     entries.append(SoundEntry(SoundRef(FAKE, "pad"), "a pad"))
     problems.clear()
     notes.append("more strays appeared")
-    defects.append(Identifier("quiet"))
-    sections.append(FakeSection("two"))
     peaks.append(-8.0)
 
     assert listing.entries == (SoundEntry(REF, "the default sound"),)
     assert listing.problems == ("broken.fxp could not be read",)
     assert listing.notes == ("presets hold 1 .txt poser cannot read",)
-    assert result.defects == (Identifier("loud"),)
-    assert [section.name for section in tools.sections] == ["one"]
     assert check.note_peaks_dbfs == (-6.0, -7.0)
     for value in (
         listing.entries,
         listing.problems,
         listing.notes,
-        result.defects,
-        tools.sections,
     ):
         assert isinstance(value, tuple)
     assert isinstance(check.note_peaks_dbfs, tuple)
-
-
-def test_section_result_holds_json_data_only() -> None:
-    result = SectionResult(Json.of({"a": [1]}), (Identifier("loud"),))
-    assert result.data.value() == {"a": [1]}
-    with pytest.raises(ValueError, match="not a JSON value"):
-        SectionResult(Json.of({"a": float("nan")}))
-    with pytest.raises(ValueError, match="data"):
-        SectionResult({"a": [1]})  # ty: ignore[invalid-argument-type]
 
 
 def test_effect_types_refuse_what_their_rules_forbid() -> None:

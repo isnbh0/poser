@@ -110,7 +110,7 @@ def compose_guide(
     if instruments:
         core = core.replace(FIRST_INSTRUMENT_PLACEHOLDER, f'"{instruments[0].name}"')
     listing = "\n".join([INSTRUMENTS_HEADING, "", *map(_instrument_item, instruments)]).strip()
-    # Select authored blocks before Markdown rendering; legacy strings are required reference.
+    # Select blocks before Markdown rendering; a plain string is required reference.
     selected = [
         part.text if isinstance(part, GuideBlock) else part
         for part in parts

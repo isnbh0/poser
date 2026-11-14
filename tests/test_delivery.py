@@ -6,7 +6,7 @@ from collections.abc import Callable, Generator, Mapping
 from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
-from typing import TYPE_CHECKING, override
+from typing import override
 
 import pytest
 import yaml
@@ -16,7 +16,6 @@ from fakes import (
     FakeMixer,
     FakeRecordWriter,
     FakeRenderStore,
-    FakeSection,
     FakeSound,
     FakeVisualizer,
     NpyAudioFiles,
@@ -55,9 +54,6 @@ from poser.core.ports import (
     StagedDelivery,
 )
 from poser.core.statuses import RenderFailureStatus
-
-if TYPE_CHECKING:
-    from poser.core.jsonvalue import JsonValue
 
 
 class SvgVisualizer(FakeVisualizer):
@@ -121,13 +117,11 @@ def manifest(destination: Path) -> bytes:
     return (destination / "manifest.json").read_bytes()
 
 
-def test_bundle_hashes_portability_opaque_sections_and_later_runs(harness: Harness) -> None:
+def test_bundle_hashes_portability_and_later_runs(harness: Harness) -> None:
     dependency = harness.root / "parts" / "theme.py"
     dependency.parent.mkdir()
     dependency.write_text("NOTES = [60]\n")
     harness.includes = (Path("parts/theme.py"),)
-    opaque: JsonValue = {"path": "/private/not-an-artifact.wav", "nested": ["../untouched.png"]}
-    harness.tools = replace(harness.tools, sections=(FakeSection("opaque", opaque),))
     result = harness.run()
     assert isinstance(result, PublishedDelivery)
     original = {
@@ -137,7 +131,7 @@ def test_bundle_hashes_portability_opaque_sections_and_later_runs(harness: Harne
     }
     data = json.loads(manifest(harness.destination))
     assert data["listening"] == "not_auditioned"
-    assert data["section_payload_portability"] == "opaque_not_verified"
+    assert "section_payload_portability" not in data
     assert data["includes"] == ["parts/theme.py"]
     assert data["configuration_sha256"] == sha256(harness.config.read_bytes())
     assert data["lockfiles"] == [
@@ -148,7 +142,7 @@ def test_bundle_hashes_portability_opaque_sections_and_later_runs(harness: Harne
     report = json.loads(original[Path("report.json")])
     assert report["mix"]["path"] == "audio/mix.npy"
     assert report["mix"]["spectrogram"] == "images/mix.svg"
-    assert report["nodes"][0]["sections"]["opaque"]["data"] == opaque
+    assert all("sections" not in row for row in [*report["nodes"], report["mix"]])
     assert report["song_sha256"] == result.report.song_sha256
     assert report["song_sha256"] != sha256(harness.song.read_bytes())
     moved = harness.root / "moved"
@@ -274,7 +268,7 @@ def test_source_changed_by_builder_is_not_published(harness: Harness) -> None:
     assert not harness.destination.exists()
 
 
-@pytest.mark.parametrize("failure", ["render", "defect", "section", "missing_mix", "writer"])
+@pytest.mark.parametrize("failure", ["render", "defect", "missing_mix", "writer"])
 def test_failure_outcomes_preserve_history_and_never_publish(
     harness: Harness,
     failure: str,
@@ -293,8 +287,6 @@ def test_failure_outcomes_preserve_history_and_never_publish(
         expected = RenderFailed
     elif failure == "defect":
         harness.instrument = FakeInstrument("fake", {None: FakeSound(amplitude=0.95)})
-    elif failure == "section":
-        harness.tools = replace(harness.tools, sections=(FakeSection("bad", raises=ValueError()),))
     elif failure == "missing_mix":
         original = FileSongStore.finish_record
 
@@ -520,18 +512,15 @@ def test_cli_distinct_roots_and_subdirectory_include_resolution(
     )
 
 
-def test_legacy_store_refused_before_python_and_custom_actual_root(
+def test_destination_in_a_store_s_protected_root_is_refused_before_python(
     cli_workspace: CommandWorkspace,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     marker = cli_workspace.root / "ran"
     song = write_script_song(cli_workspace.root / "song.py", "synth", marker)
-    monkeypatch.setattr(
-        Composition,
-        "render_store",
-        lambda self: FakeRenderStore(cli_workspace.root / "hidden", ".wav"),
-    )
-    assert export.main([str(song), "--destination", "bundle"]) == 2
+    hidden = cli_workspace.root / "hidden"
+    monkeypatch.setattr(Composition, "render_store", lambda self: FakeRenderStore(hidden, ".wav"))
+    assert export.main([str(song), "--destination", str(hidden / "bundle")]) == 2
     assert not marker.exists()
     actual = cli_workspace.root / "actual"
     monkeypatch.setattr(

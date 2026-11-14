@@ -4,9 +4,9 @@ import dataclasses
 import hashlib
 import json
 import os
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import cast, override
+from typing import override
 
 import numpy as np
 import pytest
@@ -17,7 +17,6 @@ from fakes import (
     FakeMixer,
     FakeRecordWriter,
     FakeRenderStore,
-    FakeSection,
     FakeSongStore,
     FakeSound,
     FakeVisualizer,
@@ -28,7 +27,6 @@ from poser.core.analysis import AnalysisTools, analyze_song, measure
 from poser.core.audio import Audio, measure_peak_dbfs, stem_samples, write_raw_audio
 from poser.core.cache import Stamp
 from poser.core.graph import DelayNode, EffectNode, Graph, TrackNode, Wire
-from poser.core.jsonvalue import Json
 from poser.core.loading import LoadedSong
 from poser.core.names import Identifier, SongId, TrackName
 from poser.core.planning import Unplanned, plan, resolve_all
@@ -37,9 +35,6 @@ from poser.core.ports import (
     Instrument,
     Mixer,
     MixInput,
-    ReportSection,
-    SectionInput,
-    SectionResult,
 )
 from poser.core.rendering import render_song
 from poser.core.report import (
@@ -48,8 +43,6 @@ from poser.core.report import (
     Defect,
     Levels,
     Report,
-    SectionData,
-    SectionError,
     bar_dbfs,
     report_failed,
 )
@@ -87,7 +80,6 @@ class Setup:
     def __init__(
         self,
         tmp_path: Path,
-        sections: Sequence[ReportSection] = (),
         mixer: Mixer | None = None,
         visualizer: FakeVisualizer | None = None,
         song: Song | Graph | None = None,
@@ -100,9 +92,7 @@ class Setup:
         self.store: FakeSongStore = self.renders.song(SONG_ID)
         self.audio_files = NpyAudioFiles()
         self.visualizer = visualizer or FakeVisualizer()
-        self.tools = AnalysisTools(
-            mixer or FakeMixer(), FakeMeasurer(), self.visualizer, tuple(sections)
-        )
+        self.tools = AnalysisTools(mixer or FakeMixer(), FakeMeasurer(), self.visualizer)
         results = render_song(
             LoadedSong(song or make_song()),
             self.renders,
@@ -176,19 +166,6 @@ def test_measure_takes_peak_clipping_and_bars_from_the_audio_and_levels_from_the
     assert measurements.bar_dbfs == tuple(bar_dbfs(samples, 2.0, 2))
     assert measurements.integrated_lufs == -9.0
     assert measurements.bands_db == levels.bands_db
-
-
-def test_analysis_tools_refuse_two_sections_with_one_name() -> None:
-    with pytest.raises(ValueError, match="two report sections are named 'tempo'"):
-        AnalysisTools(
-            FakeMixer(),
-            FakeMeasurer(),
-            FakeVisualizer(),
-            (FakeSection("tempo"), FakeSection("tempo")),
-        )
-
-
-# Full and failed runs
 
 
 def test_analysis_refuses_a_store_whose_stems_the_audio_files_cannot_read(
@@ -402,143 +379,6 @@ def test_records_number_on_and_hold_the_song_and_its_digest(tmp_path: Path) -> N
         == hashlib.sha256((setup.record(3) / "song.json").read_bytes()).hexdigest()
     )
     assert json.loads((setup.record(2) / "song.json").read_text())["tracks"][0]["gain"] == -3
-
-
-# Sections
-
-
-class ActingSection(FakeSection):
-    """A section that does something to its input, then returns its data."""
-
-    def __init__(self, name: str, act: Callable[[SectionInput], object]) -> None:
-        super().__init__(name, {"acted": True})
-        self.act = act
-
-    @override
-    def track(self, request: SectionInput) -> SectionResult:
-        self.act(request)
-        return super().track(request)
-
-    @override
-    def mix(self, request: SectionInput) -> SectionResult:
-        self.act(request)
-        return super().mix(request)
-
-
-class DictSection(FakeSection):
-    @override
-    def track(self, request: SectionInput) -> SectionResult:
-        return cast("SectionResult", {"value": 1})
-
-    @override
-    def mix(self, request: SectionInput) -> SectionResult:
-        return cast("SectionResult", {"value": 1})
-
-
-def test_section_data_reaches_every_node_and_the_mix(tmp_path: Path) -> None:
-    section = FakeSection("tempo", {"steady": True})
-    setup = Setup(tmp_path, [section])
-
-    report = setup.analyze()
-
-    assert report.mix is not None
-    expected = {"tempo": SectionData(1, Json.of({"steady": True}), ())}
-    assert [dict(node.sections) for node in report.nodes] == [expected, expected]
-    assert dict(report.mix.sections) == expected
-    assert [request.node for request in section.seen] == [*make_song().graph().nodes, None]
-    assert section.parts == ["track", "track", "mix"]
-    assert not report_failed(report)
-
-
-def test_section_defect_fails_the_report(tmp_path: Path) -> None:
-    setup = Setup(tmp_path, [FakeSection("tempo", None, ["drift"])])
-
-    report = setup.analyze()
-
-    assert report.mix is not None
-    assert report.mix.sections["tempo"] == SectionData(1, Json.of(None), (Identifier("drift"),))
-    assert report_failed(report)
-
-
-def test_failing_sections_are_recorded_and_the_others_still_run(tmp_path: Path) -> None:
-    after = FakeSection("after", {"ran": True})
-    sections = [
-        FakeSection("raising", raises=RuntimeError("boom"), version=2),
-        DictSection("dict"),
-        after,
-    ]
-    setup = Setup(tmp_path, sections)
-
-    report = setup.analyze()
-
-    assert report.mix is not None
-    for sections_seen in [*(node.sections for node in report.nodes), report.mix.sections]:
-        assert sections_seen["raising"] == SectionError(2, "RuntimeError: boom")
-        assert sections_seen["dict"] == SectionError(
-            1, "TypeError: returned dict, not a SectionResult"
-        )
-        assert sections_seen["after"] == SectionData(1, Json.of({"ran": True}), ())
-    assert len(after.seen) == 3
-    assert report_failed(report)
-
-
-def write_samples(request: SectionInput) -> None:
-    request.audio.samples[0, 0] = 1.0
-
-
-def assign_band(request: SectionInput) -> None:
-    request.measurements.bands_db["bass"] = 0.0  # ty: ignore[invalid-assignment]
-
-
-def clear_bars(request: SectionInput) -> None:
-    request.measurements.bar_dbfs.clear()  # ty: ignore[unresolved-attribute]
-
-
-@pytest.mark.parametrize(
-    ("act", "error"),
-    [
-        (write_samples, "ValueError: assignment destination is read-only"),
-        (assign_band, "TypeError: 'mappingproxy' object does not support item assignment"),
-        (clear_bars, "AttributeError: 'tuple' object has no attribute 'clear'"),
-    ],
-)
-def test_section_cannot_change_what_later_sections_and_the_report_see(
-    tmp_path: Path, act: Callable[[SectionInput], None], error: str
-) -> None:
-    later = FakeSection("later")
-    setup = Setup(tmp_path, [ActingSection("acting", act), later])
-    alone = FakeSection("later")
-    plain = Setup(tmp_path / "plain", [alone]).analyze()
-
-    report = setup.analyze()
-
-    assert report.mix is not None
-    for sections in [*(node.sections for node in report.nodes), report.mix.sections]:
-        assert sections["acting"] == SectionError(1, error)
-    lead_stem = setup.audio_files.read(setup.store.stem_path(LEAD), FRAMES)
-    assert np.array_equal(later.seen[0].audio.samples, lead_stem.samples)
-    assert [request.measurements for request in later.seen] == [
-        request.measurements for request in alone.seen
-    ]
-    for kept, fresh in zip([*report.nodes, report.mix], [*plain.nodes, plain.mix], strict=True):
-        assert fresh is not None
-        assert (kept.peak_dbfs, kept.bands_db, kept.bar_dbfs) == (
-            fresh.peak_dbfs,
-            fresh.bands_db,
-            fresh.bar_dbfs,
-        )
-
-
-def test_kept_section_json_cannot_change_the_report(tmp_path: Path) -> None:
-    section = FakeSection("tempo", {"beats": [1, 2]})
-    setup = Setup(tmp_path, [section])
-    report = setup.analyze()
-
-    data = section.track(section.seen[0]).data.value()
-    assert isinstance(data, dict)
-    data["beats"] = []
-
-    assert report.nodes[0].sections["tempo"] == SectionData(1, Json.of({"beats": [1, 2]}), ())
 
 
 def test_report_nodes_stay_aligned_with_the_graph(tmp_path: Path) -> None:

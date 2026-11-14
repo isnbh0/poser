@@ -14,13 +14,13 @@ from typing import Protocol, cast, runtime_checkable
 
 from poser.core.audio import Audio
 from poser.core.cache import Stamp, StampProblem
-from poser.core.graph import DelayNode, EffectNode, Graph, GraphNode, TrackNode, Wire
+from poser.core.graph import Graph, Wire
 from poser.core.jsonvalue import Json
 from poser.core.names import Identifier, NodeName, SongId, Suffix
 from poser.core.performance import Performance, PitchSupport
 from poser.core.piano_roll import PianoRoll
 from poser.core.reading import Reading, ReadingValue, Rejected, ScoreRequest
-from poser.core.report import Levels, Measurements
+from poser.core.report import Levels
 from poser.core.song import Song, is_int, is_number
 from poser.core.sounds import SoundEntry, SoundRef
 from poser.core.statuses import CORE_RENDER_FAILURES, RenderFailureStatus, SoundFailureStatus
@@ -169,7 +169,11 @@ class Guided(Protocol):
 
 @runtime_checkable
 class AdviceProvider(Protocol):
-    """Optional creative/workflow coaching, separate from required legacy Guided.guide."""
+    """An adapter that adds optional creative or workflow coaching to the workspace guide.
+
+    Advice is separate from `Guided.guide`, the required reference, and appears only when
+    `[guidance] advice` is enabled.
+    """
 
     @property
     def advice(self) -> str:
@@ -683,64 +687,6 @@ class Visualizer(Protocol):
         ...
 
 
-@dataclass(frozen=True)
-class SectionInput:
-    """What a report section sees for one node or the mix."""
-
-    song: Graph
-    node: GraphNode | None  # None for the mix.
-    audio: Audio  # The node's stem before gain, or the mix.
-    measurements: Measurements
-
-    def __post_init__(self) -> None:
-        _require("SectionInput", "song", self.song, Graph)
-        if self.node is not None:
-            _require("SectionInput", "node", self.node, (TrackNode, EffectNode, DelayNode))
-        _require("SectionInput", "audio", self.audio, Audio)
-        _require("SectionInput", "measurements", self.measurements, Measurements)
-
-
-@dataclass(frozen=True)
-class SectionResult:
-    """What a report section found for one track or the mix."""
-
-    data: Json
-    defects: tuple[Identifier, ...] = ()  # Any defect fails the analysis.
-
-    def __post_init__(self) -> None:
-        _require("SectionResult", "data", self.data, Json)
-        defects = _tuple_of("SectionResult", "defects", self.defects, Identifier)
-        object.__setattr__(self, "defects", defects)
-
-
-@runtime_checkable
-class ReportSection(Protocol):
-    """A named, versioned addition to every track's and the mix's report."""
-
-    @property
-    def name(self) -> Identifier:
-        """The key under `sections`."""
-        ...
-
-    @property
-    def version(self) -> int:
-        """Positive; raised when the section's data changes meaning."""
-        ...
-
-    @property
-    def guide(self) -> str:
-        """Describes the data and defects; makes every section Guided."""
-        ...
-
-    def track(self, request: SectionInput) -> SectionResult:
-        """Analyze one node's stem, before gain."""
-        ...
-
-    def mix(self, request: SectionInput) -> SectionResult:
-        """Analyze the mix."""
-        ...
-
-
 # Framework readings
 
 
@@ -792,17 +738,6 @@ class Vocabulary(Protocol):
 
 
 # Verified delivery publication
-
-
-@runtime_checkable
-class ProtectedRenderRoots(Protocol):
-    """Optional promise: all store writes and cleanup stay within these resolved roots.
-
-    The promise covers this configured store's lifetime, including previews and analysis.
-    The method may inspect files; construction must not.
-    """
-
-    def protected_roots(self) -> tuple[Path, ...]: ...
 
 
 @runtime_checkable
@@ -919,4 +854,12 @@ class RenderStore(Protocol):
 
     def preview_path(self, instrument: Identifier, name: Identifier) -> Path:
         """Where a saved sound's preview goes. Parent exists on return."""
+        ...
+
+    def protected_roots(self) -> tuple[Path, ...]:
+        """The resolved roots that hold every store write and cleanup.
+
+        The promise covers this store's lifetime, including previews and analysis. The method may
+        inspect files; construction must not.
+        """
         ...

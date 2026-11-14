@@ -1,13 +1,18 @@
 """The composition root: builds a workspace's adapters from its `poser.toml`.
 
 This is the only module that knows which adapters exist. It names poser's own adapters by import
-path in `BUILTINS`, so importing it loads no adapter library, and building imports only the
-adapters a command uses. A workspace selects any other adapter by import path, `module:attribute`,
-naming a factory:
+path, so importing it loads no adapter library, and building imports only the adapters a command
+uses.
+
+A workspace configures what it can vary: its instruments and effects, and the `[adapters]` lists
+`song_formats`, `frameworks`, and `vocabularies`. Each names a built-in in `BUILTINS` or any
+other adapter by import path, `module:attribute`, naming a factory:
 
 - an instrument's or effect's factory takes `(name, options, context)`;
-- the render store's takes `(options, context, stem_suffix)`;
-- every other one takes `(options, context)`.
+- a song format's, framework's, or vocabulary's takes `(options, context)`.
+
+The record writer, audio files, render store, mixer, measurer, visualizer, and piano-roll drawer
+have one implementation each. They are fixed parts, built from the import paths in `FIXED`.
 
 A factory raises ConfigError for options it cannot use; any other exception is a bug in the
 adapter and propagates. Building an adapter loads no plugin, starts no process, writes no file,
@@ -26,7 +31,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import MappingProxyType
-from typing import cast, get_protocol_members
+from typing import Protocol, cast, get_protocol_members
 
 from poser.adapters.loading import load_object
 from poser.core.analysis import AnalysisTools
@@ -49,7 +54,6 @@ from poser.core.ports import (
     PianoRollDrawer,
     RecordWriter,
     RenderStore,
-    ReportSection,
     SongFormat,
     Visualizer,
     Vocabulary,
@@ -70,6 +74,7 @@ INSTRUMENT = "instrument"
 EFFECT = "effect"
 # Marks a member an adapter does not have, which no real member value can be.
 _ABSENT = object()
+_NO_BUILTINS: Mapping[str, str] = MappingProxyType[str, str]({})
 BUILTINS: Mapping[str, Mapping[str, str]] = MappingProxyType(
     {
         INSTRUMENT: MappingProxyType({"pedalboard": "poser.adapters.pedalboard.instrument:create"}),
@@ -82,13 +87,6 @@ BUILTINS: Mapping[str, Mapping[str, str]] = MappingProxyType(
                 "script": "poser.adapters.song_formats:create_script",
             }
         ),
-        "record_writer": MappingProxyType({"yaml": "poser.adapters.song_formats:create_yaml"}),
-        "audio_files": MappingProxyType({"wav": "poser.adapters.wav:create"}),
-        "render_store": MappingProxyType({"files": "poser.adapters.filestore:create"}),
-        "mixer": MappingProxyType({"gain": "poser.adapters.mixing:create"}),
-        "measurer": MappingProxyType({"standard": "poser.adapters.measuring:create"}),
-        "visualizer": MappingProxyType({"spectrogram": "poser.adapters.spectrogram:create"}),
-        "sections": MappingProxyType[str, str]({}),
         "frameworks": MappingProxyType({"tonal": "poser.adapters.tonal:create_tonal"}),
         "vocabularies": MappingProxyType(
             {
@@ -96,22 +94,24 @@ BUILTINS: Mapping[str, Mapping[str, str]] = MappingProxyType(
                 "key": "poser.adapters.tonal:create_key",
             }
         ),
-        "piano_roll_drawer": MappingProxyType[str, str]({}),
     }
 )
-# Each `[adapters]` key and its default, in the order `guide_parts` follows. A tuple is a list key.
-DEFAULTS: Mapping[str, str | tuple[str, ...]] = MappingProxyType(
+# The parts with one implementation each, by import path; no `poser.toml` key selects them. The
+# render store's factory takes `(options, context, stem_suffix)`, every other one
+# `(options, context)`.
+FIXED: Mapping[str, str] = MappingProxyType(
     {
-        "song_formats": ("yaml", "script"),
-        "record_writer": "yaml",
-        "audio_files": "wav",
-        "render_store": "files",
-        "mixer": "gain",
-        "measurer": "standard",
-        "visualizer": "spectrogram",
-        "sections": (),
+        "record_writer": "poser.adapters.song_formats:create_yaml",
+        "audio_files": "poser.adapters.wav:create",
+        "render_store": "poser.adapters.filestore:create",
+        "mixer": "poser.adapters.mixing:create",
+        "measurer": "poser.adapters.measuring:create",
+        "visualizer": "poser.adapters.spectrogram:create",
+        "piano_roll_drawer": "poser.adapters.piano_roll:build_piano_roll_drawer",
     }
 )
+SONG_FORMATS = "song_formats"
+DEFAULT_SONG_FORMATS = ("yaml", "script")
 FRAMEWORKS = "frameworks"
 VOCABULARIES = "vocabularies"
 # The list keys a preset fills, each with the singular its messages use.
@@ -129,8 +129,6 @@ PRESETS: Mapping[str, Mapping[str, tuple[str, ...]]] = MappingProxyType(
     }
 )
 DEFAULT_PRESET = "western"
-# List keys that cannot be empty: a workspace with no song format can load no song.
-NON_EMPTY_LISTS = frozenset({"song_formats"})
 TOP_LEVEL_KEYS = frozenset({"instruments", "effects", "adapters", "guidance"})
 ADAPTER_KEY = "adapter"  # An instrument table's spelling of `use`.
 UPGRADING_URL = "https://github.com/isnbh0/poser/blob/main/docs/upgrading.md"
@@ -138,6 +136,23 @@ GUIDE_KEY = "guide"  # An instrument table's note for the guide; compose's, not 
 USE_KEY = "use"
 _NAME = r"[A-Za-z_][A-Za-z0-9_]*"
 IMPORT_PATH = re.compile(rf"{_NAME}(\.{_NAME})*:{_NAME}(\.{_NAME})*")
+
+
+class _Recipe(Protocol):
+    """What the instrument and effect builders check on what they build."""
+
+    @property
+    def adapter_id(self) -> Identifier: ...
+
+    @property
+    def adapter_version(self) -> str: ...
+
+
+class _Named(Protocol):
+    """What the framework and vocabulary builders check on what they build."""
+
+    @property
+    def name(self) -> Identifier: ...
 
 
 def _read_only(options: Mapping[str, JsonValue]) -> Mapping[str, JsonValue]:
@@ -178,8 +193,8 @@ class WorkspaceConfig:
     path: Path
     instruments: tuple[InstrumentSpec, ...]
     effects: tuple[EffectSpec, ...]
-    # Every `[adapters]` key, with defaults filled in; list keys hold tuples.
-    adapters: Mapping[str, AdapterSpec | tuple[AdapterSpec, ...]]
+    # Every `[adapters]` list, with defaults filled in.
+    adapters: Mapping[str, tuple[AdapterSpec, ...]]
     guidance: GuidanceConfig = field(default_factory=GuidanceConfig)
     # The preset `[adapters] frameworks` names, or None for an explicit list.
     preset: str | None = None
@@ -285,7 +300,7 @@ def _effects(path: Path, value: object) -> tuple[EffectSpec, ...]:
 
 def _preset_list(path: Path, key: str, raw: object) -> tuple[tuple[AdapterSpec, ...], str | None]:
     """Read `[adapters] frameworks` or `vocabularies`: a preset name, or a list of specs like
-    `sections`."""
+    `song_formats`."""
     where = f"adapters.{key}"
     if isinstance(raw, str):
         if raw not in PRESETS:
@@ -304,29 +319,27 @@ def _preset_list(path: Path, key: str, raw: object) -> tuple[tuple[AdapterSpec, 
 
 def _adapters(
     path: Path, value: object
-) -> tuple[dict[str, AdapterSpec | tuple[AdapterSpec, ...]], dict[str, str | None]]:
-    """Read `[adapters]`: every key's specs, and the preset each preset key names, if any."""
+) -> tuple[dict[str, tuple[AdapterSpec, ...]], dict[str, str | None]]:
+    """Read `[adapters]`: every list's specs, and the preset each preset key names, if any."""
     table = _table(value)
     if table is None:
         raise ConfigError(f"{path}: adapters: must be a table")
     for key in table:
-        if key not in DEFAULTS and key not in PRESET_KEYS:
+        if key != SONG_FORMATS and key not in PRESET_KEYS:
             raise ConfigError(f"{path}: adapters.{key}: unknown key")
-    adapters: dict[str, AdapterSpec | tuple[AdapterSpec, ...]] = {}
-    for key, default in DEFAULTS.items():
-        where = f"adapters.{key}"
-        raw = table.get(key, list(default) if isinstance(default, tuple) else default)
-        if isinstance(default, tuple):
-            if not isinstance(raw, list):
-                raise ConfigError(f"{path}: {where}: must be a list")
-            items = cast("list[object]", raw)
-            if not items and key in NON_EMPTY_LISTS:
-                raise ConfigError(f"{path}: {where}: must name at least one adapter")
-            adapters[key] = tuple(
-                _spec(path, f"{where}[{index}]", key, item) for index, item in enumerate(items)
-            )
-        else:
-            adapters[key] = _spec(path, where, key, raw)
+    where = f"adapters.{SONG_FORMATS}"
+    raw = table.get(SONG_FORMATS, list(DEFAULT_SONG_FORMATS))
+    if not isinstance(raw, list):
+        raise ConfigError(f"{path}: {where}: must be a list")
+    items = cast("list[object]", raw)
+    # A workspace with no song format can load no song.
+    if not items:
+        raise ConfigError(f"{path}: {where}: must name at least one adapter")
+    adapters = {
+        SONG_FORMATS: tuple(
+            _spec(path, f"{where}[{index}]", SONG_FORMATS, item) for index, item in enumerate(items)
+        )
+    }
     presets: dict[str, str | None] = {}
     for key in PRESET_KEYS:
         adapters[key], presets[key] = _preset_list(path, key, table.get(key, DEFAULT_PRESET))
@@ -411,24 +424,25 @@ class Composition:
     def _make[T](
         self,
         where: str,
-        key: str,
-        spec: AdapterSpec,
+        use: str,
         port: type[T],
         *args: object,
+        builtins: Mapping[str, str] = _NO_BUILTINS,
         owner: str | None = None,
     ) -> T:
-        """Build one adapter, naming `where` in any ConfigError.
+        """Build one adapter from `use`, a name in `builtins` or an import path, naming `where` in
+        any ConfigError.
 
         A factory's error that starts with `owner`, such as `instrument 'serum': `, drops it, so
         the message names the instrument once.
         """
-        target = BUILTINS[key].get(spec.use, spec.use)
+        target = builtins.get(use, use)
         try:
             factory = load_object(target)
         except ConfigError as error:
             raise self._fail(where, str(error)) from error
         if not callable(factory):
-            raise self._fail(where, f"{spec.use!r} is not a factory")
+            raise self._fail(where, f"{use!r} is not a factory")
         try:
             made = factory(*args)
         except ConfigError as error:
@@ -452,104 +466,74 @@ class Composition:
             article = "an" if port.__name__[0] in "AEIOU" else "a"
             raise self._fail(
                 where,
-                f"{spec.use!r} made a {type(made).__name__}, which is not {article} "
+                f"{use!r} made a {type(made).__name__}, which is not {article} "
                 f"{port.__name__}{reason}",
             )
         return made
 
+    def _configured[T](self, where: str, key: str, spec: AdapterSpec, port: type[T]) -> T:
+        """Build a configured list entry, by built-in name or import path."""
+        return self._make(
+            where, spec.use, port, _read_only(spec.options), self._context, builtins=BUILTINS[key]
+        )
+
+    def _fixed[T](self, key: str, port: type[T], *extra: object) -> T:
+        """Build a fixed part from its `FIXED` import path, with empty options, once."""
+        return self._cached(
+            key, lambda: self._make(key, FIXED[key], port, _read_only({}), self._context, *extra)
+        )
+
     def _suffix(self, where: str, name: str, value: object) -> None:
         if not isinstance(value, Suffix):
             raise self._fail(where, f"{name} {value!r} is not a Suffix")
-
-    def _single(self, key: str) -> AdapterSpec:
-        return cast("AdapterSpec", self._config.adapters[key])
-
-    def _listed(self, key: str) -> tuple[AdapterSpec, ...]:
-        return cast("tuple[AdapterSpec, ...]", self._config.adapters[key])
 
     def _cached[T](self, key: str, build: Callable[[], T]) -> T:
         if key not in self._built:
             self._built[key] = build()
         return cast("T", self._built[key])
 
-    def _options(self, spec: AdapterSpec) -> Mapping[str, JsonValue]:
-        return _read_only(spec.options)
+    def _recipes[T: _Recipe](
+        self, kind: str, items: Sequence[InstrumentSpec | EffectSpec], port: type[T]
+    ) -> Mapping[Identifier, T]:
+        """Build every instrument or effect, by name, in config order."""
+        built: dict[Identifier, T] = {}
+        for item in items:
+            where = f"{kind}s.{item.name}"
+            made = self._make(
+                where,
+                item.spec.use,
+                port,
+                item.name,
+                _read_only(item.spec.options),
+                self._context,
+                builtins=BUILTINS[kind],
+                owner=f"{kind} {item.name!r}",
+            )
+            if not isinstance(made.adapter_id, Identifier):
+                raise self._fail(where, f"adapter_id {made.adapter_id!r} is not an Identifier")
+            version = made.adapter_version
+            if not (isinstance(version, str) and version):
+                raise self._fail(where, f"adapter_version {version!r} is not a non-empty str")
+            built[item.name] = made
+        return MappingProxyType(built)
 
     def instruments(self) -> Mapping[Identifier, Instrument]:
         """Every instrument, by name, in config order."""
-
-        def build() -> Mapping[Identifier, Instrument]:
-            built: dict[Identifier, Instrument] = {}
-            for item in self._config.instruments:
-                where = f"instruments.{item.name}"
-                spec = item.spec
-                options = self._options(spec)
-                instrument = self._make(
-                    where,
-                    INSTRUMENT,
-                    spec,
-                    Instrument,
-                    item.name,
-                    options,
-                    self._context,
-                    owner=f"instrument {item.name!r}",
-                )
-                if not isinstance(instrument.adapter_id, Identifier):
-                    raise self._fail(
-                        where, f"adapter_id {instrument.adapter_id!r} is not an Identifier"
-                    )
-                version = instrument.adapter_version
-                if not (isinstance(version, str) and version):
-                    raise self._fail(where, f"adapter_version {version!r} is not a non-empty str")
-                built[item.name] = instrument
-            return MappingProxyType(built)
-
-        return self._cached("instruments", build)
+        return self._cached(
+            "instruments", lambda: self._recipes(INSTRUMENT, self._config.instruments, Instrument)
+        )
 
     def effects(self) -> Mapping[Identifier, Effect]:
         """Every effect recipe, by name, in config order."""
-
-        def build() -> Mapping[Identifier, Effect]:
-            built: dict[Identifier, Effect] = {}
-            for item in self._config.effects:
-                where = f"effects.{item.name}"
-                spec = item.spec
-                options = self._options(spec)
-                effect = self._make(
-                    where,
-                    EFFECT,
-                    spec,
-                    Effect,
-                    item.name,
-                    options,
-                    self._context,
-                    owner=f"effect {item.name!r}",
-                )
-                if not isinstance(effect.adapter_id, Identifier):
-                    raise self._fail(
-                        where, f"adapter_id {effect.adapter_id!r} is not an Identifier"
-                    )
-                version = effect.adapter_version
-                if not (isinstance(version, str) and version):
-                    raise self._fail(where, f"adapter_version {version!r} is not a non-empty str")
-                built[item.name] = effect
-            return MappingProxyType(built)
-
-        return self._cached("effects", build)
-
-    def _plain[T](self, key: str, port: type[T]) -> T:
-        spec = self._single(key)
-        return self._make(f"adapters.{key}", key, spec, port, self._options(spec), self._context)
+        return self._cached("effects", lambda: self._recipes(EFFECT, self._config.effects, Effect))
 
     def song_formats(self) -> tuple[SongFormat, ...]:
         def build() -> tuple[SongFormat, ...]:
             built: list[SongFormat] = []
             claimed: dict[Suffix, str] = {}
-            for index, spec in enumerate(self._listed("song_formats")):
-                where = f"adapters.song_formats[{index}]"
-                fmt = self._make(
-                    where, "song_formats", spec, SongFormat, self._options(spec), self._context
-                )
+            for index, spec in enumerate(self._config.adapters[SONG_FORMATS]):
+                where = f"adapters.{SONG_FORMATS}[{index}]"
+                fmt = self._configured(where, SONG_FORMATS, spec, SongFormat)
                 suffixes = fmt.suffixes
                 if not isinstance(suffixes, Sequence) or isinstance(suffixes, str):
                     raise self._fail(where, f"suffixes {suffixes!r} is not a tuple of Suffix")
@@ -558,152 +542,77 @@ class Composition:
                     owner = claimed.get(cast("Suffix", suffix))
                     if owner is not None:
                         raise self._fail(
-                            "adapters.song_formats",
+                            f"adapters.{SONG_FORMATS}",
                             f"{suffix!r} is read by both {owner!r} and {spec.use!r}",
                         )
                     claimed[cast("Suffix", suffix)] = spec.use
                 built.append(fmt)
             return tuple(built)
 
-        return self._cached("song_formats", build)
+        return self._cached(SONG_FORMATS, build)
 
-    def piano_roll_drawer(self) -> PianoRollDrawer:
-        """The fixed PNG capability; deliberately not a configurable adapter key."""
-        spec = AdapterSpec("poser.adapters.piano_roll:build_piano_roll_drawer")
-        return self._cached(
-            "piano_roll_drawer",
-            lambda: self._make(
-                "piano_roll_drawer",
-                "piano_roll_drawer",
-                spec,
-                PianoRollDrawer,
-                self._options(spec),
-                self._context,
-            ),
-        )
+    def _named[T: _Named](
+        self, key: str, noun: str, port: type[T], check: Callable[[str, Identifier], None]
+    ) -> tuple[T, ...]:
+        """Build a framework or vocabulary list in configured order, with unique names that pass
+        `check(where, name)`."""
+        built: list[T] = []
+        names: set[Identifier] = set()
+        for index, spec in enumerate(self._config.adapters[key]):
+            where = f"adapters.{key}[{index}]"
+            made = self._configured(where, key, spec, port)
+            name = made.name
+            if not isinstance(name, Identifier):
+                raise self._fail(where, f"name {name!r} is not an Identifier")
+            check(where, name)
+            if name in names:
+                raise self._fail(f"adapters.{key}", f"two {noun} are named {name!r}")
+            names.add(name)
+            built.append(made)
+        return tuple(built)
 
-    def record_writer(self) -> RecordWriter:
-        def build() -> RecordWriter:
-            writer = self._plain("record_writer", RecordWriter)
-            self._suffix("adapters.record_writer", "suffix", writer.suffix)
-            return writer
-
-        return self._cached("record_writer", build)
-
-    def audio_files(self) -> AudioFiles:
-        def build() -> AudioFiles:
-            files = self._plain("audio_files", AudioFiles)
-            self._suffix("adapters.audio_files", "suffix", files.suffix)
-            return files
-
-        return self._cached("audio_files", build)
-
-    def render_store(self) -> RenderStore:
-        def build() -> RenderStore:
-            stem_suffix = self.audio_files().suffix
-            spec = self._single("render_store")
-            where = "adapters.render_store"
-            store = self._make(
+    def _layer_name(self, where: str, name: Identifier) -> None:
+        if not LAYER_PATTERN.fullmatch(name):
+            raise self._fail(
                 where,
-                "render_store",
-                spec,
-                RenderStore,
-                self._options(spec),
-                self._context,
-                stem_suffix,
+                f"name {name!r} is not a layer name: lowercase letters, digits, _ and -, "
+                "starting with a letter or digit",
             )
-            self._suffix(where, "stem_suffix", store.stem_suffix)
-            return store
-
-        return self._cached("render_store", build)
-
-    def mixer(self) -> Mixer:
-        return self._cached("mixer", lambda: self._plain("mixer", Mixer))
-
-    def measurer(self) -> Measurer:
-        return self._cached("measurer", lambda: self._plain("measurer", Measurer))
-
-    def visualizer(self) -> Visualizer:
-        def build() -> Visualizer:
-            visualizer = self._plain("visualizer", Visualizer)
-            self._suffix("adapters.visualizer", "suffix", visualizer.suffix)
-            return visualizer
-
-        return self._cached("visualizer", build)
-
-    def sections(self) -> tuple[ReportSection, ...]:
-        def build() -> tuple[ReportSection, ...]:
-            built: list[ReportSection] = []
-            names: set[Identifier] = set()
-            for index, spec in enumerate(self._listed("sections")):
-                where = f"adapters.sections[{index}]"
-                section = self._make(
-                    where, "sections", spec, ReportSection, self._options(spec), self._context
-                )
-                name, version = section.name, section.version
-                if not isinstance(name, Identifier):
-                    raise self._fail(where, f"name {name!r} is not an Identifier")
-                if isinstance(version, bool) or not isinstance(version, int) or version < 1:
-                    raise self._fail(where, f"version {version!r} is not a positive int")
-                if name in names:
-                    raise self._fail("adapters.sections", f"two sections are named {name!r}")
-                names.add(name)
-                built.append(section)
-            return tuple(built)
-
-        return self._cached("sections", build)
 
     def frameworks(self) -> tuple[Framework, ...]:
         """Every configured framework, in configured order."""
-
-        def build() -> tuple[Framework, ...]:
-            built: list[Framework] = []
-            names: set[Identifier] = set()
-            for index, spec in enumerate(self._listed(FRAMEWORKS)):
-                where = f"adapters.{FRAMEWORKS}[{index}]"
-                framework = self._make(
-                    where, FRAMEWORKS, spec, Framework, self._options(spec), self._context
-                )
-                name = framework.name
-                if not isinstance(name, Identifier):
-                    raise self._fail(where, f"name {name!r} is not an Identifier")
-                if name in names:
-                    raise self._fail(f"adapters.{FRAMEWORKS}", f"two frameworks are named {name!r}")
-                names.add(name)
-                built.append(framework)
-            return tuple(built)
-
-        return self._cached(FRAMEWORKS, build)
+        return self._cached(
+            FRAMEWORKS,
+            lambda: self._named(FRAMEWORKS, "frameworks", Framework, lambda _where, _name: None),
+        )
 
     def vocabularies(self) -> tuple[Vocabulary, ...]:
         """Every configured vocabulary, in configured order."""
+        return self._cached(
+            VOCABULARIES,
+            lambda: self._named(VOCABULARIES, "vocabularies", Vocabulary, self._layer_name),
+        )
 
-        def build() -> tuple[Vocabulary, ...]:
-            built: list[Vocabulary] = []
-            names: set[str] = set()
-            for index, spec in enumerate(self._listed(VOCABULARIES)):
-                where = f"adapters.{VOCABULARIES}[{index}]"
-                vocabulary = self._make(
-                    where, VOCABULARIES, spec, Vocabulary, self._options(spec), self._context
-                )
-                name = vocabulary.name
-                if not isinstance(name, Identifier):
-                    raise self._fail(where, f"name {name!r} is not an Identifier")
-                if not LAYER_PATTERN.fullmatch(name):
-                    raise self._fail(
-                        where,
-                        f"name {name!r} is not a layer name: lowercase letters, digits, _ and -, "
-                        "starting with a letter or digit",
-                    )
-                if name in names:
-                    raise self._fail(
-                        f"adapters.{VOCABULARIES}", f"two vocabularies are named {name!r}"
-                    )
-                names.add(name)
-                built.append(vocabulary)
-            return tuple(built)
+    def piano_roll_drawer(self) -> PianoRollDrawer:
+        return self._fixed("piano_roll_drawer", PianoRollDrawer)
 
-        return self._cached(VOCABULARIES, build)
+    def record_writer(self) -> RecordWriter:
+        return self._fixed("record_writer", RecordWriter)
+
+    def audio_files(self) -> AudioFiles:
+        return self._fixed("audio_files", AudioFiles)
+
+    def render_store(self) -> RenderStore:
+        return self._fixed("render_store", RenderStore, self.audio_files().suffix)
+
+    def mixer(self) -> Mixer:
+        return self._fixed("mixer", Mixer)
+
+    def measurer(self) -> Measurer:
+        return self._fixed("measurer", Measurer)
+
+    def visualizer(self) -> Visualizer:
+        return self._fixed("visualizer", Visualizer)
 
     def framework_listing(self) -> FrameworkListing:
         """The presets and the configured frameworks' and vocabularies' names, for the generated
@@ -723,9 +632,7 @@ class Composition:
     def analysis_tools(self) -> AnalysisTools:
         return self._cached(
             "analysis_tools",
-            lambda: AnalysisTools(
-                self.mixer(), self.measurer(), self.visualizer(), self.sections()
-            ),
+            lambda: AnalysisTools(self.mixer(), self.measurer(), self.visualizer()),
         )
 
     def instrument_notes(self) -> tuple[InstrumentNote, ...]:
@@ -735,10 +642,6 @@ class Composition:
             for item in self._config.instruments
         )
 
-    def guide_parts(self) -> tuple[str, ...]:
-        """Legacy required-reference parts; optional advice is never included."""
-        return tuple(block.text for block in self.guide_blocks() if not block.advice)
-
     def guide_blocks(self) -> tuple[GuideBlock, ...]:
         """Collect explicitly classified package-only adapter content in guide order."""
         adapters: list[tuple[str, object]] = [
@@ -747,14 +650,13 @@ class Composition:
         adapters += [(f"effects.{name}", effect) for name, effect in self.effects().items()]
         adapters += [(f"adapters.song_formats[{i}]", f) for i, f in enumerate(self.song_formats())]
         adapters += [
-            ("adapters.record_writer", self.record_writer()),
-            ("adapters.audio_files", self.audio_files()),
-            ("adapters.render_store", self.render_store()),
-            ("adapters.mixer", self.mixer()),
-            ("adapters.measurer", self.measurer()),
-            ("adapters.visualizer", self.visualizer()),
+            ("record_writer", self.record_writer()),
+            ("audio_files", self.audio_files()),
+            ("render_store", self.render_store()),
+            ("mixer", self.mixer()),
+            ("measurer", self.measurer()),
+            ("visualizer", self.visualizer()),
         ]
-        adapters += [(f"adapters.sections[{i}]", s) for i, s in enumerate(self.sections())]
         adapters += [(f"adapters.{FRAMEWORKS}[{i}]", f) for i, f in enumerate(self.frameworks())]
         adapters += [
             (f"adapters.{VOCABULARIES}[{i}]", v) for i, v in enumerate(self.vocabularies())

@@ -8,9 +8,8 @@ failed one; the latest results are written only when every node analyzed.
 import hashlib
 import json
 import math
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
-from typing import cast
 
 import numpy as np
 
@@ -37,9 +36,6 @@ from poser.core.ports import (
     MixInput,
     RecordWriter,
     RenderStore,
-    ReportSection,
-    SectionInput,
-    SectionResult,
     SongStore,
     Visualizer,
 )
@@ -52,9 +48,6 @@ from poser.core.report import (
     MixReport,
     NodeReport,
     Report,
-    SectionData,
-    SectionError,
-    SectionReport,
     bar_dbfs,
     mix_defects,
     report_to_data,
@@ -87,23 +80,6 @@ class AnalysisTools:
     mixer: Mixer
     measurer: Measurer
     visualizer: Visualizer
-    sections: tuple[ReportSection, ...] = ()
-
-    def __post_init__(self) -> None:
-        sections = self.sections
-        if not isinstance(sections, Sequence) or isinstance(sections, str):
-            raise ValueError(f"AnalysisTools.sections must be a sequence, got {sections!r}")
-        sections = tuple(cast("Sequence[object]", sections))
-        names: set[str] = set()
-        for section in sections:
-            if not isinstance(section, ReportSection):
-                raise ValueError(f"AnalysisTools.sections must hold sections, got {section!r}")
-            if not isinstance(section.name, Identifier):
-                raise ValueError(f"a section's name must be an Identifier, got {section.name!r}")
-            if section.name in names:
-                raise ValueError(f"two report sections are named {section.name!r}")
-            names.add(section.name)
-        object.__setattr__(self, "sections", sections)
 
 
 class StaleStemError(Exception):
@@ -241,7 +217,6 @@ def _analyze(
             continue
         audio = stems[name]
         measurements = measure(audio, graph, tools.measurer)
-        sections = _sections(tools.sections, SectionInput(graph, node, audio, measurements))
         image = None
         if complete:
             image = store.image_path(name, suffix)
@@ -262,7 +237,6 @@ def _analyze(
                 bar_dbfs=measurements.bar_dbfs,
                 spectrogram=None if image is None else str(image),
                 defects=tuple(silent_defects(measurements)),
-                sections=sections,
             )
         )
 
@@ -289,7 +263,6 @@ def _analyze(
             bar_dbfs=measurements.bar_dbfs,
             spectrogram=str(mix_image),
             defects=tuple(mix_defects(measurements)),
-            sections=_sections(tools.sections, SectionInput(graph, None, mixed, measurements)),
         )
 
     report = Report(
@@ -322,21 +295,3 @@ def _leaves(graph: Graph) -> tuple[GraphNode, ...]:
     `gain_db`. Without wires, every node is a leaf, so the mix is the song's stems as before."""
     fed = {wire.from_name for wire in graph.wires}
     return tuple(node for node in graph.nodes if node.name not in fed)
-
-
-def _sections(
-    sections: Sequence[ReportSection], request: SectionInput
-) -> Mapping[str, SectionReport]:
-    """Run every section in order on one track or the mix, recording each failure as its error."""
-    return {section.name: _section(section, request) for section in sections}
-
-
-def _section(section: ReportSection, request: SectionInput) -> SectionReport:
-    version = section.version
-    try:
-        result = section.mix(request) if request.node is None else section.track(request)
-        if not isinstance(result, SectionResult):
-            raise TypeError(f"returned {type(result).__name__}, not a SectionResult")  # noqa: TRY301
-    except Exception as error:  # noqa: BLE001 -- a section's failure is reported, not raised.
-        return SectionError(version, f"{type(error).__name__}: {error}")
-    return SectionData(version, result.data, result.defects)

@@ -1,7 +1,7 @@
 """Verified delivery: captured inputs, one loaded song, one lock, one publication.
 
 Hashes bind declared bytes, not arbitrary Python external state or plugin determinism.
-Only schema-owned artifact locations are portable; section payloads remain opaque.
+Only schema-owned artifact locations are portable.
 """
 
 import hashlib
@@ -20,7 +20,6 @@ from poser.core.ports import (
     DeliveryWriter,
     Effect,
     Instrument,
-    ProtectedRenderRoots,
     RecordWriter,
     RenderStore,
     SongBusyError,
@@ -118,8 +117,6 @@ def capture_inputs(
     for parent in destination.parents:
         if parent.exists() and not parent.is_dir():
             raise DestinationError(f"destination parent is not a directory: {parent}")
-    if not isinstance(renders, ProtectedRenderRoots):
-        raise ValueError("render store cannot establish protected filesystem roots")
     try:
         roots = renders.protected_roots()
         _validate_roots(roots, destination)
@@ -416,8 +413,6 @@ def _bundle(
         "poser_version": poser_version,
         "listening": "not_auditioned",
     }
-    if any(node.sections for node in report.nodes) or report.mix.sections:
-        manifest["section_payload_portability"] = "opaque_not_verified"
     files[Path("manifest.json")] = (json.dumps(manifest, indent=2, allow_nan=False) + "\n").encode()
     return files
 

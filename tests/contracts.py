@@ -19,7 +19,6 @@ from poser.core.audio import (
     TAIL_S,
     Audio,
     read_raw_audio,
-    stem_samples,
 )
 from poser.core.cache import Stamp, StampProblem
 from poser.core.graph import Graph
@@ -36,10 +35,7 @@ from poser.core.ports import (
     RecordWriter,
     RenderRequest,
     RenderStore,
-    ReportSection,
     ResolvedSound,
-    SectionInput,
-    SectionResult,
     SongBusyError,
     SongFormat,
     SongStore,
@@ -48,7 +44,7 @@ from poser.core.ports import (
     SoundListing,
     Visualizer,
 )
-from poser.core.report import BANDS, Levels, Measurements
+from poser.core.report import BANDS, Levels
 from poser.core.song import Note, Song, SongError, Track
 from poser.core.sounds import SoundRef
 from poser.core.statuses import SoundFailureStatus, StemStatus
@@ -417,22 +413,3 @@ def check_visualizer_contract(visualizer: object, tmp_path: Path) -> None:
     visualizer.draw(constant_audio(0.1), path, "contract")
     assert path.is_file(), "draw wrote no file"
     assert path.stat().st_size > 0, "draw wrote an empty file"
-
-
-def check_section_contract(section: object) -> None:
-    """Check a ReportSection: its metadata, and a result for a track and the mix."""
-    assert isinstance(section, ReportSection)
-    assert isinstance(section.name, Identifier)
-    assert isinstance(section.version, int)
-    assert section.version >= 1
-    assert section.guide.startswith("## ")
-    note = (Note(beat=0, pitch=60, length=1, velocity=100),)
-    song = Song(bpm=120, tracks=(Track("lead", "fake", note),))
-    measurements = Measurements(-20.0, -23.0, 0, dict.fromkeys(BANDS, -30.0), (-20.0,))
-    frames = stem_samples(song.graph())  # Analysis hands sections whole stems, tail included.
-    assert frames >= CONTRACT_FRAMES
-    audio = constant_audio(0.1, frames)
-    track = section.track(SectionInput(song.graph(), song.graph().nodes[0], audio, measurements))
-    assert isinstance(track, SectionResult), f"track returned a {type(track).__name__}"
-    mix = section.mix(SectionInput(song.graph(), None, audio, measurements))
-    assert isinstance(mix, SectionResult), f"mix returned a {type(mix).__name__}"

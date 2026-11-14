@@ -36,8 +36,6 @@ from poser.core.ports import (
     RenderRequest,
     ResolvedEffect,
     ResolvedSound,
-    SectionInput,
-    SectionResult,
     SongBusyError,
     SoundFailure,
     SoundListing,
@@ -584,6 +582,9 @@ class FakeRenderStore:
         path.parent.mkdir(parents=True, exist_ok=True)
         return path
 
+    def protected_roots(self) -> tuple[Path, ...]:
+        return (self.root.resolve(),)
+
 
 class NpyAudioFiles:
     """Audio files as raw audio, written through a temporary file."""
@@ -653,51 +654,6 @@ class FakeVisualizer:
             raise self.raises
         self.drawn.append((path, title))
         path.write_text(title, encoding="utf-8")
-
-
-class FakeSection:
-    """A report section returning fixed data and defects, or raising."""
-
-    def __init__(
-        self,
-        name: str,
-        data: JsonValue = None,
-        defects: Sequence[str] = (),
-        raises: Exception | None = None,
-        version: int = 1,
-    ) -> None:
-        self._name = Identifier(name)
-        self._data = Json.of(data)
-        self._defects = tuple(Identifier(defect) for defect in defects)
-        self._raises = raises
-        self._version = version
-        self.seen: list[SectionInput] = []
-        self.parts: list[str] = []  # "track" or "mix", for each call in turn.
-
-    @property
-    def name(self) -> Identifier:
-        return self._name
-
-    @property
-    def version(self) -> int:
-        return self._version
-
-    @property
-    def guide(self) -> str:
-        return f"## {self._name}\n\nA fake section.\n"
-
-    def _result(self, part: str, request: SectionInput) -> SectionResult:
-        self.parts.append(part)
-        self.seen.append(request)
-        if self._raises is not None:
-            raise self._raises
-        return SectionResult(self._data, self._defects)
-
-    def track(self, request: SectionInput) -> SectionResult:
-        return self._result("track", request)
-
-    def mix(self, request: SectionInput) -> SectionResult:
-        return self._result("mix", request)
 
 
 class FakeRecordWriter:

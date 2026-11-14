@@ -2,7 +2,7 @@
 
 import math
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import StrEnum
 from types import MappingProxyType
 from typing import cast
@@ -11,8 +11,7 @@ import numpy as np
 
 from poser.core.audio import SAMPLE_RATE, SILENCE_DBFS
 from poser.core.graph import NODE_KINDS, NodeKind
-from poser.core.jsonvalue import Json, JsonValue
-from poser.core.names import Identifier
+from poser.core.jsonvalue import JsonValue
 from poser.core.song import is_int, is_number
 
 MIX_NAME = "mix"
@@ -127,59 +126,6 @@ class Measurements:
         object.__setattr__(self, "bar_dbfs", _bars("Measurements", self.bar_dbfs))
 
 
-def _version(owner: str, value: object) -> None:
-    if not (is_int(value) and value >= 1):
-        raise ValueError(f"{owner}.version must be a positive integer, got {value!r}")
-
-
-@dataclass(frozen=True)
-class SectionData:
-    """A report section's result: its data, and the defects it found."""
-
-    version: int
-    data: Json
-    defects: tuple[Identifier, ...] = ()
-
-    def __post_init__(self) -> None:
-        _version("SectionData", self.version)
-        if not isinstance(self.data, Json):
-            raise ValueError(f"SectionData.data must be a Json, got {self.data!r}")
-        defects = _members("SectionData", "defects", self.defects, Identifier)
-        object.__setattr__(self, "defects", defects)
-
-
-@dataclass(frozen=True)
-class SectionError:
-    """A report section that failed, and why."""
-
-    version: int
-    error: str
-
-    def __post_init__(self) -> None:
-        _version("SectionError", self.version)
-        if not (isinstance(self.error, str) and self.error):
-            raise ValueError(f"SectionError.error must be non-empty text, got {self.error!r}")
-
-
-type SectionReport = SectionData | SectionError
-
-
-def _sections(owner: str, value: object) -> Mapping[str, SectionReport]:
-    if not isinstance(value, Mapping):
-        raise ValueError(f"{owner}.sections must be a mapping, got {value!r}")
-    sections = dict(cast("Mapping[object, object]", value))
-    for name, section in sections.items():
-        if not isinstance(name, Identifier):
-            raise ValueError(f"{owner}.sections keys must be Identifiers, got {name!r}")
-        if not isinstance(section, SectionData | SectionError):
-            raise ValueError(f"{owner}.sections[{name!r}] must be a section, got {section!r}")
-    return MappingProxyType(cast("dict[str, SectionReport]", sections))
-
-
-def _no_sections() -> Mapping[str, SectionReport]:
-    return MappingProxyType({})
-
-
 @dataclass(frozen=True)
 class NodeReport:
     """One node's analysis. The keys are the ones a fresh stem of the node would carry, so two
@@ -202,7 +148,6 @@ class NodeReport:
     spectrogram: str | None = None
     defects: tuple[Defect, ...] = ()
     detail: str | None = None
-    sections: Mapping[str, SectionReport] = field(default_factory=_no_sections)
 
     def __post_init__(self) -> None:
         if not isinstance(self.status, AnalysisStatus):
@@ -220,7 +165,6 @@ class NodeReport:
         defects = _members("NodeReport", "defects", self.defects, Defect)
         object.__setattr__(self, "defects", defects)
         object.__setattr__(self, "upstream", _members("NodeReport", "upstream", self.upstream, str))
-        object.__setattr__(self, "sections", _sections("NodeReport", self.sections))
 
 
 @dataclass(frozen=True)
@@ -233,7 +177,6 @@ class MixReport:
     bar_dbfs: tuple[float, ...]
     spectrogram: str
     defects: tuple[Defect, ...]
-    sections: Mapping[str, SectionReport] = field(default_factory=_no_sections)
 
     def __post_init__(self) -> None:
         _finite("MixReport", "peak_dbfs", self.peak_dbfs)
@@ -242,7 +185,6 @@ class MixReport:
         object.__setattr__(self, "bands_db", _bands("MixReport", self.bands_db))
         object.__setattr__(self, "bar_dbfs", _bars("MixReport", self.bar_dbfs))
         object.__setattr__(self, "defects", _members("MixReport", "defects", self.defects, Defect))
-        object.__setattr__(self, "sections", _sections("MixReport", self.sections))
 
 
 @dataclass(frozen=True)
@@ -268,22 +210,6 @@ class Report:
             raise ValueError(f"Report.mix must be a MixReport or None, got {self.mix!r}")
 
 
-def _section_to_data(section: SectionReport) -> JsonValue:
-    match section:
-        case SectionData():
-            return {
-                "version": section.version,
-                "data": section.data.value(),
-                "defects": [str(defect) for defect in section.defects],
-            }
-        case SectionError():
-            return {"version": section.version, "error": section.error}
-
-
-def _sections_to_data(sections: Mapping[str, SectionReport]) -> JsonValue:
-    return {str(name): _section_to_data(section) for name, section in sections.items()}
-
-
 def _node_to_data(node: NodeReport) -> JsonValue:
     return {
         "name": node.name,
@@ -301,7 +227,6 @@ def _node_to_data(node: NodeReport) -> JsonValue:
         "spectrogram": node.spectrogram,
         "defects": [str(defect) for defect in node.defects],
         "detail": node.detail,
-        "sections": _sections_to_data(node.sections),
     }
 
 
@@ -315,7 +240,6 @@ def _mix_to_data(mix: MixReport) -> JsonValue:
         "bar_dbfs": list(mix.bar_dbfs),
         "spectrogram": mix.spectrogram,
         "defects": [str(defect) for defect in mix.defects],
-        "sections": _sections_to_data(mix.sections),
     }
 
 
@@ -357,20 +281,9 @@ def mix_defects(measurements: Measurements) -> list[Defect]:
     return defects
 
 
-def _section_failed(section: SectionReport) -> bool:
-    return isinstance(section, SectionError) or bool(section.defects)
-
-
 def report_failed(report: Report) -> bool:
-    """Return whether the analysis failed: no mix, a node not analyzed, or any defect or section
-    error on a node or the mix."""
+    """Return whether the analysis failed: no mix, a node not analyzed, or any defect on a node
+    or the mix."""
     if report.mix is None or report.mix.defects:
         return True
-    if any(_section_failed(section) for section in report.mix.sections.values()):
-        return True
-    return any(
-        node.status is not AnalysisStatus.ANALYZED
-        or node.defects
-        or any(_section_failed(section) for section in node.sections.values())
-        for node in report.nodes
-    )
+    return any(node.status is not AnalysisStatus.ANALYZED or node.defects for node in report.nodes)

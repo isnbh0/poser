@@ -248,17 +248,10 @@ def test_bad_config_exits_2_before_any_work(
 # analyze-song
 
 
-ANALYSIS_ADAPTERS = """
-[adapters]
-mixer = "{module}:mixer"
-sections = [{{ use = "{module}:section", name = "probe" }}]
-"""
-
-
 def test_analyze_prints_the_report_and_keeps_a_record(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    workspace = make_workspace(tmp_path, monkeypatch, adapters=ANALYSIS_ADAPTERS)
+    workspace = make_workspace(tmp_path, monkeypatch)
     write_song(tmp_path / SONG, ("lead", "synth:lead"))
     render.main([SONG])
     capsys.readouterr()
@@ -269,9 +262,8 @@ def test_analyze_prints_the_report_and_keeps_a_record(
     assert report["song"] == "tune"
     assert report["run"] == 1
     (node,) = report["nodes"]
-    assert node["sections"] == {"probe": {"version": 1, "data": {"probe": True}, "defects": []}}
-    assert report["mix"]["sections"]["probe"]["defects"] == []
-    assert workspace.module.MIXES
+    assert node["status"] == "analyzed"
+    assert report["mix"] is not None
     assert (workspace.renders / SONG / "history" / "1").is_dir()
 
 
@@ -312,44 +304,6 @@ def test_missing_stem_fails_the_analysis(
     assert lines[1].split()[:2] == ["lead", "missing_stem"]
     assert lines[2].split() == ["[mix]", "not_written", "-", "-", "-", "-", "-"]
     assert len(lines) == 3
-
-
-def test_a_section_raising_on_the_mix_fails_the_analysis(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    adapters = """
-[adapters]
-sections = [{{ use = "{module}:section", name = "probe", raises_on = "mix" }}]
-"""
-    make_workspace(tmp_path, monkeypatch, adapters=adapters)
-    write_song(tmp_path / SONG, ("lead", "synth:lead"))
-    render.main([SONG])
-    capsys.readouterr()
-
-    assert analyze.main([SONG]) == EXIT_SOME_FAILED
-
-    lines = out(capsys).splitlines()
-    assert lines[1].split()[-1] == "-"
-    assert lines[2].split()[-1] == "-"
-    assert lines[3:] == ["mix: section probe: RuntimeError: no mix for probe"]
-
-
-def test_a_section_defect_on_a_track_is_a_detail(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    adapters = """
-[adapters]
-sections = [{{ use = "{module}:section", name = "probe", defects = ["harsh", "dull"] }}]
-"""
-    make_workspace(tmp_path, monkeypatch, adapters=adapters)
-    write_song(tmp_path / SONG, ("lead", "synth:lead"))
-    render.main([SONG])
-    capsys.readouterr()
-
-    assert analyze.main([SONG]) == EXIT_SOME_FAILED
-
-    lines = out(capsys).splitlines()
-    assert lines[3:] == ["lead: section probe: harsh, dull", "mix: section probe: harsh, dull"]
 
 
 # check-instruments

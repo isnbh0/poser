@@ -95,8 +95,7 @@ uv run export-song <song-path> --destination deliveries/first-song
 ```
 
 Use a new destination each time, and add `--include <source-relative-file>`, once per file, for
-each local Python file the song depends on. The mix is WAV unless `[adapters] audio_files`
-selects another format. If export fails, fix the reported problem and rerun export; don't hand
+each local Python file the song depends on. The mix is WAV. If export fails, fix the reported problem and rerun export; don't hand
 over an earlier mix.
 
 See the [export contract](#export-contract) for exit codes, manifest fields, and portability limits.
@@ -166,8 +165,6 @@ configuration, sounds, and output path options as `render-song` and `analyze-son
 - The manifest records configuration and `uv.lock` digests (or their absence), labeled by role
   for the source and configuration roots. They are a record, not a verification of the Python
   environment that ran export.
-- Section payloads are copied as opaque JSON with their embedded paths unchanged; when a bundle
-  has them, the manifest declares `section_payload_portability: "opaque_not_verified"`.
 - Export does not sandbox Python or detect undeclared imports or other external inputs; declare
   local source dependencies with `--include`.
 - Export renders the current source and never republishes an earlier render. To deliver an
