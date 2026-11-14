@@ -139,7 +139,7 @@ and images; otherwise it is `incomplete`, with no `mix` key. Every node has `nam
 |---|---|
 | `run` | This analysis's record number |
 | `song_sha256` | Digest of the loaded song as the record writer serializes it; it differs from a hash of the source file |
-| `node_key` | Digest of the node's render input: for a track, its sound and the samples and events it plays; for an effect or delay, its recipe or delay and the stems and gains fed into it; for a cycle group member, the whole group. Renaming a node or changing its `gain_db` leaves it unchanged, and nodes in one cycle group share it |
+| `node_key` | Digest of the node's render input: for a track, its sound and the samples and events it plays; for an effect or delay, its recipe or delay and the stems and gains fed into it; for a cycle group member, the whole group, including its members' names. Renaming a node outside a cycle group or changing its `gain_db` leaves it unchanged, and nodes in one cycle group share it |
 | `sound_key` | Digest of the sound or recipe itself; it changes when a preset, saved sound file, or effect parameters change. Null for a delay or a sound that does not resolve |
 | `gain_db` | The node's terminal mix fader, in decibels |
 | `peak_dbfs` | Highest sample level, in dB relative to full scale |

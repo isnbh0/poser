@@ -1,5 +1,6 @@
 """Workspace initialization consumes an explicitly selected reference setup."""
 
+import os
 import subprocess
 import tomllib
 from importlib.resources import files
@@ -376,3 +377,30 @@ def test_merged_gitignore_is_not_a_leftover(
     assert (target / ".gitignore").read_bytes() == merged
     assert ".gitignore" not in capsys.readouterr().out
     assert set(snapshot(target)) == set(clean)
+
+
+def test_target_still_linked_from_its_temp_file_is_a_leftover(
+    tmp_path: Path, plugin: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A run killed between linking a target and unlinking its temp file left both."""
+    target, clean = interrupted(tmp_path, plugin)
+    os.link(target / "AGENTS.md", target / ".poser-tmp-linked")
+    capsys.readouterr()
+    assert init_workspace.main(args(target, plugin)) == 2
+    assert "were left by an interrupted initialization" in capsys.readouterr().err
+    assert init_workspace.main([*args(target, plugin), "--remove-leftovers"]) == 0
+    assert "removed AGENTS.md\n" in capsys.readouterr().out
+    assert not list(target.rglob(".poser-tmp-*"))
+    assert snapshot(target) == clean
+
+
+def test_target_linked_from_another_file_is_a_conflict(
+    tmp_path: Path, plugin: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    target, _clean = interrupted(tmp_path, plugin)
+    os.link(target / "AGENTS.md", target / "mine.md")
+    before = snapshot(target)
+    capsys.readouterr()
+    assert init_workspace.main([*args(target, plugin), "--remove-leftovers"]) == 2
+    assert f"{target / 'AGENTS.md'} exists" in capsys.readouterr().err
+    assert snapshot(target) == before

@@ -25,6 +25,23 @@ def _regular(path: Path) -> bool:
     return stat.S_ISREG(info.st_mode) and info.st_nlink == 1
 
 
+def _leftover(path: Path, data: bytes) -> bool:
+    """Whether `path` holds exactly `data`, linked only from itself and this run's temp files.
+
+    A run killed between linking a target and unlinking its temp file leaves the target with a
+    second link, the `.poser-tmp-*` file it came from.
+    """
+    info = path.lstat()
+    if not stat.S_ISREG(info.st_mode):
+        return False
+    twins = sum(
+        1
+        for temp in path.parent.glob(TEMP_PREFIX + "*")
+        if temp != path and os.path.samestat(temp.lstat(), info)
+    )
+    return info.st_nlink == 1 + twins and path.read_bytes() == data
+
+
 @dataclass(frozen=True)
 class _Original:
     """The `.gitignore` this run replaced, and the inode of the replacement."""
@@ -162,7 +179,7 @@ class WorkspaceInitializer:
             parents.add(path.parent)
             if not path.exists() and not path.is_symlink():
                 continue
-            if _regular(path) and path.read_bytes() == data:
+            if _leftover(path, data):
                 path.unlink()
                 removed.append(name)
             else:

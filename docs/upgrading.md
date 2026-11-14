@@ -62,7 +62,7 @@ fix. A change listed here applies to every studio that pinned a poser commit fro
 
 ## Render keys digest render inputs
 
-- **Symptom:** every track renders again on the first `render` after upgrading.
+- **Symptom:** every track renders again on the first `render-song` after upgrading.
   **Cause:** a node's `node_key` is now the digest of exactly what its render receives, so every
   stored key stops matching once. Nodes in one cycle group share one key, and a report's
   `sound_key` is null for a delay.

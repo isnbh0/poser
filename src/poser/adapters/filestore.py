@@ -358,13 +358,15 @@ class FileSongStore:
             _write_atomic(draft.path(f"{SONG_NAME}{suffix}"), song_text)
             yield draft
             _sync_tree(draft.directory)
+            if not latest:
+                # Before the rename, so a crash between the two never leaves `latest` naming
+                # an older record while the newest is incomplete.
+                self.clear_latest()
             draft.directory.rename(self.record_path(run))
         finally:
             shutil.rmtree(draft.directory, ignore_errors=True)
         if latest:
             self._point_latest(f"{HISTORY_DIR}/{run}")
-        else:
-            self.clear_latest()
 
     def _point_latest(self, target: str) -> None:
         """Replace `latest` with a link to `target`, relative to the song's directory, in one

@@ -230,6 +230,30 @@ def test_latest_follows_the_newest_complete_record(tmp_path: Path) -> None:
     assert not drafts(tmp_path)
 
 
+def test_an_incomplete_record_clears_latest_before_it_is_published(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A crash between publishing an incomplete record and clearing `latest` must not leave
+    `latest` naming an older record."""
+    song = renders(tmp_path).song(SongId("songs/a.yaml"))
+    latest = tmp_path / "renders" / "songs" / "a.yaml" / "latest"
+    with song.write_record("first", YAML, latest=True):
+        pass
+    rename = Path.rename
+
+    def crash_on_publish(self: Path, target: Path) -> Path:
+        if Path(target) == song.record_path(2):
+            assert not latest.is_symlink()
+            raise WriteInterruptedError
+        return rename(self, target)
+
+    monkeypatch.setattr(Path, "rename", crash_on_publish)
+    with pytest.raises(WriteInterruptedError), song.write_record("second", YAML, latest=False):
+        pass
+    assert not latest.is_symlink()
+    assert song.record_path(1).is_dir()
+
+
 def test_an_exception_leaves_no_record_and_latest_as_it_was(tmp_path: Path) -> None:
     song = renders(tmp_path).song(SongId("songs/a.yaml"))
     latest = tmp_path / "renders" / "songs" / "a.yaml" / "latest"

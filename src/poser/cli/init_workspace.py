@@ -1,6 +1,7 @@
 """`init-workspace`: initialize a workspace from an explicit reference setup."""
 
 import argparse
+import os
 import stat
 import sys
 from collections.abc import Mapping
@@ -25,9 +26,20 @@ def _scaffold(name: str) -> str:
 
 
 def _leftover(path: Path, data: bytes) -> bool:
-    """Whether `path` holds exactly the bytes this run would write, as an interrupted run left."""
+    """Whether `path` holds exactly the bytes this run would write, as an interrupted run left.
+
+    Besides itself, it may be linked only from `.poser-tmp-*` files beside it: a run killed
+    between linking a target and unlinking its temp file leaves both.
+    """
     info = path.lstat()
-    return stat.S_ISREG(info.st_mode) and info.st_nlink == 1 and path.read_bytes() == data
+    if not stat.S_ISREG(info.st_mode):
+        return False
+    twins = sum(
+        1
+        for temp in path.parent.glob(".poser-tmp-*")
+        if temp != path and os.path.samestat(temp.lstat(), info)
+    )
+    return info.st_nlink == 1 + twins and path.read_bytes() == data
 
 
 def _preflight(directory: Path, planned: Mapping[str, bytes]) -> tuple[str, ...]:
