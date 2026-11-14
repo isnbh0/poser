@@ -39,11 +39,12 @@ class MeterSpan:
 SLIVER_BEATS = 0.25
 
 
-def _bar_count(start: float, end: float, bar: float) -> int:
+def _bar_count(start: float, end: float, bar: float) -> tuple[int, bool]:
     """Return how many bars a stretch from `start` to `end` is cut into, in bars of `bar` beats.
 
     A bar begins every `bar` beats from `start`, before `end`. A last bar that would be shorter
-    than SLIVER_BEATS, and shorter than half of `bar`, is not counted when a bar precedes it.
+    than SLIVER_BEATS is not counted when a bar precedes it: it joins that bar, and the second
+    value says so.
     """
     count = max(1, math.ceil((end - start) / bar))
     # Division can round across a bar's start, which multiplication places.
@@ -51,9 +52,9 @@ def _bar_count(start: float, end: float, bar: float) -> int:
         count -= 1
     elif start + count * bar < end:
         count += 1
-    if count > 1 and end - (start + (count - 1) * bar) < min(SLIVER_BEATS, bar / 2):
-        count -= 1
-    return count
+    if count > 1 and end - (start + (count - 1) * bar) < SLIVER_BEATS:
+        return count - 1, True
+    return count, False
 
 
 @dataclass(frozen=True)
@@ -68,14 +69,21 @@ class Stretch:
         """Return the `(start, end)` beats of each bar, or nothing for an unmetered stretch.
 
         The last bar ends at the stretch's end, so it is short when the stretch is not a whole
-        number of bars. A remainder shorter than SLIVER_BEATS, and shorter than half a bar, makes
-        the last bar that much longer instead of forming a bar of its own.
+        number of bars. A remainder shorter than SLIVER_BEATS makes the last bar that much
+        longer instead of forming a bar of its own, when there is a bar before it.
         """
         if self.bar is None:
             return ()
-        count = _bar_count(self.start, self.end, self.bar)
+        count, _ = _bar_count(self.start, self.end, self.bar)
         starts = [self.start + index * self.bar for index in range(count)]
         return tuple(pairwise([*starts, self.end]))
+
+    def line(self) -> float | None:
+        """Return the bar line the last bar runs past, or None when no sliver joined it."""
+        if self.bar is None:
+            return None
+        count, joined = _bar_count(self.start, self.end, self.bar)
+        return self.start + count * self.bar if joined else None
 
 
 @dataclass(frozen=True)
@@ -156,11 +164,11 @@ class Meter:
         """
         bars: list[Bar] = []
         for stretch in self.stretches(end):
-            for start, stop in stretch.bars():
-                # Only a bar a sliver joined is longer than its stretch's bars.
-                joined = stretch.bar is not None and stop - start > stretch.bar
-                line = start + stretch.bar if joined and stretch.bar is not None else None
-                bars.append(Bar(len(bars) + 1, start, stop, line))
+            spans = stretch.bars()
+            for start, stop in spans[:-1]:
+                bars.append(Bar(len(bars) + 1, start, stop))
+            for start, stop in spans[-1:]:
+                bars.append(Bar(len(bars) + 1, start, stop, stretch.line()))
         return tuple(bars)
 
     def beat_of(self, number: int) -> float:
@@ -174,7 +182,7 @@ class Meter:
             raise ValueError("Meter.beat_of needs a meter with spans; this one has none")
         passed = 0
         for span, stop in zip(self.spans, self._stops(), strict=True):
-            count = None if stop is None else _bar_count(span.beat, stop, span.bar)
+            count = None if stop is None else _bar_count(span.beat, stop, span.bar)[0]
             if count is None or number <= passed + count:
                 return span.beat + (number - 1 - passed) * span.bar
             passed += count

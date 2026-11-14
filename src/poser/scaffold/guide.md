@@ -78,8 +78,10 @@ A song may declare its meter as spans, each giving the length of a bar in beats 
 such as `{beat: 0, bar: 4}`; a `bar` may be fractional, such as 3.5. A span without `end` lasts
 until the next span or the song's end. Beats no span covers have no meter. A span that is not a
 whole number of bars ends with a short bar, except that a remainder shorter than 0.25 beats joins
-the bar before it, so notes that ring just past the last bar line add no bar. Meter never changes
-audio. In Python, write
+the bar before it in that span, when there is one, so notes that ring just past the last bar line
+add no bar. The join happens within a span, so a span whose `end` sits on the last bar line
+leaves a tail past it unmetered; leave the last span open to let a ringing tail join the last
+bar. Meter never changes audio. In Python, write
 `meter=Meter([MeterSpan(0, 7)])`. Bars are numbered from 1 across the song's spans, and
 `Meter.beat_of` gives the beat a bar starts on, for placing notes and marks by bar:
 `Mark(meter.beat_of(5), meter.beat_of(9), "Am")` covers bars 5 to 8. `read-song` prints these bar
@@ -278,8 +280,8 @@ with a line for each metered stretch up to the song's end, such as `beats 0-84: 
 Every range of beats it then prints, for marks and for readings, names its bars when it starts on
 a bar's start, ends on a bar's end, and every beat between lies in a bar, as in
 `beats 84-112 (bars 13-19)` or `beats 112-116 (bar 20)`; any other range, such as one that
-crosses beats with no meter, prints beats only. A last bar that runs a sliver past its bar line
-is also named by a range that ends on that line.
+crosses beats with no meter, prints beats only. A last bar that a remainder shorter than 0.25 beats
+joined runs past its bar line, and is also named by a range that ends on that line.
 
 It next prints each of the song's mark layers, up to the song's end, with
 each mark's text as written. A layer named like a configured vocabulary shows that vocabulary's
@@ -299,7 +301,10 @@ checks, says so on its `deliberate` line.
 It then prints each framework's reading, without loading plugins or touching renders. Repeat
 `--track <name>` to read only those pitched tracks (the default is every pitched track), and
 `--framework <name>` to use only those configured frameworks (the default is all). Every mark
-is still shown, and `--track` narrows the notes a claim is checked against. `--json` prints the
+is still shown, and `--track` narrows the notes a claim is checked against. `deliberate` answers
+the reading of the selected notes as a whole, every pitched track by default, and belongs on a
+mark the author stands by against all of them. A warning that appears only under `--track` is
+information about that part: fix the note if it is wrong, otherwise leave the mark as it is. `--json` prints the
 readings as JSON, with a `marks` object when the song has marks and, when it declares a meter, a
 `meter` list of the metered stretches, such as `{"beat": 0, "end": 84, "bar": 7}`; JSON carries
 no bar numbers. `--config` selects a workspace explicitly. Exit codes: 0 when every framework

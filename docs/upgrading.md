@@ -23,7 +23,16 @@ find songs \( -name '*.yaml' -o -name '*.yml' -o -name '*.py' \) -exec uv run re
 If a command fails after the upgrade, find its message below, newest change first, and apply the
 fix. A change listed here applies to every studio that last ran a poser from before it.
 
-## Levels over spans
+## Song meter
+
+- **New:** a song may carry an optional `meter` key: spans that each give the length of a bar in
+  beats, such as `{beat: 0, bar: 4}`, in Python `meter=Meter([MeterSpan(0, 4)])`. `read-song`
+  prints the meter and names the bars each range of beats covers, as in
+  `beats 0-16 (bars 1-4)`, and `--json` carries the metered stretches as `meter`.
+  `Meter.beat_of` gives the beat a bar starts on. A remainder shorter than 0.25 beats after the
+  last bar line joins the bar before it, so a song whose last notes ring just past that line
+  declares a plain `{beat: 0, bar: 4}` and gains no extra bar. Meter never changes audio, and a
+  song without one loads, renders, and prints as before.
 
 - **Symptom:** a script reading `report.json` finds no `bar_dbfs` under `measurements`.
   **Cause:** levels are `span_dbfs`, one per entry of the report's `spans`, which gives each
@@ -35,6 +44,28 @@ fix. A change listed here applies to every studio that last ran a poser from bef
   from the old `bar_dbfs` value. No command reads the studio's own prose, so also search it for
   the old name, as in `grep -rn bar_dbfs .`, and for text that calls the levels bars: song
   docstrings, notes, and instrument notes in `poser.toml`.
+
+- **New:** `tonal` reads windows of whole declared bars: where a song declares a meter, a window
+  is `window_bars` bars, four unless set beside `window_beats` under `[adapters] frameworks`,
+  and a change of meter starts a new window. Where a song declares none, a window is still
+  `window_beats` beats. A last window shorter than half a window is read together with the one
+  before it, so a song without a meter reads as before unless its length leaves such a
+  remainder.
+
+## Mark checks and key modes
+
+- **New:** `read-song` compares each `key` and `chords` mark with the notes inside its span, and
+  prints `warning: <detail>` under a mark the notes contradict and `unchecked: <reason>` under
+  one it could not judge. `--json` carries the result as `check` on each mark. Neither line
+  changes the exit code, and `POSER.md` states each rule. A mark may set `deliberate: true`, in
+  Python `Mark(0, 4, "C", deliberate=True)`, to say its label is intended; its warning then
+  prints as `deliberate: <detail>`. A script that passes a graph to
+  `poser.core.interpreting.interpret_marks` passes a `ScoreRequest` instead, such as
+  `ScoreRequest.default(graph)`.
+
+- **New:** a key names any of the seven modes, as in `D dorian`, so search the songs for marks
+  and comments where `minor` or `major` stood in for a mode, as in
+  `grep -rnE "minor|major" songs`.
 
 ## No initialization journal
 
@@ -139,34 +170,7 @@ fix. A change listed here applies to every studio that last ran a poser from bef
 
 - **New:** a `key` layer, such as `{beat: 0, end: 64, text: A minor}`, states the song's key, and
   `read-song` shows it above `tonal`'s inferred key. Studios on the `western` preset read it
-  automatically; a studio with a pinned `vocabularies` list adds `"key"` to it. A key names any
-  of the seven modes, as in `D dorian`, so search the songs for marks and comments where `minor`
-  or `major` stood in for a mode, as in `grep -rnE "minor|major" songs`.
-
-- **New:** `read-song` compares each `key` and `chords` mark with the notes inside its span, and
-  prints `warning: <detail>` under a mark the notes contradict and `unchecked: <reason>` under
-  one it could not judge. `--json` carries the result as `check` on each mark. Neither line
-  changes the exit code, and `POSER.md` states each rule. A mark may set `deliberate: true`, in
-  Python `Mark(0, 4, "C", deliberate=True)`, to say its label is intended; its warning then
-  prints as `deliberate: <detail>`. A script that passes a graph to
-  `poser.core.interpreting.interpret_marks` passes a `ScoreRequest` instead, such as
-  `ScoreRequest.default(graph)`.
-
-- **New:** a song may carry an optional `meter` key: spans that each give the length of a bar in
-  beats, such as `{beat: 0, bar: 4}`, in Python `meter=Meter([MeterSpan(0, 4)])`. `read-song`
-  prints the meter and names the bars each range of beats covers, as in
-  `beats 0-16 (bars 1-4)`, and `--json` carries the metered stretches as `meter`.
-  `Meter.beat_of` gives the beat a bar starts on. A remainder shorter than 0.25 beats after the
-  last bar line joins the bar before it, so a song whose last notes ring just past that line
-  declares a plain `{beat: 0, bar: 4}` and gains no extra bar. Meter never changes audio, and a
-  song without one loads, renders, and prints as before.
-
-- **New:** `tonal` reads windows of whole declared bars: where a song declares a meter, a window
-  is `window_bars` bars, four unless set beside `window_beats` under `[adapters] frameworks`,
-  and a change of meter starts a new window. Where a song declares none, a window is still
-  `window_beats` beats. A last window shorter than half a window is read together with the one
-  before it, so a song without a meter reads as before unless its length leaves such a
-  remainder.
+  automatically; a studio with a pinned `vocabularies` list adds `"key"` to it.
 
 ## Framework-neutral pitch and readings
 

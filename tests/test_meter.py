@@ -207,6 +207,7 @@ def test_stretches_and_bars_cover_the_song(seed: int) -> None:
     for previous, stretch in itertools.pairwise(stretches):
         assert previous.end == stretch.start
     numbered: list[tuple[float, float]] = []
+    lines: list[float | None] = []
     for stretch in stretches:
         assert stretch.start < stretch.end
         bars = stretch.bars()
@@ -220,18 +221,20 @@ def test_stretches_and_bars_cover_the_song(seed: int) -> None:
         # Every bar but the last is whole.
         assert all(stop - start == stretch.bar for start, stop in bars[:-1])
         # The last is short, whole, or longer by a sliver; only a lone bar is a sliver itself.
-        sliver = min(SLIVER_BEATS, stretch.bar / 2)
         length = bars[-1][1] - bars[-1][0]
-        assert 0 < length < stretch.bar + sliver
-        assert length >= sliver or len(bars) == 1
+        assert 0 < length < stretch.bar + SLIVER_BEATS
+        assert length >= SLIVER_BEATS or len(bars) == 1
         numbered += bars
+        # Only a last bar a sliver made longer carries the bar line it runs past.
+        joined = length > stretch.bar
+        lines += [None] * (len(bars) - 1) + [bars[-1][0] + stretch.bar if joined else None]
 
     bars = meter.bars(end)
     assert [(bar.beat, bar.end) for bar in bars] == numbered
     assert [bar.number for bar in bars] == list(range(1, len(numbered) + 1))
     for bar in bars:
         assert meter.beat_of(bar.number) == bar.beat
-        assert bar.line is None or bar.beat < bar.line < bar.end
+    assert [bar.line for bar in bars] == lines
 
 
 def test_a_sliver_past_the_last_bar_line_joins_the_bar_before_it() -> None:
@@ -261,9 +264,10 @@ def test_a_sliver_with_no_bar_before_it_is_a_bar() -> None:
     assert after_a_change[-1] == Bar(3, 8.0, 8.1)
 
 
-def test_a_remainder_of_half_a_tiny_bar_is_a_bar() -> None:
-    assert Stretch(0.0, 0.625, 0.25).bars() == ((0.0, 0.25), (0.25, 0.5), (0.5, 0.625))
-    assert Stretch(0.0, 0.5625, 0.25).bars() == ((0.0, 0.25), (0.25, 0.5625))
+def test_a_bar_longer_only_by_float_rounding_has_no_line() -> None:
+    bars = Meter([MeterSpan(0, 1.1)]).bars(11)
+    assert len(bars) == 10
+    assert all(bar.line is None for bar in bars)
 
 
 def test_beat_of_counts_a_span_whose_end_leaves_a_sliver_as_bars_does() -> None:
