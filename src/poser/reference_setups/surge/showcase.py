@@ -4,7 +4,7 @@ See docs/showcase.md for rendering evidence and listening limitations.
 This is not an initialization resource or an advice-free syntax example.
 """
 
-from poser import Mark, Marks, Note, Song, Track
+from poser import Mark, Marks, Meter, MeterSpan, Note, Song, Track
 
 
 def build() -> Song:
@@ -47,4 +47,5 @@ def build() -> Song:
                 "key": [Mark(0, 64, "A minor")],
             }
         ),
+        meter=Meter([MeterSpan(0, 4)]),
     )

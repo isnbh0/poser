@@ -2,6 +2,7 @@
 
 from poser.core.graph import DelayNode, EffectNode, Graph, GraphNode, TrackNode, Wire
 from poser.core.marks import Mark, Marks
+from poser.core.meter import Meter, MeterSpan
 from poser.core.music import (
     chord,
     degree,
@@ -23,6 +24,8 @@ __all__ = [
     "GraphNode",
     "Mark",
     "Marks",
+    "Meter",
+    "MeterSpan",
     "Note",
     "Song",
     "SongError",

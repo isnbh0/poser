@@ -5,11 +5,15 @@ from importlib.resources import files
 from pathlib import Path
 
 import pytest
+import yaml
 
 from poser.cli.init_workspace import main
 from poser.compose import parse_config
+from poser.core.meter import Meter, MeterSpan
 from poser.core.ports import ConfigError
+from poser.core.song import parse_song
 from poser.reference_setups.surge import prepare as surge
+from poser.reference_setups.surge.showcase import build
 
 
 def test_explicit_paths_and_optional_presets(
@@ -78,3 +82,12 @@ def test_gitignore_symlink_refused(tmp_path: Path) -> None:
     assert sorted(p.name for p in project.iterdir()) == [".gitignore"]
     assert (project / ".gitignore").is_symlink()
     assert (project / ".gitignore").resolve() == outside
+
+
+def test_the_packaged_songs_declare_a_meter() -> None:
+    four = Meter([MeterSpan(0, 4)])
+    showcase = build()
+    assert showcase.meter == four
+    assert len(four.bars(63.5)) == 16
+    demo = files("poser.reference_setups.surge").joinpath("demo.yaml").read_text()
+    assert parse_song(yaml.safe_load(demo)).meter == four

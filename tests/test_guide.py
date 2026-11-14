@@ -18,6 +18,7 @@ from poser.core.audio import NUM_CHANNELS, SAMPLE_RATE, TAIL_S
 from poser.core.graph import Graph
 from poser.core.guide import FIRST_INSTRUMENT_PLACEHOLDER
 from poser.core.loading import load_song
+from poser.core.meter import Meter, MeterSpan
 from poser.core.ports import ResolvedSound
 from poser.core.reading import OUTCOME_TAGS, Agrees, Contradicts, Unchecked
 from poser.core.rules import MAX_SONG_S
@@ -51,6 +52,8 @@ COMPOSER_API = [
     "GraphNode",
     "Mark",
     "Marks",
+    "Meter",
+    "MeterSpan",
     "Note",
     "Song",
     "SongError",
@@ -224,6 +227,8 @@ def test_song_keys_match_the_code() -> None:
         | song.OPTIONAL_SONG_KEYS
         | song.MARK_KEYS
         | song.OPTIONAL_MARK_KEYS
+        | song.METER_KEYS
+        | song.OPTIONAL_METER_KEYS
         | song.TRACK_KEYS
         | song.OPTIONAL_TRACK_KEYS
         | song.NOTE_KEYS
@@ -246,12 +251,16 @@ def with_key(key: str, value: object) -> dict[str, object]:
         "cc": [cc],
     }
     mark: dict[str, object] = {"beat": 0, "end": 1, "text": "a"}
+    span: dict[str, object] = {"beat": 0, "bar": 4}
     data: dict[str, object] = {"bpm": 100, "tracks": [track]}
     if key in song.SONG_KEYS | song.OPTIONAL_SONG_KEYS:
         data[key] = value
     if key in (song.MARK_KEYS | song.OPTIONAL_MARK_KEYS) - {"beat"}:
         mark[key] = value
         data["marks"] = {"parts": [mark]}
+    if key in (song.METER_KEYS | song.OPTIONAL_METER_KEYS) - {"beat"}:
+        span[key] = value
+        data["meter"] = [span]
     if key in song.TRACK_KEYS | song.OPTIONAL_TRACK_KEYS:
         track[key] = value
     if key in song.NOTE_KEYS:
@@ -284,6 +293,8 @@ VALID_VALUES: dict[str, object] = {
     "end": 8,
     "text": "verse two",
     "deliberate": True,
+    "meter": [{"beat": 0, "bar": 7, "end": 14}, {"beat": 14, "bar": 3.5}],
+    "bar": 3.5,
 }
 
 
@@ -298,7 +309,7 @@ def test_every_song_key_is_placed_and_accepts_a_valid_value() -> None:
 def test_mark_rows_match_validation() -> None:
     rows = {row[0]: row[1:] for row in table("Songs")}
     assert rows["`marks`"][0] == "song, optional"
-    assert rows["`end`"][:2] == ["mark", "number"]
+    assert rows["`end`"] == ["mark; meter span, optional", "number", "after `beat`"]
     assert rows["`text`"][:2] == ["mark", "text"]
     for rejected in (0, -1):
         with pytest.raises(SongError):
@@ -318,6 +329,46 @@ def test_the_deliberate_row_matches_validation() -> None:
     for rejected in ("yes", 1, None):
         with pytest.raises(SongError, match=r"marks\.parts\[0\]\.deliberate"):
             parse_song(with_key("deliberate", rejected))
+
+
+def test_meter_rows_match_validation() -> None:
+    rows = {row[0]: row[1:] for row in table("Songs")}
+    assert rows["`meter`"] == ["song, optional", "list of meter spans", "in order without overlap"]
+    assert rows["`bar`"] == ["meter span", "beats", "at least 1"]
+    assert "meter span" in rows["`beat`"][0]
+    for accepted in (1, 3.5, 7):
+        parse_song(with_key("bar", accepted))
+    for rejected in (0, 0.99, -4, "4", None):
+        with pytest.raises(SongError, match=r"meter\[0\]\.bar"):
+            parse_song(with_key("bar", rejected))
+    # `end` is placed on a mark and on a meter span, and both refuse one at or before `beat`.
+    with pytest.raises(SongError) as error:
+        parse_song(with_key("end", 0))
+    assert [problem.split(":")[0] for problem in error.value.problems] == [
+        "marks.parts[0].end",
+        "meter[0].end",
+    ]
+    with pytest.raises(SongError, match=r"meter\[1\]: must start at or after"):
+        parse_song(with_key("meter", [{"beat": 0, "bar": 4, "end": 8}, {"beat": 4, "bar": 3}]))
+
+
+def test_the_guide_states_the_meter_and_its_examples_declare_one(tmp_path: Path) -> None:
+    songs = " ".join(section("Songs").split())
+    assert "`meter=Meter([MeterSpan(0, 7)])`" in songs
+    assert "`Meter.beat_of`" in songs
+    assert "Meter never changes audio" in songs
+    meter = Meter([MeterSpan(0, 7)])
+    assert '`Mark(meter.beat_of(5), meter.beat_of(9), "Am")`' in songs
+    assert (meter.beat_of(5), meter.beat_of(9)) == (meter.bars(63)[4].beat, meter.bars(63)[7].end)
+    assert all(example.meter for example in python_examples(tmp_path))
+    readings = " ".join(section("Framework readings").split())
+    assert "`beats 0-84: 7-beat bars`" in readings
+    # The bar numbers the guide shows are the ones a 7-beat span followed by 4-beat bars gives.
+    bars = Meter([MeterSpan(0, 7, 84), MeterSpan(84, 4)]).bars(116)
+    assert "`beats 84-112 (bars 13-19)`" in readings
+    assert [(bar.beat, bar.end) for bar in bars if bar.number in (13, 19)] == [(84, 88), (108, 112)]
+    assert "`beats 112-116 (bar 20)`" in readings
+    assert (bars[-1].number, bars[-1].beat, bars[-1].end) == (20, 112, 116)
 
 
 def test_framework_readings_cover_claim_checks() -> None:

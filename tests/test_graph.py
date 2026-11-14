@@ -25,6 +25,7 @@ from poser.core.graph import (
     instantaneous_order,
 )
 from poser.core.marks import Mark, Marks
+from poser.core.meter import NO_METER, Meter, MeterSpan
 from poser.core.song import ControlChange, Note, Song, Track, parse_song
 
 
@@ -836,3 +837,31 @@ def test_graphs_equal_whatever_their_construction_history() -> None:
 
     assert queried == rebuilt
     assert repr(queried) == repr(rebuilt)
+
+
+# Meter: a graph holds the declared bars and writes them only when there are any.
+
+
+def test_a_graph_accepts_a_meter_and_rejects_anything_else() -> None:
+    meter = Meter([MeterSpan(0, 7)])
+    assert Graph(120, (make_node(),), meter=meter).meter == meter
+    assert Graph(120, (make_node(),)).meter == NO_METER
+    with pytest.raises(GraphError, match=r"Graph\.meter: must be a Meter"):
+        Graph(120, (make_node(),), meter=[MeterSpan(0, 7)])  # ty: ignore[invalid-argument-type]
+
+
+def test_to_data_writes_a_meter_only_when_there_is_one() -> None:
+    plain = Graph(120, (make_node(),))
+    marks = Marks({"parts": [Mark(0, 4.5, "intro")]})
+    meter = Meter([MeterSpan(0, 7, 14), MeterSpan(14, 3.5)])
+    metered = Graph(120, (make_node(),), meter=meter)
+    assert "meter" not in plain.to_data()
+    assert plain.to_data() == Graph(120, (make_node(),), meter=Meter()).to_data()
+    assert list(metered.to_data()) == ["bpm", "mode", "nodes", "wires", "meter"]
+    assert metered.to_data()["meter"] == [
+        {"beat": 0, "end": 14, "bar": 7},
+        {"beat": 14, "bar": 3.5},
+    ]
+    assert {k: v for k, v in metered.to_data().items() if k != "meter"} == plain.to_data()
+    both = Graph(120, (make_node(),), marks=marks, meter=meter)
+    assert list(both.to_data()) == ["bpm", "mode", "nodes", "wires", "marks", "meter"]

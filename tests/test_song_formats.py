@@ -11,7 +11,14 @@ import pytest
 import yaml
 from contracts import check_record_writer_contract, check_song_format_contract
 from helpers import SURGE_DIR
-from test_song import cc_track_song, gain_song, helper_song, two_layer_song, valid_song
+from test_song import (
+    cc_track_song,
+    gain_song,
+    helper_song,
+    metered_song,
+    two_layer_song,
+    valid_song,
+)
 
 from poser.adapters import song_formats
 from poser.adapters.song_formats import (
@@ -24,6 +31,7 @@ from poser.adapters.song_formats import (
 from poser.core.graph import DelayNode, EffectNode, Graph, TrackNode, Wire
 from poser.core.loading import load_song
 from poser.core.marks import Mark, Marks
+from poser.core.meter import NO_METER, Meter, MeterSpan
 from poser.core.song import Note, Song, SongError, Track
 
 
@@ -724,3 +732,66 @@ def test_only_a_failed_import_from_poser_points_to_the_upgrade_guide(tmp_path: P
         load_song(path, SONG_FORMATS)
 
     assert "earlier poser" not in error.value.problems[0]
+
+
+# Meter: records keep their text without a meter and carry it when the song declares one.
+
+
+def test_a_dump_without_a_meter_is_unchanged() -> None:
+    text = YamlSongFormat().dump(helper_song())
+    assert "meter" not in text
+    assert hashlib.sha256(text.encode()).hexdigest() == HELPER_SONG_SHA256
+    assert "meter" not in YamlSongFormat().dump(helper_song().graph())
+    assert YamlSongFormat().dump(two_layer_song()).count("meter") == 0
+
+
+def test_a_dump_with_a_meter_loads_back_equal(tmp_path: Path) -> None:
+    song = metered_song()
+    text = YamlSongFormat().dump(song)
+    assert text.startswith(YamlSongFormat().dump(helper_song()))
+    assert yaml.safe_load(text)["meter"] == [
+        {"beat": 0, "end": 84, "bar": 7},
+        {"beat": 84, "bar": 3.5},
+    ]
+    path = tmp_path / "song.yaml"
+    path.write_text(text)
+    assert loaded(path) == song
+    check_record_writer_contract(YamlSongFormat(), song)
+
+
+def test_the_record_of_a_graph_carries_its_meter() -> None:
+    graph = metered_song().graph()
+    data = yaml.safe_load(YamlSongFormat().dump(graph))
+    assert data["meter"] == [{"beat": 0, "end": 84, "bar": 7}, {"beat": 84, "bar": 3.5}]
+    assert data == graph.to_data()
+
+
+def test_a_yaml_song_states_its_meter(tmp_path: Path) -> None:
+    path = tmp_path / "song.yaml"
+    spans = "  - {beat: 0, bar: 7, end: 14}\n  - {beat: 14, bar: 3.5}\n"
+    path.write_text(MARKED_SONG + "meter:\n" + spans)
+    assert loaded(path).meter == Meter([MeterSpan(0, 7, 14), MeterSpan(14, 3.5)])
+
+    path.write_text(MARKED_SONG)
+    assert loaded(path).meter == NO_METER
+
+    path.write_text(MARKED_SONG + "meter:\n  - {beat: 0, bar: 0}\n")
+    with pytest.raises(SongError) as error:
+        load_song(path, SONG_FORMATS)
+    assert error.value.problems == ["meter[0].bar: must be a finite number of at least 1, got 0"]
+
+
+def test_a_script_song_keeps_its_meter(tmp_path: Path) -> None:
+    path = write_script(
+        tmp_path,
+        """
+from poser import Meter, MeterSpan, Note, Song, Track
+
+
+def build():
+    lead = Track("lead", "serum", (Note(0, 60, 4, 90),))
+    return Song(120, (lead,), meter=Meter([MeterSpan(0, 7)]))
+""",
+    )
+    song = load_song(path, SONG_FORMATS).graph
+    assert song.meter == Meter([MeterSpan(0, 7)])

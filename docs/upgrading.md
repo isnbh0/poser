@@ -137,6 +137,13 @@ fix. A change listed here applies to every studio that last ran a poser from bef
   `poser.core.interpreting.interpret_marks` passes a `ScoreRequest` instead, such as
   `ScoreRequest.default(graph)`.
 
+- **New:** a song may carry an optional `meter` key: spans that each give the length of a bar in
+  beats, such as `{beat: 0, bar: 4}`, in Python `meter=Meter([MeterSpan(0, 4)])`. `read-song`
+  prints the meter and names the bars each range of beats covers, as in
+  `beats 0-16 (bars 1-4)`, and `--json` carries the metered stretches as `meter`.
+  `Meter.beat_of` gives the beat a bar starts on. Meter never changes audio, and a song without
+  one loads, renders, and prints as before.
+
 ## Framework-neutral pitch and readings
 
 - **Symptom:** `update-guide`, `check-instruments`, and other commands that build instruments

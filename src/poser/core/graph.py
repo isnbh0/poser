@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import ClassVar, Literal, NotRequired, TypedDict
 
 from poser.core.marks import NO_MARKS, Marks, MarksData, layers_to_data, marks_field_problems
+from poser.core.meter import NO_METER, Meter, MeterData, meter_field_problems, meter_to_data
 from poser.core.rules import (
     GAIN_MAX_DB,
     GAIN_MIN_DB,
@@ -185,6 +186,8 @@ class Graph:
     mode: Mode = "acyclic"
     # The author's marks, which no render, key, or reading uses.
     marks: Marks = NO_MARKS
+    # The declared bars, which no render or key uses.
+    meter: Meter = NO_METER
 
     def __post_init__(self) -> None:
         if problems := _graph_problems(self):
@@ -210,7 +213,8 @@ class Graph:
 
         This is the analysis record's song text for a graph song. Numbers are written in one
         spelling and the field order is fixed, so structurally equal graphs give equal data and
-        two graphs that differ in any node, wire, gain, mode, or mark give different data.
+        two graphs that differ in any node, wire, gain, mode, mark, or meter span give different
+        data.
         """
         data: GraphData = {
             "bpm": plain_number(self.bpm),
@@ -229,6 +233,9 @@ class Graph:
         # A graph without marks keeps the record text it had before marks existed.
         if self.marks:
             data["marks"] = layers_to_data(self.marks)
+        # A graph without a meter keeps the record text it had before meter existed.
+        if self.meter:
+            data["meter"] = meter_to_data(self.meter)
         return data
 
     def groups(self) -> tuple[tuple[GraphNode, ...], ...]:
@@ -316,6 +323,7 @@ def _graph_problems(graph: Graph) -> list[str]:
     if graph.mode not in MODES:
         problems.append(f"Graph.mode: must be acyclic or feedback, got {graph.mode!r}")
     problems += marks_field_problems(graph.marks, "Graph")
+    problems += meter_field_problems(graph.meter, "Graph")
     node_items = _listed(graph.nodes)
     problems += [
         f"Graph.nodes[{index}]: must be a graph node, got {node!r}"
@@ -449,6 +457,7 @@ class GraphData(TypedDict):
     nodes: list[NodeData]
     wires: list[WireData]
     marks: NotRequired[MarksData]
+    meter: NotRequired[MeterData]
 
 
 def _cycle_problems(nodes: Sequence[GraphNode], wires: Sequence[Wire], what: str) -> list[str]:

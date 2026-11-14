@@ -21,6 +21,7 @@ from poser.core.cache import (
 )
 from poser.core.graph import BUFFER_SIZE, DelayNode, EffectNode, Graph, GraphNode, TrackNode, Wire
 from poser.core.jsonvalue import JsonValue, digest
+from poser.core.meter import Meter, MeterSpan
 from poser.core.names import Identifier, NodeName
 from poser.core.performance import NoteOff, NoteOn, Performance, PitchSupport
 from poser.core.planning import GroupUnit, Plan, TrackUnit, Unit, Unplanned, plan, resolve_all
@@ -200,6 +201,14 @@ def test_a_track_name_or_gain_leaves_its_key_and_its_downstream_key() -> None:
         renamed = next(node.name for node in other.nodes if isinstance(node, TrackNode))
         assert key(other, renamed) == key(base, "lead")
         assert key(other, "drive") == key(base, "drive")
+
+
+def test_a_meter_is_in_no_key() -> None:
+    base = chain()
+    metered = dataclasses.replace(base, meter=Meter([MeterSpan(0, 3.5), MeterSpan(7, 5, 12)]))
+    assert metered != base
+    for node in base.nodes:
+        assert key(metered, node.name) == key(base, node.name)
 
 
 def test_a_wire_gain_into_an_effect_changes_the_effect_key() -> None:

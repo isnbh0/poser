@@ -32,12 +32,12 @@ this project's environment; omit any PEP 723 header. Loading a Python song runs 
 code, so load only trusted scripts. This short song shows the form:
 
 ```python
-from poser import Song, Track, notes
+from poser import Meter, MeterSpan, Song, Track, notes
 
 
 def build() -> Song:
     track = Track(name="example", sound="{first_instrument}", notes=notes([60], 0, 1, 100))
-    return Song(bpm=100, tracks=(track,))
+    return Song(bpm=100, tracks=(track,), meter=Meter([MeterSpan(0, 4)]))
 ```
 
 | Key | Where | Type | Range |
@@ -51,7 +51,7 @@ def build() -> Song:
 | `gain` | track, optional | decibels | -60 to 12 |
 | `cc` | track, optional | list of controller changes, in time order | |
 | `pitched` | track, optional | true or false | false for drums and other key-mapped sounds |
-| `beat` | note, controller change, mark | number | 0 or later |
+| `beat` | note, controller change, mark, meter span | number | 0 or later |
 | `pitch` | note | number | 0 to 127 |
 | `length` | note | beats | above 0 |
 | `velocity` | note | integer | 1 to 127 |
@@ -59,9 +59,11 @@ def build() -> Song:
 | `value` | controller change | integer | 0 to 127 |
 | `shape` | controller change, optional | `step` or `linear` | |
 | `marks` | song, optional | layer names to lists of marks | lowercase letters, digits, `_`, `-`, starting with a letter or digit |
-| `end` | mark | number | after `beat` |
+| `end` | mark; meter span, optional | number | after `beat` |
 | `text` | mark | text | one line, no leading or trailing spaces |
 | `deliberate` | mark, optional | `true` or `false` | true when the label is intended despite the notes |
+| `meter` | song, optional | list of meter spans | in order without overlap |
+| `bar` | meter span | beats | at least 1 |
 
 A `step` holds until that controller's next change; `linear` ramps to it and needs a later one.
 
@@ -71,6 +73,15 @@ nothing was said there. Marks may extend past the last note; anything reading th
 song's end. Marks never change audio or readings. In Python, write
 `marks=Marks({"chords": [Mark(0, 4, "Am"), Mark(4, 8, "F")]})`. A configured vocabulary reads the
 layer with its name; see Framework readings.
+
+A song may declare its meter as spans, each giving the length of a bar in beats from its `beat`,
+such as `{beat: 0, bar: 4}`; a `bar` may be fractional, such as 3.5. A span without `end` lasts
+until the next span or the song's end. Beats no span covers have no meter. A span that is not a
+whole number of bars ends with a short bar. Meter never changes audio. In Python, write
+`meter=Meter([MeterSpan(0, 7)])`. Bars are numbered from 1 across the song's spans, and
+`Meter.beat_of` gives the beat a bar starts on, for placing notes and marks by bar:
+`Mark(meter.beat_of(5), meter.beat_of(9), "Am")` covers bars 5 to 8. `read-song` prints these bar
+numbers.
 
 Track `effects` form a recipe chain: the first hears the track, each next hears its predecessor.
 Nodes are named `<track>.<effect>`, with repeats numbered (`bass.drive.2`). Track `gain` fades
@@ -203,7 +214,7 @@ authored. This example assumes recipes named `reverb` and `sum` in `poser.toml`,
 passthrough:
 
 ```python
-from poser import DelayNode, EffectNode, Graph, TrackNode, Wire, notes
+from poser import DelayNode, EffectNode, Graph, Meter, MeterSpan, TrackNode, Wire, notes
 
 
 def build() -> Graph:
@@ -220,6 +231,7 @@ def build() -> Graph:
             Wire("pre", "wet", "audio"),
             Wire("lead", "dry", "audio"),
         ),
+        meter=Meter([MeterSpan(0, 4)]),
     )
 ```
 
@@ -258,7 +270,13 @@ covering it from 0 to its last beat, and gives every span one of three outcomes:
 Tracks marked `pitched: false` are never read. "Frameworks here" lists this workspace's
 frameworks, and each framework's own section says what it reads.
 
-`uv run read-song <song>` first prints each of the song's mark layers, up to the song's end, with
+`uv run read-song <song>` first prints the song's meter, when it declares one: a `meter` block
+with a line for each metered stretch up to the song's end, such as `beats 0-84: 7-beat bars`.
+Every range of beats it then prints, for marks and for readings, names its bars when it starts on
+a bar's start and ends on a bar's end, as in `beats 84-112 (bars 13-19)` or
+`beats 112-116 (bar 20)`; any other range prints beats only.
+
+It next prints each of the song's mark layers, up to the song's end, with
 each mark's text as written. A layer named like a configured vocabulary shows that vocabulary's
 reading of its labels, and other layers show as text; "Frameworks here" lists this workspace's
 vocabularies. Frameworks never see marks, so the authored and the inferred appear side by side.
@@ -277,7 +295,8 @@ It then prints each framework's reading, without loading plugins or touching ren
 `--track <name>` to read only those pitched tracks (the default is every pitched track), and
 `--framework <name>` to use only those configured frameworks (the default is all). Every mark
 is still shown, and `--track` narrows the notes a claim is checked against. `--json` prints the readings as JSON, with a `marks` object when the song has
-marks, and `--config` selects a workspace explicitly. Exit codes: 0 when every framework returned
+marks and, when it declares a meter, a `meter` list of the metered stretches, such as
+`{"beat": 0, "end": 84, "bar": 7}`; JSON carries no bar numbers. `--config` selects a workspace explicitly. Exit codes: 0 when every framework returned
 a reading, whatever its outcomes; 1 when a framework failed, printed as `<name>: error: <detail>`,
 or a vocabulary failed, printed as `<layer> marks: error: <detail>`; 2 when the song or
 `poser.toml` cannot be read, a `--track` or `--framework` name is unknown or the track is

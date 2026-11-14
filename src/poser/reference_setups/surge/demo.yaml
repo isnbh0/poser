@@ -19,3 +19,5 @@ tracks:
       - {beat: 2, pitch: 41, length: 2, velocity: 100}
       - {beat: 4, pitch: 48, length: 2, velocity: 100}
       - {beat: 6, pitch: 43, length: 2, velocity: 100}
+meter:
+  - {beat: 0, bar: 4}

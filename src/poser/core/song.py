@@ -17,6 +17,16 @@ from poser.core.marks import (
     mark_problems,
     marks_field_problems,
 )
+from poser.core.meter import (
+    NO_METER,
+    Meter,
+    MeterData,
+    MeterSpan,
+    meter_field_problems,
+    meter_order_problems,
+    meter_span_problems,
+    meter_to_data,
+)
 from poser.core.names import TrackName
 from poser.core.rules import (
     ControlChange,
@@ -48,7 +58,9 @@ from poser.core.rules import (
 from poser.core.sounds import SoundRef, parse_sound_ref
 
 SONG_KEYS = {"bpm", "tracks"}
-OPTIONAL_SONG_KEYS = {"marks"}
+OPTIONAL_SONG_KEYS = {"marks", "meter"}
+METER_KEYS = {"beat", "bar"}
+OPTIONAL_METER_KEYS = {"end"}
 MARK_KEYS = {"beat", "end", "text"}
 OPTIONAL_MARK_KEYS = {"deliberate"}
 TRACK_KEYS = {"name", "sound", "notes"}
@@ -105,9 +117,16 @@ class Song:
     tracks: tuple[Track, ...]
     # The author's marks, which no render, key, or reading uses.
     marks: Marks = NO_MARKS
+    # The declared bars, which no render or key uses.
+    meter: Meter = NO_METER
 
     def __post_init__(self) -> None:
-        values = {"bpm": self.bpm, "tracks": self.tracks, "marks": self.marks}
+        values = {
+            "bpm": self.bpm,
+            "tracks": self.tracks,
+            "marks": self.marks,
+            "meter": self.meter,
+        }
         if problems := _song_problems(values, "Song"):
             raise SongError(problems)
         object.__setattr__(self, "tracks", tuple(self.tracks))
@@ -117,7 +136,7 @@ class Song:
 
     def graph(self) -> Graph:
         """Compile the song to its graph: each track's node followed by its effect chain, wired
-        in series, in song order, with the song's marks.
+        in series, in song order, with the song's marks and meter.
 
         Chain nodes are named `<track>.<effect>`, and a recipe a track lists twice takes an
         ordinal: `<track>.drive.2`. The track's gain compiles onto the chain's leaf, so the fader
@@ -159,7 +178,13 @@ class Song:
                 )
                 wires.append(Wire(previous, name, "audio"))
                 previous = name
-        return Graph(bpm=self.bpm, nodes=tuple(nodes), wires=tuple(wires), marks=self.marks)
+        return Graph(
+            bpm=self.bpm,
+            nodes=tuple(nodes),
+            wires=tuple(wires),
+            marks=self.marks,
+            meter=self.meter,
+        )
 
 
 def song_last_beat(graph: Graph) -> float:
@@ -199,6 +224,7 @@ class SongData(TypedDict):
     bpm: float
     tracks: list[TrackData]
     marks: NotRequired[MarksData]
+    meter: NotRequired[MeterData]
 
 
 def _song_problems(values: Mapping[str, object], where: str) -> list[str]:
@@ -206,6 +232,8 @@ def _song_problems(values: Mapping[str, object], where: str) -> list[str]:
     problems = song_field_problems(values, where)
     if "marks" in values:
         problems += marks_field_problems(values["marks"], where)
+    if "meter" in values:
+        problems += meter_field_problems(values["meter"], where)
     tracks = values["tracks"]
     if isinstance(tracks, list | tuple):
         items = cast("Sequence[object]", tracks)
@@ -399,6 +427,41 @@ def _parse_marks(value: object, problems: list[str]) -> Marks:
     return Marks() if len(problems) > before else Marks(layers)
 
 
+def _parse_meter_span(value: object, where: str, problems: list[str]) -> MeterSpan | None:
+    data = _mapping(value)
+    if data is None:
+        problems.append(f"{where}: must be a mapping, got {value!r}")
+        return None
+    _check_keys(data, METER_KEYS, where, problems, OPTIONAL_METER_KEYS)
+
+    field_problems = meter_span_problems(_present(data, METER_KEYS | OPTIONAL_METER_KEYS), where)
+    problems += field_problems
+    beat, bar, end = data.get("beat"), data.get("bar"), data.get("end")
+    # These fail only when a problem was reported. A missing key reads as None.
+    if field_problems or not (is_number(beat) and is_number(bar)):
+        return None
+    if end is not None and not is_number(end):
+        return None
+    return MeterSpan(beat=beat, bar=bar, end=end)
+
+
+def _parse_meter(value: object, problems: list[str]) -> Meter:
+    """Parse a song's meter, reporting every problem at its path, such as `meter[1].bar`."""
+    if not isinstance(value, list):
+        problems.append(f"meter: must be a list of meter spans, got {value!r}")
+        return NO_METER
+    before = len(problems)
+    items = cast("list[object]", value)
+    parsed = [
+        (index, _parse_meter_span(item, f"meter[{index}]", problems))
+        for index, item in enumerate(items)
+    ]
+    valid = [(index, span) for index, span in parsed if span is not None]
+    problems += meter_order_problems(valid, "meter")
+    # A meter is built only from spans without problems, which the constructor accepts.
+    return NO_METER if len(problems) > before else Meter([span for _, span in valid])
+
+
 def parse_song(value: object) -> Song:
     """Validate loaded song data, reporting every problem found rather than only the first."""
     data = _mapping(value)
@@ -419,6 +482,7 @@ def parse_song(value: object) -> Song:
         tracks = [track for track in parsed if track is not None]
     problems += duplicate_name_problems(tracks, "")
     marks = _parse_marks(data["marks"], problems) if "marks" in data else Marks()
+    meter = _parse_meter(data["meter"], problems) if "meter" in data else NO_METER
 
     bpm = data.get("bpm")
     # `bpm` fails `is_number` only when a problem was reported.
@@ -426,7 +490,7 @@ def parse_song(value: object) -> Song:
         raise SongError(problems)
     if problems := length_problems(bpm, tracks, "song"):
         raise SongError(problems)
-    return Song(bpm=bpm, tracks=tuple(tracks), marks=marks)
+    return Song(bpm=bpm, tracks=tuple(tracks), marks=marks, meter=meter)
 
 
 def _track_to_data(track: Track) -> TrackData:
@@ -463,4 +527,7 @@ def song_to_data(song: Song) -> SongData:
     # A song without marks keeps the record text it had before marks existed.
     if song.marks:
         data["marks"] = layers_to_data(song.marks)
+    # A song without a meter keeps the record text it had before meter existed.
+    if song.meter:
+        data["meter"] = meter_to_data(song.meter)
     return data

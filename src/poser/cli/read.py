@@ -1,8 +1,9 @@
-"""`read-song`: show a song's authored marks, through the configured vocabularies, and read its
-score through the configured frameworks, without loading plugins."""
+"""`read-song`: show a song's meter and its authored marks, through the configured vocabularies,
+and read its score through the configured frameworks, without loading plugins."""
 
 import argparse
 import json
+from collections.abc import Sequence
 from pathlib import Path
 
 from poser.cli.common import (
@@ -14,8 +15,10 @@ from poser.cli.common import (
 )
 from poser.cli.workspace import WorkspaceError, fill_path_options
 from poser.core.interpreting import interpret_marks, read_song
+from poser.core.jsonvalue import JsonValue
 from poser.core.loading import load_song
 from poser.core.marks import Mark
+from poser.core.meter import Bar, Stretch
 from poser.core.names import NodeName
 from poser.core.ports import ConfigError, Framework, Vocabulary
 from poser.core.reading import (
@@ -38,6 +41,7 @@ from poser.core.reading import (
     marks_to_data,
     readings_to_data,
 )
+from poser.core.rules import plain_number
 from poser.core.song import SongError
 
 PROG = "read-song"
@@ -45,6 +49,39 @@ PROG = "read-song"
 
 def _beat(value: float) -> str:
     return str(int(value)) if float(value).is_integer() else repr(round(float(value), 6))
+
+
+def _span(start: float, end: float, bars: Sequence[Bar]) -> str:
+    """A range of beats, naming its bars when it starts on a bar's start and ends on a bar's end."""
+    beats = f"beats {_beat(start)}-{_beat(end)}"
+    first = next((bar.number for bar in bars if bar.beat == start), None)
+    last = next((bar.number for bar in bars if bar.end == end), None)
+    if first is None or last is None:
+        return beats
+    return f"{beats} (bar {first})" if first == last else f"{beats} (bars {first}-{last})"
+
+
+def format_meter(stretches: Sequence[Stretch]) -> str:
+    """The meter block: one line per metered stretch, or nothing when there is none."""
+    lines = [
+        f"  beats {_beat(stretch.start)}-{_beat(stretch.end)}: {_beat(stretch.bar)}-beat bars"
+        for stretch in stretches
+        if stretch.bar is not None
+    ]
+    return "\n".join(["meter", *lines]) if lines else ""
+
+
+def meter_to_json(stretches: Sequence[Stretch]) -> JsonValue:
+    """The metered stretches' JSON form."""
+    return [
+        {
+            "beat": plain_number(stretch.start),
+            "end": plain_number(stretch.end),
+            "bar": plain_number(stretch.bar),
+        }
+        for stretch in stretches
+        if stretch.bar is not None
+    ]
 
 
 def _describe(outcome: Outcome[ReadingValue]) -> str:
@@ -57,8 +94,9 @@ def _describe(outcome: Outcome[ReadingValue]) -> str:
             return f"unknowable: {reason}"
 
 
-def format_readings(readings: SongReadings) -> str:
-    """One block per framework: a header naming the tracks read, then a line per span."""
+def format_readings(readings: SongReadings, bars: Sequence[Bar] = ()) -> str:
+    """One block per framework: a header naming the tracks read, then a line per span, which
+    names the bars of `bars` it covers."""
     tracks = ", ".join(readings.tracks) if readings.tracks else "none; every track is unpitched"
     blocks: list[str] = []
     for name, reading in readings.frameworks.items():
@@ -67,7 +105,7 @@ def format_readings(readings: SongReadings) -> str:
             continue
         lines = [f"{name} (tracks: {tracks})"]
         lines += [
-            f"  beats {_beat(span.start)}-{_beat(span.end)}: {_describe(span.outcome)}"
+            f"  {_span(span.start, span.end, bars)}: {_describe(span.outcome)}"
             for span in reading.spans
         ]
         blocks.append("\n".join(lines))
@@ -87,9 +125,10 @@ def _check_line(mark: Mark, check: Check | None) -> str | None:
             return "deliberate: nothing checks this layer" if mark.deliberate else None
 
 
-def format_marks(authored: AuthoredMarks) -> str:
+def format_marks(authored: AuthoredMarks, bars: Sequence[Bar] = ()) -> str:
     """One block per mark layer: a header naming what read it, then each mark's authored text,
-    with a line under a mark whose check did not simply agree."""
+    naming the bars of `bars` it covers, with a line under a mark whose check did not simply
+    agree."""
     blocks: list[str] = []
     for name, layer in authored.layers.items():
         match layer:
@@ -104,7 +143,7 @@ def format_marks(authored: AuthoredMarks) -> str:
                 marks = tuple((mark, None) for mark in text_marks)
         lines = [header]
         for mark, check in marks:
-            lines.append(f"  beats {_beat(mark.beat)}-{_beat(mark.end)}: {mark.text}")
+            lines.append(f"  {_span(mark.beat, mark.end, bars)}: {mark.text}")
             if (line := _check_line(mark, check)) is not None:
                 lines.append(f"    {line}")
         blocks.append("\n".join(lines))
@@ -169,19 +208,30 @@ def main(argv: list[str] | None = None) -> int:
         return EXIT_BAD_CONFIG
 
     readings = read_song(request, frameworks)
+    # A song that declares no meter has no stretches to show and no bars to name.
+    metered = bool(song.meter) and request.end > 0
+    stretches = song.meter.stretches(request.end) if metered else ()
+    bars = song.meter.bars(request.end) if metered else ()
     if args.json:
         data = readings_to_data(readings)
-        if authored.layers and isinstance(data, dict):
-            data["marks"] = marks_to_data(authored)
+        if isinstance(data, dict):
+            if song.meter:
+                # The meter follows `end`, ahead of the tracks and readings.
+                rest = {key: value for key, value in data.items() if key != "end"}
+                data = {"end": data["end"], "meter": meter_to_json(stretches), **rest}
+            if authored.layers:
+                data["marks"] = marks_to_data(authored)
         print(json.dumps(data, indent=2))
     else:
+        if block := format_meter(stretches):
+            print(block)
         if authored.layers:
-            print(format_marks(authored))
+            print(format_marks(authored, bars))
         if not frameworks:
             preset = composition.config.preset
             print("no frameworks are configured" + (f" (preset {preset})" if preset else ""))
         else:
-            print(format_readings(readings))
+            print(format_readings(readings, bars))
     failed = any(isinstance(item, FrameworkError) for item in readings.frameworks.values())
     failed = failed or any(isinstance(layer, LayerError) for layer in authored.layers.values())
     return EXIT_SOME_FAILED if failed else EXIT_ALL_PASS

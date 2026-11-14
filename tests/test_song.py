@@ -9,6 +9,7 @@ import pytest
 from poser.core.graph import EffectNode, Graph, TrackNode, Wire
 from poser.core.loading import check_effect_recipes
 from poser.core.marks import NO_MARKS, Mark, Marks
+from poser.core.meter import NO_METER, Meter, MeterSpan
 from poser.core.music import chord, notes, pitch, scale, swing
 from poser.core.names import Identifier, TrackName
 from poser.core.song import (
@@ -999,3 +1000,83 @@ def test_every_broken_mark_is_reported_at_once() -> None:
         "marks.Parts",
         "marks.key[1]",
     ]
+
+
+# Meter: a song carries its declared bars, its graph keeps them, and YAML states them.
+
+
+def metered_song() -> Song:
+    meter = Meter([MeterSpan(0, 7, 84), MeterSpan(84, 3.5)])
+    return Song(helper_song().bpm, helper_song().tracks, meter=meter)
+
+
+def test_a_song_has_no_meter_by_default_and_rejects_anything_else() -> None:
+    assert one_track_song().meter == NO_METER
+    assert parse_song(valid_song()).meter == NO_METER
+    with pytest.raises(SongError, match=r"Song\.meter: must be a Meter"):
+        Song(100, one_track_song().tracks, meter=[MeterSpan(0, 4)])  # ty: ignore[invalid-argument-type]
+
+
+def test_a_compiled_graph_carries_the_songs_meter() -> None:
+    song = metered_song()
+    assert song.graph().meter == song.meter
+    assert song.graph() != helper_song().graph()
+    assert helper_song().graph().meter == NO_METER
+
+
+def test_a_song_with_a_meter_round_trips_through_parse_song() -> None:
+    song = metered_song()
+    data = song_to_data(song)
+    assert list(data) == ["bpm", "tracks", "meter"]
+    assert data["meter"] == [{"beat": 0, "end": 84, "bar": 7}, {"beat": 84, "bar": 3.5}]
+    assert parse_song(data) == song
+    both = Song(song.bpm, song.tracks, marks=two_layer_song().marks, meter=song.meter)
+    assert list(song_to_data(both)) == ["bpm", "tracks", "marks", "meter"]
+    assert parse_song(song_to_data(both)) == both
+
+
+def test_a_song_without_a_meter_writes_the_data_it_always_did() -> None:
+    data = song_to_data(helper_song())
+    assert "meter" not in data
+    assert data == {k: v for k, v in song_to_data(metered_song()).items() if k != "meter"}
+    assert data == song_to_data(Song(helper_song().bpm, helper_song().tracks, meter=Meter()))
+    assert parse_song({**valid_song(), "meter": []}) == parse_song(valid_song())
+
+
+def test_meter_problems_are_reported_at_their_paths_with_other_problems() -> None:
+    data = valid_song()
+    set_bpm(data, 0)
+    data["meter"] = [
+        {"beat": 0, "bar": 0.5, "end": 8},
+        {"beat": -1, "bar": 4},
+        {"beat": 8, "end": 8, "bar": 4},
+        {"beat": 16, "bars": 4},
+        "4/4",
+        {"beat": 20, "bar": 4, "end": 24},
+        {"beat": 22, "bar": 3},
+    ]
+    with pytest.raises(SongError) as error:
+        parse_song(data)
+    problems = error.value.problems
+    assert problems[0].startswith("bpm: ")
+    assert [problem.split(": ")[0] for problem in problems[1:]] == [
+        "meter[0].bar",
+        "meter[1].beat",
+        "meter[2].end",
+        "meter[3]",
+        "meter[3]",
+        "meter[4]",
+        "meter[6]",
+    ]
+    assert "meter[3]: unknown key 'bars'" in problems
+    assert "meter[3]: missing key 'bar'" in problems
+    assert problems[-1] == (
+        "meter[6]: must start at or after the previous span's end, beat 24, got beat 22"
+    )
+
+
+@pytest.mark.parametrize("value", [{"beat": 0, "bar": 4}, "4/4", 4, None])
+def test_a_meter_that_is_not_a_list_is_a_song_error(value: object) -> None:
+    with pytest.raises(SongError) as error:
+        parse_song({**valid_song(), "meter": value})
+    assert error.value.problems == [f"meter: must be a list of meter spans, got {value!r}"]

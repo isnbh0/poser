@@ -66,7 +66,8 @@ def read_song(request: ScoreRequest, frameworks: Sequence[Framework]) -> SongRea
     """Read the request through each framework, in order.
 
     Each framework receives the request's song with its marks removed, and the same tracks, so
-    no reading can depend on what the author stated. A framework that raises, returns something
+    no reading can depend on what the author stated. The song keeps its meter, which is
+    structure and not a statement about the notes. A framework that raises, returns something
     other than a Reading of ReadingValues, or returns a reading whose end is not the request's end
     is recorded as a FrameworkError; the others' readings are unaffected. An unknowable span is an
     outcome, never an error.

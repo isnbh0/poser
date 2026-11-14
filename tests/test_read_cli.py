@@ -27,10 +27,14 @@ def track(
     }
 
 
-def write(path: Path, *tracks: dict[str, object], marks: object = None) -> Path:
+def write(
+    path: Path, *tracks: dict[str, object], marks: object = None, meter: object = None
+) -> Path:
     data: dict[str, object] = {"bpm": 60, "tracks": list(tracks)}
     if marks is not None:
         data["marks"] = marks
+    if meter is not None:
+        data["meter"] = meter
     path.write_text(yaml.safe_dump(data, sort_keys=False))
     return path
 
@@ -562,3 +566,129 @@ def test_marks_that_agree_print_what_they_always_did(
         "  beats 0-16: C major\n"
         "  beats 16-27: F# major\n" + TONAL_TEXT
     )
+
+
+# Meter
+
+
+def metered(workspace: CommandWorkspace, meter: object, marks: object = None) -> Path:
+    """The `song` fixture's pitched tracks, which end at beat 27, with a meter."""
+    raised = [(beat + 16, pitch + 6, length) for beat, pitch, length in CADENCE]
+    return write(
+        workspace.root / "metered.yaml",
+        track("keys", CADENCE + raised),
+        track("bass", [(0, 48, 2), (4, 43, 2), (16, 54, 2), (20, 49, 2)]),
+        marks=marks,
+        meter=meter,
+    )
+
+
+def test_a_meter_prints_before_the_marks_with_bar_numbers(
+    workspace: CommandWorkspace, capsys: pytest.CaptureFixture[str]
+) -> None:
+    parts = [
+        {"beat": 0, "end": 16, "text": "opening"},
+        {"beat": 16, "end": 20, "text": "turn"},
+        {"beat": 20, "end": 22, "text": "half"},
+        {"beat": 22, "end": 40, "text": "lift"},
+    ]
+    path = metered(workspace, [{"beat": 0, "bar": 4}], {"chords": CHORDS, "parts": parts})
+
+    assert read.main([str(path)]) == 0
+
+    assert capsys.readouterr().out == (
+        "meter\n"
+        "  beats 0-27: 4-beat bars\n"
+        "chords marks (chords vocabulary)\n"
+        "  beats 0-4 (bar 1): Am\n"
+        "  beats 4-8 (bar 2): F/A\n"
+        f"    warning: {F_A_DETAIL}\n"
+        "  beats 24-27 (bar 7): G7\n"
+        f"    warning: {G7_DETAIL}\n"
+        "parts marks (text)\n"
+        "  beats 0-16 (bars 1-4): opening\n"
+        "  beats 16-20 (bar 5): turn\n"
+        "  beats 20-22: half\n"
+        "  beats 22-27: lift\n"
+        "tonal (tracks: keys, bass)\n"
+        "  beats 0-16 (bars 1-4): C major (r 0.90)\n"
+        "  beats 16-27 (bars 5-7): F# major (r 0.90)\n"
+    )
+
+
+def test_changing_and_fractional_meters_number_bars_across_gaps(
+    workspace: CommandWorkspace, capsys: pytest.CaptureFixture[str]
+) -> None:
+    meter = [{"beat": 2, "bar": 3.5, "end": 9}, {"beat": 16, "bar": 5}, {"beat": 40, "bar": 4}]
+    parts = [
+        {"beat": 0, "end": 2, "text": "free"},
+        {"beat": 2, "end": 9, "text": "sevens"},
+        {"beat": 9, "end": 16, "text": "gap"},
+        {"beat": 16, "end": 21, "text": "five"},
+        {"beat": 21, "end": 27, "text": "rest"},
+    ]
+    path = metered(workspace, meter, {"parts": parts})
+
+    assert read.main([str(path)]) == 0
+
+    assert capsys.readouterr().out == (
+        "meter\n"
+        "  beats 2-9: 3.5-beat bars\n"
+        "  beats 16-27: 5-beat bars\n"
+        "parts marks (text)\n"
+        "  beats 0-2: free\n"
+        "  beats 2-9 (bars 1-2): sevens\n"
+        "  beats 9-16: gap\n"
+        "  beats 16-21 (bar 3): five\n"
+        "  beats 21-27 (bars 4-5): rest\n"
+        "tonal (tracks: keys, bass)\n"
+        "  beats 0-16: C major (r 0.90)\n"
+        "  beats 16-27 (bars 3-5): F# major (r 0.90)\n"
+    )
+
+
+def test_json_adds_the_meter_after_the_end(
+    workspace: CommandWorkspace, capsys: pytest.CaptureFixture[str]
+) -> None:
+    meter = [{"beat": 2, "bar": 3.5, "end": 9}, {"beat": 16, "bar": 5}, {"beat": 40, "bar": 4}]
+    path = metered(workspace, meter, {"parts": PARTS})
+
+    assert read.main([str(path), "--json"]) == 0
+    data = json_object(json.loads(capsys.readouterr().out))
+
+    assert data is not None
+    assert list(data) == ["end", "meter", "tracks", "frameworks", "marks"]
+    assert data["meter"] == [
+        {"beat": 2, "end": 9, "bar": 3.5},
+        {"beat": 16, "end": 27, "bar": 5},
+    ]
+    # Apart from the meter, the JSON is what the song gives without one: no bar numbers.
+    assert read.main([str(marked(workspace, CHORDS)), "--json"]) == 0
+    plain = json_object(json.loads(capsys.readouterr().out))
+    assert plain is not None
+    assert {key: data[key] for key in ("end", "tracks", "frameworks")} == TONAL_JSON
+    plain_marks = json_object(plain["marks"])
+    assert plain_marks is not None
+    assert data["marks"] == {"parts": plain_marks["parts"]}
+
+
+def test_a_meter_that_starts_after_the_song_prints_no_block(
+    workspace: CommandWorkspace, capsys: pytest.CaptureFixture[str]
+) -> None:
+    path = metered(workspace, [{"beat": 40, "bar": 4}])
+
+    assert read.main([str(path)]) == 0
+    assert capsys.readouterr().out == TONAL_TEXT
+    assert read.main([str(path), "--json"]) == 0
+    assert json.loads(capsys.readouterr().out) == {**TONAL_JSON, "meter": []}
+
+
+def test_a_song_without_a_meter_prints_no_bars(
+    workspace: CommandWorkspace, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert read.main([str(marked(workspace))]) == 0
+    out = capsys.readouterr().out
+    assert "meter" not in out
+    assert "bar" not in out
+    assert read.main([str(marked(workspace)), "--json"]) == 0
+    assert "meter" not in json.loads(capsys.readouterr().out)
