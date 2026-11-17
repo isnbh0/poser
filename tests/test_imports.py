@@ -1,7 +1,9 @@
-"""Every module of poser and poser-scsynth imports on the platform running the tests.
+"""Every module of poser and poser-scsynth imports on the platform running the tests, except the
+file-system backends `native()` does not select there.
 
 CI runs this file on Windows, where a module that needs a POSIX-only library when loaded would
-fail here instead of in a user's first command.
+fail here instead of in a user's first command. A backend exists to use one platform's library,
+so it imports only where `native()` selects it.
 """
 
 import json
@@ -9,9 +11,13 @@ import subprocess
 import sys
 from pathlib import Path
 
+from poser.adapters.filesystem import native
+from poser.core.ports import UnsupportedPlatformError
+
 ROOT = Path(__file__).resolve().parent.parent
 SOURCE_ROOTS = (ROOT / "src", ROOT / "packages" / "poser-scsynth" / "src")
 PACKAGES = (ROOT / "src" / "poser", ROOT / "packages" / "poser-scsynth" / "src" / "poser_scsynth")
+BACKEND_PREFIX = "poser.adapters.filesystem_"
 
 # Imports each module named in argv in this child process, so the libraries they load stay out of
 # the test process, and prints the failures as JSON.
@@ -43,10 +49,20 @@ def modules() -> list[str]:
     )
 
 
+def selected_backend() -> str | None:
+    """Return the module of the backend `native()` selects here, or None if it selects none."""
+    try:
+        return type(native()).__module__
+    except UnsupportedPlatformError:
+        return None
+
+
 def test_every_module_imports() -> None:
-    names = modules()
-    for expected in ("poser.adapters.filesystem", "poser.compose", "poser_scsynth.instrument"):
-        assert expected in names, expected
+    backend = selected_backend()
+    names = [name for name in modules() if not name.startswith(BACKEND_PREFIX) or name == backend]
+    expected = ["poser.adapters.filesystem", "poser.compose", "poser_scsynth.instrument"]
+    for name in [*expected, *([backend] if backend else [])]:
+        assert name in names, name
     result = subprocess.run(
         [sys.executable, "-c", IMPORTER, *names], check=True, capture_output=True, text=True
     )
