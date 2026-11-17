@@ -50,7 +50,7 @@ def test_success_writes_current_guide_and_loadable_demo(
     tmp_path: Path, plugin: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     target = tmp_path / "studio"
-    presets = tmp_path / 'factory "patches"'
+    presets = tmp_path / "factory 'patches'"
     presets.mkdir()
     demo = files("poser.reference_setups.surge").joinpath("demo.yaml").read_bytes()
     assert init_workspace.main([*args(target, plugin), "--presets-path", str(presets)]) == 0
