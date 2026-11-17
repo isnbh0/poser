@@ -102,7 +102,11 @@ def test_on_off_on_regeneration_and_check(tmp_path: Path) -> None:
     path = tmp_path / "poser.toml"
     original = None
     for enabled in (True, False, True):
-        path.write_text(CONFIG + f"\n[guidance]\nadvice = {str(enabled).lower()}\n")
+        path.write_text(
+            CONFIG + f"\n[guidance]\nadvice = {str(enabled).lower()}\n",
+            encoding="utf-8",
+            newline="\n",
+        )
         assert main(["--config", str(path), "--check"]) == 1
         assert main(["--config", str(path)]) == 0
         assert main(["--config", str(path), "--check"]) == 0
@@ -124,7 +128,7 @@ def test_examples_load_in_both_modes(tmp_path: Path, enabled: bool) -> None:
     assert examples
     for i, body in enumerate(examples):
         path = tmp_path / f"example{i}.py"
-        path.write_text(body)
+        path.write_text(body, encoding="utf-8", newline="\n")
         song = load_song(path, SONG_FORMATS).source
         assert isinstance(song, Song | Graph)
         sources = song.tracks if isinstance(song, Song) else song.track_nodes
@@ -148,7 +152,9 @@ def test_guidance_toggle_preserves_rendered_bytes_keys_and_cache(
     path = tmp_path / "song.yaml"
     path.write_text(
         "bpm: 120\ntracks:\n  - name: voice\n    sound: synth\n    notes:\n"
-        "      - {beat: 0, pitch: 60, length: 1, velocity: 100}\n"
+        "      - {beat: 0, pitch: 60, length: 1, velocity: 100}\n",
+        encoding="utf-8",
+        newline="\n",
     )
     song = load_song(path, SONG_FORMATS)
     song_id = SongId("song.yaml")

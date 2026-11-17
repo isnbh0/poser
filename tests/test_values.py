@@ -2,6 +2,7 @@
 
 import math
 from collections.abc import Callable
+from pathlib import PurePosixPath, PureWindowsPath
 
 import numpy as np
 import pytest
@@ -10,7 +11,7 @@ from poser.core.audio import NUM_CHANNELS, Audio, AudioFault, AudioProblem, make
 from poser.core.cache import sound_key
 from poser.core.checks import CheckFailureStatus, check_status
 from poser.core.jsonvalue import Json
-from poser.core.names import Identifier, NodeName, SongId, Suffix, TrackName
+from poser.core.names import Identifier, NodeName, SongId, Suffix, TrackName, is_inner_relative
 from poser.core.performance import Control, NoteOff, NoteOn, Performance
 from poser.core.ports import StemMeta
 from poser.core.report import (
@@ -137,6 +138,21 @@ def test_song_id() -> None:
     assert SongId("demo.py") == "demo.py"
     for value in ("", "/a", "a/../b", "a//b", "a\\b", "./a", "a/", "..", True):
         _bad(SongId, value)
+
+
+@pytest.mark.parametrize("flavor", [PurePosixPath, PureWindowsPath])
+def test_is_inner_relative_on_each_platform_s_rules(
+    flavor: type[PurePosixPath] | type[PureWindowsPath],
+) -> None:
+    for inner in ("a", "a/b", "a/./b"):
+        assert is_inner_relative(flavor(inner)), inner
+    for outer in ("", ".", "..", "a/../b", "/a"):
+        assert not is_inner_relative(flavor(outer)), outer
+
+
+def test_is_inner_relative_refuses_windows_anchors() -> None:
+    for outer in ("\\a", "C:a", "C:\\a", "C:/a", "\\\\server\\share\\a", "a\\..\\b"):
+        assert not is_inner_relative(PureWindowsPath(outer)), outer
 
 
 # JSON

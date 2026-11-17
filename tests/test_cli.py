@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 from fakes import FakeInstrument, FakeSound
-from helpers import fxp_bytes, set_instrument_guide
+from helpers import assert_mode, fxp_bytes, set_instrument_guide
 from workspaces import CommandWorkspace, make_workspace, write_script_song, write_song
 
 from poser.adapters.song_formats import SONG_FORMATS
@@ -234,7 +234,7 @@ def test_unreadable_song_exits_2(
 ) -> None:
     song = workspace.root / SONG
     song.parent.mkdir()
-    song.write_text("bpm: [")
+    song.write_text("bpm: [", encoding="utf-8", newline="\n")
 
     for main, prog in ((render.main, "render-song"), (analyze.main, "analyze-song")):
         assert main([SONG]) == EXIT_BAD_CONFIG
@@ -467,7 +467,7 @@ def test_check_each_failure_exits_one_alongside_a_pass(
 def test_check_bad_config_exits_two(
     workspace: CommandWorkspace, capsys: pytest.CaptureFixture[str], config: str
 ) -> None:
-    workspace.config.write_text(config)
+    workspace.config.write_text(config, encoding="utf-8", newline="\n")
     assert check.main([]) == EXIT_BAD_CONFIG
     assert capsys.readouterr().err.startswith("check-instruments: ")
     assert not workspace.module.BUILT
@@ -522,7 +522,7 @@ presets = "presets"
 def pedalboard_workspace(tmp_path: Path) -> None:
     """A workspace on the pedalboard adapter, whose sounds scan needs no plugin."""
     (tmp_path / "presets").mkdir()
-    (tmp_path / "poser.toml").write_text(PEDALBOARD_CONFIG.lstrip())
+    (tmp_path / "poser.toml").write_text(PEDALBOARD_CONFIG.lstrip(), encoding="utf-8", newline="\n")
 
 
 def test_list_notes_unclaimed_source_files_without_failing(
@@ -589,7 +589,7 @@ problems = ["presets: cannot read"]
 """
     make_workspace(tmp_path, monkeypatch, instruments)
     (tmp_path / "sounds").mkdir()
-    (tmp_path / "sounds" / "warm.json").write_text("{}")
+    (tmp_path / "sounds" / "warm.json").write_text("{}", encoding="utf-8", newline="\n")
 
     assert sounds.list_main([]) == EXIT_SOME_FAILED
 
@@ -798,18 +798,18 @@ def test_update_guide_check_follows_poser_toml(
     assert guide.main(["--check"]) == EXIT_ALL_PASS
     config = initialized / "poser.toml"
     set_instrument_guide(config, "surge", "SENTINEL-NOTE")
-    before = guide_file.read_text()
+    before = guide_file.read_text(encoding="utf-8")
     capsys.readouterr()
 
     assert guide.main(["--check"]) == EXIT_SOME_FAILED
     assert capsys.readouterr().err == (
         "update-guide: POSER.md is out of date; run uv run update-guide\n"
     )
-    assert guide_file.read_text() == before
+    assert guide_file.read_text(encoding="utf-8") == before
 
     assert guide.main([]) == EXIT_ALL_PASS
     assert out(capsys) == f"{guide_file}\n"
-    assert "SENTINEL-NOTE" in guide_file.read_text()
+    assert "SENTINEL-NOTE" in guide_file.read_text(encoding="utf-8")
     assert guide.main(["--check"]) == EXIT_ALL_PASS
     assert sorted(path.name for path in initialized.iterdir() if path.name.startswith(".")) == [
         ".gitignore"
@@ -854,7 +854,11 @@ def test_update_guide_replace_failure_preserves_reference_and_cleans_temp(
     reference = initialized / "POSER.md"
     before = reference.read_bytes()
     config = initialized / "poser.toml"
-    config.write_text(config.read_text().replace("factory patches", "changed patches"))
+    config.write_text(
+        config.read_text(encoding="utf-8").replace("factory patches", "changed patches"),
+        encoding="utf-8",
+        newline="\n",
+    )
 
     def fail_replace(_path: Path, _target: Path) -> Path:
         raise OSError("injected replace failure")
@@ -884,7 +888,7 @@ def test_update_guide_without_a_workspace_or_with_a_bad_config_exits_2(
     assert guide.main([]) == EXIT_BAD_CONFIG
     assert capsys.readouterr().err.startswith("update-guide: no poser.toml in ")
 
-    (tmp_path / "poser.toml").write_text("[instruments]\n")
+    (tmp_path / "poser.toml").write_text("[instruments]\n", encoding="utf-8", newline="\n")
     assert guide.main(["--check"]) == EXIT_BAD_CONFIG
     assert capsys.readouterr().err == (
         f"update-guide: {tmp_path.resolve() / 'poser.toml'}: instruments: "
@@ -901,22 +905,22 @@ def test_update_guide_config_writes_beside_that_config(
     args = ["--setup", "surge", "--plugin-path", str(plugin)]
     other = tmp_path / "other"
     assert init_workspace.main([str(other), *args]) == 0
-    (other / "POSER.md").write_text(f"{GENERATED}\nold body\n")
+    (other / "POSER.md").write_text(f"{GENERATED}\nold body\n", encoding="utf-8", newline="\n")
     here = tmp_path / "here"
     here.mkdir()
     if inside:
         assert init_workspace.main([str(here), *args]) == 0
     monkeypatch.chdir(here)
     mine = here / "POSER.md"
-    before = mine.read_text() if inside else None
+    before = mine.read_text(encoding="utf-8") if inside else None
     config = ["--config", str(other / "poser.toml")]
 
     assert guide.main([*config, "--check"]) == EXIT_SOME_FAILED
     assert guide.main(config) == EXIT_ALL_PASS
     assert guide.main([*config, "--check"]) == EXIT_ALL_PASS
 
-    assert (other / "POSER.md").read_text().startswith("<!-- ")
-    assert (mine.read_text() if inside else None) == before
+    assert (other / "POSER.md").read_text(encoding="utf-8").startswith("<!-- ")
+    assert (mine.read_text(encoding="utf-8") if inside else None) == before
     assert inside or not mine.exists()
 
 
@@ -927,7 +931,7 @@ def test_update_guide_refuses_to_replace_a_guide_it_did_not_write(
     initialized: Path, capsys: pytest.CaptureFixture[str], text: str
 ) -> None:
     guide_file = initialized / "POSER.md"
-    guide_file.write_text(text)
+    guide_file.write_text(text, encoding="utf-8", newline="\n")
     problem = (
         f"update-guide: {guide_file} was not written by update-guide; move it away to replace it\n"
     )
@@ -937,10 +941,10 @@ def test_update_guide_refuses_to_replace_a_guide_it_did_not_write(
     assert guide.main(["--check"]) == EXIT_SOME_FAILED
     assert capsys.readouterr().err == problem
 
-    assert guide_file.read_text() == text
+    assert guide_file.read_text(encoding="utf-8") == text
     guide_file.unlink()
     assert guide.main([]) == EXIT_ALL_PASS
-    assert guide_file.read_text().startswith(f"{GENERATED}\n")
+    assert guide_file.read_text(encoding="utf-8").startswith(f"{GENERATED}\n")
 
 
 def test_update_guide_writes_through_a_symlink_and_keeps_the_mode(
@@ -949,7 +953,7 @@ def test_update_guide_writes_through_a_symlink_and_keeps_the_mode(
     link = initialized / "POSER.md"
     target = initialized / "docs" / "guide.md"
     target.parent.mkdir()
-    target.write_text(f"{GENERATED}\nold body\n")
+    target.write_text(f"{GENERATED}\nold body\n", encoding="utf-8", newline="\n")
     target.chmod(0o600)
     link.unlink()
     link.symlink_to(Path("docs") / "guide.md")
@@ -957,9 +961,9 @@ def test_update_guide_writes_through_a_symlink_and_keeps_the_mode(
     assert guide.main([]) == EXIT_ALL_PASS
 
     assert link.is_symlink()
-    assert target.read_text() == link.read_text()
-    assert "old body" not in target.read_text()
-    assert target.stat().st_mode & 0o777 == 0o600
+    assert target.read_text(encoding="utf-8") == link.read_text(encoding="utf-8")
+    assert "old body" not in target.read_text(encoding="utf-8")
+    assert_mode(target, 0o600)
     assert sorted(path.name for path in target.parent.iterdir()) == ["guide.md"]
     assert guide.main(["--check"]) == EXIT_ALL_PASS
 
@@ -967,9 +971,9 @@ def test_update_guide_writes_through_a_symlink_and_keeps_the_mode(
 def test_update_guide_keeps_an_existing_guide_s_mode(initialized: Path) -> None:
     guide_file = initialized / "POSER.md"
     guide_file.chmod(0o640)
-    guide_file.write_text(f"{GENERATED}\nold body\n")
+    guide_file.write_text(f"{GENERATED}\nold body\n", encoding="utf-8", newline="\n")
 
     assert guide.main([]) == EXIT_ALL_PASS
 
-    assert guide_file.stat().st_mode & 0o777 == 0o640
-    assert "old body" not in guide_file.read_text()
+    assert_mode(guide_file, 0o640)
+    assert "old body" not in guide_file.read_text(encoding="utf-8")

@@ -76,7 +76,7 @@ class Harness:
     def __init__(self, root: Path) -> None:
         self.root = root
         self.config = root / "poser.toml"
-        self.config.write_text("captured configuration\n")
+        self.config.write_text("captured configuration\n", encoding="utf-8", newline="\n")
         self.song = write_song(root / "songs" / "piece.yaml", ("lead", "fake"))
         self.identifier = SongId("songs/piece.yaml")
         self.destination = root / "deliveries" / "first-song"
@@ -85,7 +85,7 @@ class Harness:
         self.tools = AnalysisTools(FakeMixer(), FakeMeasurer(), SvgVisualizer())
         self.guide_path = root / "POSER.md"
         self.guide_text = "workspace reference\n"
-        self.guide_path.write_text(self.guide_text)
+        self.guide_path.write_text(self.guide_text, encoding="utf-8", newline="\n")
         self.includes: tuple[Path, ...] = ()
         self.writer: DeliveryWriter = FileDeliveryWriter(native())
         self.audio_files = NpyAudioFiles()
@@ -130,7 +130,7 @@ def manifest(destination: Path) -> bytes:
 def test_bundle_hashes_portability_and_later_runs(harness: Harness) -> None:
     dependency = harness.root / "parts" / "theme.py"
     dependency.parent.mkdir()
-    dependency.write_text("NOTES = [60]\n")
+    dependency.write_text("NOTES = [60]\n", encoding="utf-8", newline="\n")
     harness.includes = (Path("parts/theme.py"),)
     result = harness.run()
     assert isinstance(result, PublishedDelivery)
@@ -210,12 +210,14 @@ def test_builder_once_lock_held_through_copy_and_published(harness: Harness) -> 
     harness.song = write_script_song(harness.root / "songs" / "piece.py", "fake")
     harness.identifier = SongId("songs/piece.py")
     harness.song.write_text(
-        harness.song.read_text().replace(
+        harness.song.read_text(encoding="utf-8").replace(
             "def build() -> Song:\n",
             "def build() -> Song:\n"
             f"    p = Path({str(count)!r})\n"
             "    p.write_text(str(int(p.read_text()) + 1) if p.exists() else '1')\n",
-        )
+        ),
+        encoding="utf-8",
+        newline="\n",
     )
     original = harness.song.read_bytes()
     checks: list[str] = []
@@ -227,7 +229,7 @@ def test_builder_once_lock_held_through_copy_and_published(harness: Harness) -> 
 
     harness.writer = HookWriter(check_lock)
     assert isinstance(harness.run(), PublishedDelivery)
-    assert count.read_text() == "1"
+    assert count.read_text(encoding="utf-8") == "1"
     assert checks == ["locked"]
     assert (harness.destination / "source/songs/piece.py").read_bytes() == original
     with harness.store.song(harness.identifier).lock():
@@ -254,10 +256,10 @@ def test_changed_inputs_during_staging_never_publish(
     change: str,
 ) -> None:
     include = harness.root / "dep.py"
-    include.write_text("original")
+    include.write_text("original", encoding="utf-8", newline="\n")
     harness.includes = (Path("dep.py"),)
     lock = harness.root / "uv.lock"
-    lock.write_text("original lock")
+    lock.write_text("original lock", encoding="utf-8", newline="\n")
     target = {
         "song": harness.song,
         "include": include,
@@ -280,7 +282,9 @@ def test_changed_inputs_during_staging_never_publish(
 
 
 def test_initially_absent_lock_created_during_export(harness: Harness) -> None:
-    harness.writer = HookWriter(lambda: (harness.root / "uv.lock").write_text("new"))
+    harness.writer = HookWriter(
+        lambda: (harness.root / "uv.lock").write_text("new", encoding="utf-8", newline="\n")
+    )
     assert isinstance(harness.run(), InputsChanged)
     assert not harness.destination.exists()
 
@@ -289,10 +293,12 @@ def test_source_changed_by_builder_is_not_published(harness: Harness) -> None:
     harness.song = write_script_song(harness.root / "piece.py", "fake")
     harness.identifier = SongId("piece.py")
     harness.song.write_text(
-        harness.song.read_text().replace(
+        harness.song.read_text(encoding="utf-8").replace(
             "def build() -> Song:\n",
             f"def build() -> Song:\n    Path({str(harness.song)!r}).write_text('# changed')\n",
-        )
+        ),
+        encoding="utf-8",
+        newline="\n",
     )
     assert isinstance(harness.run(), InputsChanged)
     assert not harness.destination.exists()
@@ -366,9 +372,9 @@ def test_failure_outcomes_preserve_history_and_never_publish(
 
 
 def test_an_unknown_effect_recipe_fails_naming_its_track(harness: Harness) -> None:
-    data = yaml.safe_load(harness.song.read_text())
+    data = yaml.safe_load(harness.song.read_text(encoding="utf-8"))
     data["tracks"][0]["effects"] = ["drive"]
-    harness.song.write_text(yaml.safe_dump(data))
+    harness.song.write_text(yaml.safe_dump(data), encoding="utf-8", newline="\n")
 
     result = harness.run()
 
@@ -387,7 +393,12 @@ def test_destination_race_does_not_replace_empty_owner_directory(harness: Harnes
     assert not list(harness.root.rglob(".poser-export-*"))
 
 
-@pytest.mark.parametrize("include", ["../outside.py", "/etc/passwd", ".", "songs"])
+UNSAFE_INCLUDES = ["../outside.py", "/etc/passwd", ".", "songs"]
+if sys.platform == "win32":
+    UNSAFE_INCLUDES += ["C:outside.py", "\\outside.py"]
+
+
+@pytest.mark.parametrize("include", UNSAFE_INCLUDES)
 def test_unsafe_includes_refused(harness: Harness, include: str) -> None:
     harness.includes = (Path(include),)
     with pytest.raises(ValueError, match=r"include|regular"):
@@ -397,7 +408,7 @@ def test_unsafe_includes_refused(harness: Harness, include: str) -> None:
 
 def test_include_symlink_escape_refused(harness: Harness, tmp_path: Path) -> None:
     outside = tmp_path.parent / f"{tmp_path.name}-outside"
-    outside.write_text("private")
+    outside.write_text("private", encoding="utf-8", newline="\n")
     (harness.root / "escape").symlink_to(outside)
     harness.includes = (Path("escape"),)
     with pytest.raises(ValueError, match="escapes"):
@@ -425,7 +436,7 @@ def test_guide_changes_do_not_restage(harness: Harness, change: str) -> None:
         if change == "delete":
             harness.guide_path.unlink()
         else:
-            harness.guide_path.write_text("changed")
+            harness.guide_path.write_text("changed", encoding="utf-8", newline="\n")
 
     harness.writer = HookWriter(mutate)
     assert isinstance(harness.run(), PublishedDelivery)
@@ -489,7 +500,9 @@ def test_cli_snapshot_configuration_not_a_later_read(
 
     def construct(self: Composition, config: WorkspaceConfig, context: AdapterContext) -> None:
         original(self, config, context)
-        cli_workspace.config.write_text("invalid changed configuration")
+        cli_workspace.config.write_text(
+            "invalid changed configuration", encoding="utf-8", newline="\n"
+        )
 
     monkeypatch.setattr(Composition, "__init__", construct)
     assert export.main([str(song), "--destination", "bundle", "--json"]) == 1
@@ -506,9 +519,9 @@ def test_cli_distinct_roots_and_subdirectory_include_resolution(
     source = cli_workspace.root / "source-root"
     source.mkdir()
     song = write_song(source / "nested" / "song.yaml", ("lead", "synth"))
-    (source / "dep.py").write_text("source dependency")
-    (source / "uv.lock").write_text("source lock")
-    (cli_workspace.root / "uv.lock").write_text("config lock")
+    (source / "dep.py").write_text("source dependency", encoding="utf-8", newline="\n")
+    (source / "uv.lock").write_text("source lock", encoding="utf-8", newline="\n")
+    (cli_workspace.root / "uv.lock").write_text("config lock", encoding="utf-8", newline="\n")
     monkeypatch.chdir(source)
     assert (
         export.main(
@@ -631,7 +644,7 @@ def test_cli_never_reads_or_composes_guide_and_collision_json(
     if guide_state == "broken":
         guide.write_bytes(b"\xff\xfe")
     elif guide_state == "present":
-        guide.write_text("workspace reference")
+        guide.write_text("workspace reference", encoding="utf-8", newline="\n")
     original_read = Path.read_bytes
     reads: list[Path] = []
     compositions: list[str] = []
@@ -683,7 +696,7 @@ def test_success_constructor_rejects_forbidden_bundle_states(
         del data["artifacts"]["audio/mix.npy"]
     else:
         report_path = harness.destination / "report.json"
-        report_path.write_text("{}")
+        report_path.write_text("{}", encoding="utf-8", newline="\n")
         data["artifacts"]["report.json"] = sha256(report_path.read_bytes())
     raw = json.dumps(data).encode()
     (harness.destination / "manifest.json").write_bytes(raw)
@@ -696,11 +709,13 @@ def test_python_execution_failure_is_exit_one_and_invalid_suffix_two(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     song = cli_workspace.root / "song.py"
-    song.write_text("def build():\n    raise RuntimeError('execution failed')\n")
+    song.write_text(
+        "def build():\n    raise RuntimeError('execution failed')\n", encoding="utf-8", newline="\n"
+    )
     assert export.main([str(song), "--destination", "bundle", "--json"]) == 1
     assert json.loads(capsys.readouterr().out)["outcome"] == "execution_failed"
     bad = cli_workspace.root / "song.unknown"
-    bad.write_text("not a supported format")
+    bad.write_text("not a supported format", encoding="utf-8", newline="\n")
     assert export.main([str(bad), "--destination", "bundle", "--json"]) == 2
     assert json.loads(capsys.readouterr().out)["outcome"] == "invalid_input"
 
@@ -743,13 +758,13 @@ def test_dual_root_lock_changes_fail(
     song = write_song(source / "song.yaml", ("lead", "synth"))
     lock = (source if role == "source" else cli_workspace.root) / "uv.lock"
     if change != "create":
-        lock.write_text("original")
+        lock.write_text("original", encoding="utf-8", newline="\n")
 
     def mutate() -> None:
         if change == "delete":
             lock.unlink()
         else:
-            lock.write_text("changed")
+            lock.write_text("changed", encoding="utf-8", newline="\n")
 
     monkeypatch.setattr(export, "delivery_writer", lambda: HookWriter(mutate))
     monkeypatch.chdir(source)
@@ -774,12 +789,12 @@ def test_dual_root_lock_changes_fail(
 
 def test_writer_cleanup_does_not_remove_owner_content(harness: Harness) -> None:
     def fail() -> None:
-        (harness.destination.parent / "owner").write_text("keep")
+        (harness.destination.parent / "owner").write_text("keep", encoding="utf-8", newline="\n")
         raise OSError("injected")
 
     harness.writer = HookWriter(fail)
     assert isinstance(harness.run(), DeliveryIOFailed)
-    assert (harness.destination.parent / "owner").read_text() == "keep"
+    assert (harness.destination.parent / "owner").read_text(encoding="utf-8") == "keep"
     assert not harness.destination.exists()
 
 
@@ -802,7 +817,7 @@ def test_writer_accepts_a_root_that_refuses_creation_as_access_denied(
 
 def test_safe_include_symlink_preserves_declared_editable_filename(harness: Harness) -> None:
     target = harness.root / "implementation.py"
-    target.write_text("VALUE = 1\n")
+    target.write_text("VALUE = 1\n", encoding="utf-8", newline="\n")
     alias = harness.root / "helper.py"
     alias.symlink_to(target)
     harness.includes = (Path("helper.py"),)

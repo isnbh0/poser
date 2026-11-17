@@ -106,7 +106,7 @@ def captured_state(instrument_path: Path, tmp_path: Path) -> bytes:
         check=True,
         timeout=120,
     )
-    return base64.b64decode(state_file.read_text())
+    return base64.b64decode(state_file.read_text(encoding="utf-8"))
 
 
 def test_a_captured_state_reaches_the_render(tmp_path: Path) -> None:

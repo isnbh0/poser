@@ -31,12 +31,12 @@ import shutil
 import tempfile
 from collections.abc import Collection, Generator, Mapping
 from contextlib import ExitStack, contextmanager
-from pathlib import Path, PurePosixPath
+from pathlib import Path, PurePath
 
 from poser.adapters.filesystem import FileSystem, native
 from poser.adapters.loading import refuse_options
 from poser.core.jsonvalue import JsonValue, json_object
-from poser.core.names import Identifier, SongId, Suffix
+from poser.core.names import Identifier, SongId, Suffix, is_inner_relative
 from poser.core.ports import AdapterContext, SongBusyError, StemMeta
 from poser.core.song import is_number
 from poser.core.statuses import StemStatus
@@ -220,10 +220,11 @@ class FileRecordDraft:
         self.run = run
 
     def path(self, relative: str) -> Path:
-        parts = PurePosixPath(relative).parts
-        if not parts or PurePosixPath(relative).is_absolute() or ".." in parts:
+        # The platform's rules, so on Windows a backslash or a drive cannot leave the record.
+        inner = PurePath(relative)
+        if not is_inner_relative(inner):
             raise ValueError(f"a record path must stay inside the record, got {relative!r}")
-        path = self.directory.joinpath(*parts)
+        path = self.directory.joinpath(*inner.parts)
         path.parent.mkdir(parents=True, exist_ok=True)
         return path
 

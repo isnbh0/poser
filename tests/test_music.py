@@ -238,7 +238,7 @@ def test_notes_rejects_bad_values(
 
 
 def test_music_module_imports_no_plugin_code() -> None:
-    tree = ast.parse(Path(music.__file__).read_text())
+    tree = ast.parse(Path(music.__file__).read_text(encoding="utf-8"))
     modules = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):

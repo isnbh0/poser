@@ -36,7 +36,7 @@ def write(
         data["marks"] = marks
     if meter is not None:
         data["meter"] = meter
-    path.write_text(yaml.safe_dump(data, sort_keys=False))
+    path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8", newline="\n")
     return path
 
 
@@ -106,7 +106,7 @@ def test_a_failing_framework_exits_1(
     workspace: CommandWorkspace, song: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     workspace.write_config(
-        workspace.config.read_text()
+        workspace.config.read_text(encoding="utf-8")
         + '[adapters]\nframeworks = ["tonal", "{module}:raising_framework"]\n'
     )
 
@@ -138,7 +138,7 @@ def test_an_unreadable_song_exits_2(
     workspace: CommandWorkspace, capsys: pytest.CaptureFixture[str]
 ) -> None:
     broken = workspace.root / "broken.yaml"
-    broken.write_text("bpm: 60\ntracks: 3\n")
+    broken.write_text("bpm: 60\ntracks: 3\n", encoding="utf-8", newline="\n")
 
     assert read.main([str(broken)]) == 2
     assert "tracks" in capsys.readouterr().err
@@ -150,7 +150,9 @@ def test_the_neutral_preset_reads_nothing(
     workspace: CommandWorkspace, song: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     assert PRESETS["neutral"]["frameworks"] == ()
-    workspace.write_config(workspace.config.read_text() + '[adapters]\nframeworks = "neutral"\n')
+    workspace.write_config(
+        workspace.config.read_text(encoding="utf-8") + '[adapters]\nframeworks = "neutral"\n'
+    )
 
     assert read.main([str(song)]) == 0
 
@@ -424,7 +426,7 @@ def test_the_neutral_vocabularies_show_chords_as_text(
     workspace: CommandWorkspace, capsys: pytest.CaptureFixture[str]
 ) -> None:
     workspace.write_config(
-        workspace.config.read_text()
+        workspace.config.read_text(encoding="utf-8")
         + '[adapters]\nframeworks = "neutral"\nvocabularies = "neutral"\n'
     )
     song = marked(workspace, [{"beat": 0, "end": 4, "text": "Amj7"}])
@@ -445,7 +447,7 @@ def test_a_failing_vocabulary_exits_1(
     workspace: CommandWorkspace, capsys: pytest.CaptureFixture[str]
 ) -> None:
     workspace.write_config(
-        workspace.config.read_text()
+        workspace.config.read_text(encoding="utf-8")
         + '[adapters]\nvocabularies = ["{module}:raising_vocabulary"]\n'
     )
 

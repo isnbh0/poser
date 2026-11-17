@@ -2,6 +2,7 @@
 
 import json
 import re
+import stat
 import struct
 import sys
 import tomllib
@@ -35,9 +36,19 @@ needs_posix_permissions = pytest.mark.skipif(
 )
 
 
+def assert_mode(path: Path, mode: int) -> None:
+    """Assert that `path` has the permission bits `mode`. On Windows the only mode is the read-only
+    attribute, so there it asserts the mode Windows reports for `mode`: `0o444` when the owner
+    cannot write, `0o666` otherwise."""
+    expected = mode
+    if sys.platform == "win32":
+        expected = 0o666 if mode & stat.S_IWUSR else 0o444
+    assert stat.S_IMODE(path.stat().st_mode) == expected
+
+
 def set_instrument_guide(config: Path, instrument: str, note: str) -> None:
     """Replace the one-line `guide` of `[instruments.<instrument>]` in `config` with `note`."""
-    text = config.read_text()
+    text = config.read_text(encoding="utf-8")
     header = f"[instruments.{instrument}]\n"
     start = text.index(header) + len(header)
     end = text.find("\n[", start)
@@ -45,8 +56,11 @@ def set_instrument_guide(config: Path, instrument: str, note: str) -> None:
     line = f"guide = {json.dumps(note)}"
     table, count = re.subn(r"^guide = .*$", lambda _: line, text[start:end], flags=re.MULTILINE)
     assert count == 1, f"no single-line guide in [instruments.{instrument}]"
-    config.write_text(text[:start] + table + text[end:])
-    assert tomllib.loads(config.read_text())["instruments"][instrument]["guide"] == note
+    config.write_text(text[:start] + table + text[end:], encoding="utf-8", newline="\n")
+    assert (
+        tomllib.loads(config.read_text(encoding="utf-8"))["instruments"][instrument]["guide"]
+        == note
+    )
 
 
 def real_composition(tmp_path: Path) -> Composition:

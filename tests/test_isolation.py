@@ -141,7 +141,7 @@ def workers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> ModuleType:
     """Import a worker module from a folder on both the test's and the child's path."""
     folder = tmp_path / "workers"
     folder.mkdir()
-    (folder / "isolation_workers.py").write_text(WORKERS, encoding="utf-8")
+    (folder / "isolation_workers.py").write_text(WORKERS, encoding="utf-8", newline="\n")
     monkeypatch.syspath_prepend(str(folder))
     monkeypatch.setenv("PYTHONPATH", str(folder))
     monkeypatch.delitem(sys.modules, "isolation_workers", raising=False)
@@ -224,7 +224,9 @@ def test_run_isolated_refuses_targets_a_child_cannot_import(
 def test_the_child_ignores_modules_in_the_working_directory(
     workers: ModuleType, tmp_path: Path
 ) -> None:
-    (tmp_path / "json.py").write_text("raise SystemExit('the planted json.py ran')\n")
+    (tmp_path / "json.py").write_text(
+        "raise SystemExit('the planted json.py ran')\n", encoding="utf-8", newline="\n"
+    )
     assert Path.cwd() == tmp_path
     assert run_isolated(target(workers, "done"), {}, 30) == {"done": True}
 
@@ -235,7 +237,7 @@ def read_pids(pid_file: Path) -> tuple[int, int]:
     while not pid_file.exists():
         assert time.monotonic() < deadline, "the grandchild wrote no PIDs"
         time.sleep(0.05)
-    worker, grandchild = pid_file.read_text().split()
+    worker, grandchild = pid_file.read_text(encoding="utf-8").split()
     return int(worker), int(grandchild)
 
 
@@ -372,14 +374,16 @@ def test_the_worker_dies_with_the_process_that_started_it(
         "from poser.adapters.isolation import run_isolated\n"
         f"Path({str(parent_file)!r}).write_text(str(os.getpid()))\n"
         f"job = {{'pid_file': {str(pid_file)!r}, 'seconds': 60}}\n"
-        f"run_isolated(isolation_workers.{worker}, job, None)\n"
+        f"run_isolated(isolation_workers.{worker}, job, None)\n",
+        encoding="utf-8",
+        newline="\n",
     )
     parent = subprocess.Popen([sys.executable, str(script)])
     try:
         worker_pid, grandchild = read_pids(pid_file)
     finally:
         try:
-            kill(int(parent_file.read_text()))
+            kill(int(parent_file.read_text(encoding="utf-8")))
         except (OSError, ValueError):
             parent.kill()
         parent.wait()

@@ -2,7 +2,6 @@
 
 import hashlib
 import os
-import stat
 from pathlib import Path
 from typing import Self
 
@@ -10,7 +9,7 @@ import numpy as np
 import pytest
 import yaml
 from contracts import check_record_writer_contract, check_song_format_contract
-from helpers import SURGE_DIR
+from helpers import SURGE_DIR, assert_mode
 from test_song import (
     cc_track_song,
     gain_song,
@@ -44,7 +43,7 @@ def loaded(path: Path) -> Song:
 
 def test_valid_song_loads_with_expected_values(tmp_path: Path) -> None:
     path = tmp_path / "song.yaml"
-    path.write_text(yaml.safe_dump(valid_song()))
+    path.write_text(yaml.safe_dump(valid_song()), encoding="utf-8", newline="\n")
 
     song = loaded(path)
 
@@ -69,7 +68,7 @@ def test_missing_file_is_a_song_error(tmp_path: Path) -> None:
 
 def test_malformed_yaml_is_a_song_error(tmp_path: Path) -> None:
     path = tmp_path / "bad.yaml"
-    path.write_text("bpm: [unclosed")
+    path.write_text("bpm: [unclosed", encoding="utf-8", newline="\n")
     with pytest.raises(SongError, match="cannot read"):
         load_song(path, SONG_FORMATS)
 
@@ -89,7 +88,7 @@ def test_written_song_keeps_the_format_key_order(tmp_path: Path) -> None:
     path = tmp_path / "song.yaml"
     write_yaml_song(helper_song(), path)
 
-    data = yaml.safe_load(path.read_text())
+    data = yaml.safe_load(path.read_text(encoding="utf-8"))
 
     assert list(data) == ["bpm", "tracks"]
     assert all(list(track) == ["name", "sound", "notes"] for track in data["tracks"])
@@ -100,7 +99,7 @@ def test_failed_replace_keeps_the_old_file_and_leaves_no_temp_file(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     path = tmp_path / "song.yaml"
-    path.write_text("old contents\n")
+    path.write_text("old contents\n", encoding="utf-8", newline="\n")
 
     def fail(*args: object) -> None:
         raise OSError("disk full")
@@ -109,7 +108,7 @@ def test_failed_replace_keeps_the_old_file_and_leaves_no_temp_file(
     with pytest.raises(SongError, match="disk full"):
         write_yaml_song(helper_song(), path)
 
-    assert path.read_text() == "old contents\n"
+    assert path.read_text(encoding="utf-8") == "old contents\n"
     assert [p.name for p in tmp_path.iterdir()] == ["song.yaml"]
 
 
@@ -140,12 +139,12 @@ def test_failed_write_leaves_no_temp_file(tmp_path: Path, monkeypatch: pytest.Mo
 
 def test_written_song_keeps_the_existing_file_mode(tmp_path: Path) -> None:
     path = tmp_path / "song.yaml"
-    path.write_text("old\n")
+    path.write_text("old\n", encoding="utf-8", newline="\n")
     path.chmod(0o640)
 
     write_yaml_song(helper_song(), path)
 
-    assert stat.S_IMODE(path.stat().st_mode) == 0o640
+    assert_mode(path, 0o640)
 
 
 def test_new_song_file_gets_umask_permissions(tmp_path: Path) -> None:
@@ -154,12 +153,12 @@ def test_new_song_file_gets_umask_permissions(tmp_path: Path) -> None:
         write_yaml_song(helper_song(), tmp_path / "song.yaml")
     finally:
         os.umask(old)
-    assert stat.S_IMODE((tmp_path / "song.yaml").stat().st_mode) == 0o644
+    assert_mode(tmp_path / "song.yaml", 0o644)
 
 
 def test_writing_through_a_symlink_keeps_the_link(tmp_path: Path) -> None:
     real = tmp_path / "real.yaml"
-    real.write_text("old\n")
+    real.write_text("old\n", encoding="utf-8", newline="\n")
     link = tmp_path / "link.yaml"
     link.symlink_to(real)
 
@@ -189,7 +188,7 @@ def test_numbers_write_in_one_spelling(tmp_path: Path) -> None:
         note = (Note(beat=beat, pitch=60, length=length, velocity=100),)
         path = tmp_path / "song.yaml"
         write_yaml_song(Song(bpm=bpm, tracks=(Track("lead", "serum", note),)), path)
-        return path.read_text()
+        return path.read_text(encoding="utf-8")
 
     assert write(0, 1, 120) == write(0.0, np.float64(1.0), 120.0)
     assert write(np.float64(0.5), 1, 120) == write(0.5, 1, 120)
@@ -214,7 +213,9 @@ def test_gain_from_yaml_nan_and_inf_is_rejected(tmp_path: Path) -> None:
         path.write_text(
             yaml.safe_dump(valid_song()).replace(
                 "  sound: serum", f"  sound: serum\n  gain: {text}"
-            )
+            ),
+            encoding="utf-8",
+            newline="\n",
         )
         with pytest.raises(SongError, match="gain"):
             load_song(path, SONG_FORMATS)
@@ -225,7 +226,7 @@ def test_song_with_gains_round_trips(tmp_path: Path) -> None:
     write_yaml_song(gain_song(), path)
 
     assert load_song(path, SONG_FORMATS).source == gain_song()
-    assert "gain" not in yaml.safe_load(path.read_text())["tracks"][1]
+    assert "gain" not in yaml.safe_load(path.read_text(encoding="utf-8"))["tracks"][1]
 
 
 def test_song_with_controller_changes_round_trips(tmp_path: Path) -> None:
@@ -241,7 +242,7 @@ SCRIPT_HEADER = """from poser import ControlChange, Note, Song, Track
 
 def write_script(tmp_path: Path, body: str, name: str = "tune.py") -> Path:
     path = tmp_path / name
-    path.write_text(SCRIPT_HEADER + body)
+    path.write_text(SCRIPT_HEADER + body, encoding="utf-8", newline="\n")
     return path
 
 
@@ -268,7 +269,9 @@ def test_script_song_may_return_a_graph_the_author_wired(tmp_path: Path) -> None
         header + "def build():\n"
         '    lead = TrackNode("lead", sound="serum", notes=(Note(0, 60, 1, 100),))\n'
         '    drive = EffectNode("lead.drive", effect="crush")\n'
-        '    return Graph(120, (lead, drive), (Wire("lead", "lead.drive", "audio"),))\n'
+        '    return Graph(120, (lead, drive), (Wire("lead", "lead.drive", "audio"),))\n',
+        encoding="utf-8",
+        newline="\n",
     )
 
     graph = load_song(path, SONG_FORMATS).source
@@ -362,7 +365,9 @@ def test_a_misshapen_graph_from_a_script_reports_the_path(tmp_path: Path) -> Non
     path.write_text(
         header + "def build():\n"
         '    lead = TrackNode("lead", sound="serum", notes=(Note(0, 60, 1, 100),))\n'
-        '    return Graph(120, (lead,), (Wire("lead", "ghost", "audio"),))\n'
+        '    return Graph(120, (lead,), (Wire("lead", "ghost", "audio"),))\n',
+        encoding="utf-8",
+        newline="\n",
     )
 
     with pytest.raises(SongError) as raised:
@@ -404,7 +409,7 @@ def test_broken_script_song_is_one_song_error_naming_the_file(
 
 def test_unknown_song_suffix_is_a_song_error(tmp_path: Path) -> None:
     path = tmp_path / "tune.json"
-    path.write_text("{}")
+    path.write_text("{}", encoding="utf-8", newline="\n")
 
     with pytest.raises(SongError) as error:
         load_song(path, SONG_FORMATS)
@@ -453,7 +458,7 @@ def test_script_and_yaml_with_one_stem_both_load(tmp_path: Path) -> None:
         "def build():\n    return Song(90, (Track('lead', 'serum', (Note(0, 60, 1, 100),)),))\n",
         "x.py",
     )
-    (tmp_path / "x.yaml").write_text(yaml.safe_dump(valid_song()))
+    (tmp_path / "x.yaml").write_text(yaml.safe_dump(valid_song()), encoding="utf-8", newline="\n")
 
     assert load_song(tmp_path / "x.py", SONG_FORMATS).graph.bpm == 90
     assert load_song(tmp_path / "x.yaml", SONG_FORMATS).graph.bpm == 120
@@ -531,13 +536,13 @@ def test_format_suffixes() -> None:
 
 def test_yml_suffix_loads_as_yaml(tmp_path: Path) -> None:
     path = tmp_path / "song.yml"
-    path.write_text(yaml.safe_dump(valid_song()))
+    path.write_text(yaml.safe_dump(valid_song()), encoding="utf-8", newline="\n")
     assert load_song(path, SONG_FORMATS).graph.bpm == 120
 
 
 def test_text_file_is_not_a_song(tmp_path: Path) -> None:
     path = tmp_path / "x.txt"
-    path.write_text("bpm: 120\n")
+    path.write_text("bpm: 120\n", encoding="utf-8", newline="\n")
 
     with pytest.raises(SongError) as error:
         load_song(path, SONG_FORMATS)
@@ -547,7 +552,7 @@ def test_text_file_is_not_a_song(tmp_path: Path) -> None:
 
 def test_two_formats_claiming_one_suffix_raise(tmp_path: Path) -> None:
     path = tmp_path / "song.yaml"
-    path.write_text(yaml.safe_dump(valid_song()))
+    path.write_text(yaml.safe_dump(valid_song()), encoding="utf-8", newline="\n")
 
     with pytest.raises(ValueError, match=r"more than one song format claims the suffix \.yaml"):
         load_song(path, (YamlSongFormat(), YamlSongFormat()))
@@ -557,7 +562,7 @@ def test_yaml_format_loads_its_own_dump(tmp_path: Path) -> None:
     fmt = YamlSongFormat()
     for song in (helper_song(), gain_song(), cc_track_song()):
         path = tmp_path / f"song{fmt.suffix}"
-        path.write_text(fmt.dump(song))
+        path.write_text(fmt.dump(song), encoding="utf-8", newline="\n")
         assert fmt.load(path) == song
 
 
@@ -567,7 +572,7 @@ def test_yaml_data_with_engine_is_refused(tmp_path: Path) -> None:
     assert isinstance(tracks, list)
     tracks[0] = {**tracks[0], "engine": "pedalboard"}
     path = tmp_path / "song.yaml"
-    path.write_text(yaml.safe_dump(data))
+    path.write_text(yaml.safe_dump(data), encoding="utf-8", newline="\n")
 
     with pytest.raises(SongError) as error:
         load_song(path, SONG_FORMATS)
@@ -594,7 +599,7 @@ def test_a_dump_with_marks_loads_back_equal(tmp_path: Path) -> None:
     assert text.startswith(YamlSongFormat().dump(helper_song()))
     assert "marks:\n  chords:\n" in text
     path = tmp_path / "song.yaml"
-    path.write_text(text)
+    path.write_text(text, encoding="utf-8", newline="\n")
     assert loaded(path) == song
 
 
@@ -606,17 +611,25 @@ def test_a_deliberate_mark_round_trips_through_yaml(tmp_path: Path) -> None:
 
     assert text.count("deliberate: true") == 1
     path = tmp_path / "song.yaml"
-    path.write_text(text)
+    path.write_text(text, encoding="utf-8", newline="\n")
     assert loaded(path) == song
     assert YamlSongFormat().dump(song.graph()).count("deliberate: true") == 1
 
 
 def test_a_yaml_mark_states_its_flag_as_true_or_false(tmp_path: Path) -> None:
     path = tmp_path / "song.yaml"
-    path.write_text(MARKED_SONG.replace("text: intro}", "text: intro, deliberate: true}"))
+    path.write_text(
+        MARKED_SONG.replace("text: intro}", "text: intro, deliberate: true}"),
+        encoding="utf-8",
+        newline="\n",
+    )
     assert loaded(path).marks == Marks({"parts": [Mark(0, 4, "intro", deliberate=True)]})
 
-    path.write_text(MARKED_SONG.replace("text: intro}", "text: intro, deliberate: 'yes'}"))
+    path.write_text(
+        MARKED_SONG.replace("text: intro}", "text: intro, deliberate: 'yes'}"),
+        encoding="utf-8",
+        newline="\n",
+    )
     with pytest.raises(SongError) as error:
         loaded(path)
     assert error.value.problems == ["marks.parts[0].deliberate: must be true or false, got 'yes'"]
@@ -665,7 +678,7 @@ def test_a_repeated_yaml_key_fails_naming_the_key_and_line(
     tmp_path: Path, text: str, key: str, line: int
 ) -> None:
     path = tmp_path / "song.yaml"
-    path.write_text(text)
+    path.write_text(text, encoding="utf-8", newline="\n")
     with pytest.raises(SongError) as error:
         loaded(path)
     assert error.value.problems == [f"cannot read {path}: duplicate key {key!r} at line {line}"]
@@ -676,7 +689,9 @@ def test_yaml_merge_keys_still_load(tmp_path: Path) -> None:
     path.write_text(
         "bpm: 120\ntracks:\n  - name: lead\n    sound: serum\n    notes:\n"
         "      - &note {beat: 0, pitch: 60, length: 1, velocity: 90}\n"
-        "      - {<<: *note, beat: 1}\n"
+        "      - {<<: *note, beat: 1}\n",
+        encoding="utf-8",
+        newline="\n",
     )
     song = loaded(path)
     assert isinstance(song, Song)
@@ -692,7 +707,7 @@ def test_a_merge_of_a_mapping_that_overrides_its_own_merge_is_no_duplicate(
     # The alias `y` merges `x` before `x` itself is built, which flattens `x` in place.
     text = "base: &base {a: 1}\nouter:\n  x: &x {<<: *base, a: 2}\ny: {<<: *x}\n"
     path = tmp_path / "song.yaml"
-    path.write_text(text)
+    path.write_text(text, encoding="utf-8", newline="\n")
     with pytest.raises(SongError) as error:
         loaded(path)
     assert not any("duplicate" in problem for problem in error.value.problems)
@@ -701,7 +716,7 @@ def test_a_merge_of_a_mapping_that_overrides_its_own_merge_is_no_duplicate(
 
 def test_a_mapping_merged_elsewhere_still_refuses_its_own_duplicates(tmp_path: Path) -> None:
     path = tmp_path / "song.yaml"
-    path.write_text("m: &m {a: 1, a: 2}\nn: {<<: *m}\n")
+    path.write_text("m: &m {a: 1, a: 2}\nn: {<<: *m}\n", encoding="utf-8", newline="\n")
     with pytest.raises(SongError, match="duplicate key 'a' at line 1"):
         loaded(path)
 
@@ -754,7 +769,7 @@ def test_a_dump_with_a_meter_loads_back_equal(tmp_path: Path) -> None:
         {"beat": 84, "bar": 3.5},
     ]
     path = tmp_path / "song.yaml"
-    path.write_text(text)
+    path.write_text(text, encoding="utf-8", newline="\n")
     assert loaded(path) == song
     check_record_writer_contract(YamlSongFormat(), song)
 
@@ -769,13 +784,13 @@ def test_the_record_of_a_graph_carries_its_meter() -> None:
 def test_a_yaml_song_states_its_meter(tmp_path: Path) -> None:
     path = tmp_path / "song.yaml"
     spans = "  - {beat: 0, bar: 7, end: 14}\n  - {beat: 14, bar: 3.5}\n"
-    path.write_text(MARKED_SONG + "meter:\n" + spans)
+    path.write_text(MARKED_SONG + "meter:\n" + spans, encoding="utf-8", newline="\n")
     assert loaded(path).meter == Meter([MeterSpan(0, 7, 14), MeterSpan(14, 3.5)])
 
-    path.write_text(MARKED_SONG)
+    path.write_text(MARKED_SONG, encoding="utf-8", newline="\n")
     assert loaded(path).meter == NO_METER
 
-    path.write_text(MARKED_SONG + "meter:\n  - {beat: 0, bar: 0}\n")
+    path.write_text(MARKED_SONG + "meter:\n  - {beat: 0, bar: 0}\n", encoding="utf-8", newline="\n")
     with pytest.raises(SongError) as error:
         load_song(path, SONG_FORMATS)
     assert error.value.problems == ["meter[0].bar: must be a finite number of at least 1, got 0"]

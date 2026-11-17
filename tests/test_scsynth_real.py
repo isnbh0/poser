@@ -164,7 +164,7 @@ def test_real_controller_reaches_the_voice(tmp_path: Path, monkeypatch: pytest.M
     source = tmp_path / "cc"
     source.mkdir()
     (source / "voice.scsyndef").write_bytes(VOICE_BYTES)
-    (source / "voice.json").write_text('{"cc": {"1": "amp"}}')
+    (source / "voice.json").write_text('{"cc": {"1": "amp"}}', encoding="utf-8", newline="\n")
     context = AdapterContext(tmp_path, tmp_path / "sounds", tmp_path / "renders")
     instrument = create(
         Identifier("sc"), {"scsynth": str(real_scsynth()), "sources": {"cc": str(source)}}, context
@@ -197,7 +197,7 @@ def test_real_initial_controls_and_polyphonic_broadcast(tmp_path: Path) -> None:
     source = tmp_path / "source"
     source.mkdir()
     (source / "voice.scsyndef").write_bytes(VOICE_BYTES)
-    (source / "voice.json").write_text('{"cc": {"1": "amp"}}')
+    (source / "voice.json").write_text('{"cc": {"1": "amp"}}', encoding="utf-8", newline="\n")
     context = AdapterContext(tmp_path, tmp_path / "sounds", tmp_path / "renders")
     instrument = create(
         Identifier("sc"),
@@ -258,7 +258,9 @@ def test_check_instruments_accepts_the_adapter(
     config.write_text(
         "[instruments.sc]\n"
         'adapter = "poser_scsynth.instrument:create"\n'
-        f'scsynth = "{real_scsynth()}"\n'
+        f'scsynth = "{real_scsynth()}"\n',
+        encoding="utf-8",
+        newline="\n",
     )
     monkeypatch.chdir(tmp_path)
     assert check_main(["--config", str(config), "--json"]) == EXIT_ALL_PASS
@@ -279,14 +281,16 @@ def two_engine_composition(tmp_path: Path) -> tuple[Composition, Path]:
     source = tmp_path / "demo"
     source.mkdir()
     (source / "voice.scsyndef").write_bytes(VOICE_BYTES)
-    (source / "voice.json").write_text("{}")
+    (source / "voice.json").write_text("{}", encoding="utf-8", newline="\n")
     config = tmp_path / "poser.toml"
     config.write_text(
         REPO_CONFIG.read_text(encoding="utf-8") + "\n[instruments.sc]\n"
         'adapter = "poser_scsynth.instrument:create"\n'
         f'scsynth = "{real_scsynth()}"\n'
         "\n[instruments.sc.sources]\n"
-        f'demo = "{source}"\n'
+        f'demo = "{source}"\n',
+        encoding="utf-8",
+        newline="\n",
     )
     from poser.compose import load
 
@@ -356,7 +360,7 @@ def test_two_engine_timeline_and_cache(tmp_path: Path) -> None:
     assert all(isinstance(result, Rendered) and result.cached for result in second)
 
     # Touching only the scsynth sound's meta re-renders only the scsynth node.
-    (source / "voice.json").write_text('{"cc": {"1": "amp"}}')
+    (source / "voice.json").write_text('{"cc": {"1": "amp"}}', encoding="utf-8", newline="\n")
     third = render(composition, song, "songs/two-engines.py", force=False)
     by_track = {str(result.track): result for result in third}
     synth, strings = by_track["synth"], by_track["strings"]

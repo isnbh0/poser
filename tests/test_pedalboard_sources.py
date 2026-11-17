@@ -340,6 +340,6 @@ def test_importing_preset_helpers_loads_no_plugin_code(module: str, forbidden: s
         f"print(sorted(set({sorted(forbidden)!r}) & {{m.split('.')[0] for m in sys.modules}}))"
     )
     output = subprocess.run(
-        [sys.executable, "-c", check], capture_output=True, text=True, check=True
+        [sys.executable, "-c", check], capture_output=True, text=True, check=True, encoding="utf-8"
     )
     assert output.stdout.strip() == "[]", output.stderr

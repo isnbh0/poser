@@ -23,11 +23,11 @@ from poser.core.report import (
     report_to_data,
 )
 
-PROJECT = tomllib.loads((REPO_DIR / "pyproject.toml").read_text())["project"]
+PROJECT = tomllib.loads((REPO_DIR / "pyproject.toml").read_text(encoding="utf-8"))["project"]
 
 
 def test_license_is_gpl_3() -> None:
-    text = (REPO_DIR / "LICENSE").read_text()
+    text = (REPO_DIR / "LICENSE").read_text(encoding="utf-8")
 
     # The GNU text centers its title, so it starts with spaces.
     assert text.lstrip().startswith("GNU GENERAL PUBLIC LICENSE")
@@ -42,7 +42,7 @@ def test_project_metadata() -> None:
 
 
 def test_readme_commands_are_project_scripts() -> None:
-    commands = re.findall(r"uv run ([\w-]+)", (REPO_DIR / "README.md").read_text())
+    commands = re.findall(r"uv run ([\w-]+)", (REPO_DIR / "README.md").read_text(encoding="utf-8"))
 
     assert set(commands) <= set(PROJECT["scripts"])
 
@@ -61,7 +61,7 @@ ONBOARDING = (
 def test_onboarding_local_links_resolve_to_project_files() -> None:
     for document in ONBOARDING:
         assert document.is_file(), document
-        links = re.findall(r"!?\[[^]]*\]\(([^)]+)\)", document.read_text())
+        links = re.findall(r"!?\[[^]]*\]\(([^)]+)\)", document.read_text(encoding="utf-8"))
         for link in links:
             parsed = urlsplit(link)
             if parsed.scheme or parsed.netloc or not parsed.path:
@@ -72,13 +72,13 @@ def test_onboarding_local_links_resolve_to_project_files() -> None:
 
 def test_onboarding_commands_are_project_scripts() -> None:
     for document in ONBOARDING:
-        commands = re.findall(r"uv run ([\w-]+)", document.read_text())
+        commands = re.findall(r"uv run ([\w-]+)", document.read_text(encoding="utf-8"))
         assert set(commands) <= set(PROJECT["scripts"]), document
 
 
 def section(document: Path, heading: str) -> str:
     """Read one level-two section, including any subordinate sections."""
-    text = document.read_text()
+    text = document.read_text(encoding="utf-8")
     match = re.search(rf"^## {re.escape(heading)}\s*$", text, re.MULTILINE)
     assert match is not None, (document, heading)
     return re.split(r"^## ", text[match.end() :], maxsplit=1, flags=re.MULTILINE)[0]
@@ -110,9 +110,9 @@ def test_setup_command_chain_stops_and_retains_working_directory(
     studio.mkdir()
     owned = studio / "songs" / "existing.yaml"
     owned.parent.mkdir()
-    owned.write_text("owner's existing song\n")
+    owned.write_text("owner's existing song\n", encoding="utf-8", newline="\n")
     config = studio / "poser.toml"
-    config.write_text("# owner's configuration\n")
+    config.write_text("# owner's configuration\n", encoding="utf-8", newline="\n")
     before = {path: path.read_bytes() for path in (owned, config)}
     fake_uv = """uv() {
     printf 'uv %s\\n' "$*"
@@ -134,7 +134,12 @@ cd() {
         'status=$?\nprintf \'status=%s\\ncwd=%s\\n\' "$status" "$PWD"\n'
     )
     result = subprocess.run(
-        ["/bin/sh", "-c", script], cwd=tmp_path, capture_output=True, text=True, check=True
+        ["/bin/sh", "-c", script],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=True,
+        encoding="utf-8",
     )
     lines = result.stdout.splitlines()
     steps = ["init", "add", "init-workspace", "check-instruments", "render-song", "analyze-song"]
@@ -197,7 +202,7 @@ def test_readme_analysis_example_matches_serialized_report() -> None:
 def test_scsynth_readme_config_supplies_engine_path(tmp_path: Path) -> None:
     from poser_scsynth.config import from_options
 
-    text = (REPO_DIR / "packages/poser-scsynth/README.md").read_text()
+    text = (REPO_DIR / "packages/poser-scsynth/README.md").read_text(encoding="utf-8")
     (example,) = re.findall(r"```toml\n(.*?)```", text, re.DOTALL)
     options = tomllib.loads(example)["instruments"]["sc"]
     assert options.pop("adapter") == "poser_scsynth.instrument:create"

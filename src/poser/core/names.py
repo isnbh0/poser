@@ -1,7 +1,18 @@
 """Names: text values whose constructors check their form."""
 
 import re
+from pathlib import PurePath
 from typing import ClassVar, Self
+
+
+def is_inner_relative(path: PurePath) -> bool:
+    """Whether `path`, joined to a directory, names something inside it: it has parts, no anchor
+    (a drive, a root, or both), and no `..` part.
+
+    `is_absolute()` is not enough: on Windows, a rooted path such as `/etc/passwd` and a
+    drive-relative one such as `C:x` are not absolute, and joining either leaves the directory.
+    """
+    return bool(path.parts) and not path.anchor and ".." not in path.parts
 
 
 class NodeName(str):

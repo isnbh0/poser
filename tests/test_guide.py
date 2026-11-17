@@ -111,7 +111,9 @@ def python_examples(tmp_path: Path) -> list[Song | Graph]:
     for index, body in enumerate(blocks("python")):
         path = tmp_path / f"example{index}" / "example.py"
         path.parent.mkdir()
-        path.write_text(body.replace(FIRST_INSTRUMENT_PLACEHOLDER, f'"{first}"'))
+        path.write_text(
+            body.replace(FIRST_INSTRUMENT_PLACEHOLDER, f'"{first}"'), encoding="utf-8", newline="\n"
+        )
         song = load_song(path, SONG_FORMATS).source
         assert isinstance(song, Song | Graph)
         songs.append(song)

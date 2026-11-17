@@ -166,7 +166,7 @@ def workers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> ModuleType:
     """Import the test workers from a folder on both the test's and the child's path."""
     folder = tmp_path / "workers"
     folder.mkdir()
-    (folder / "pedalboard_workers.py").write_text(WORKERS)
+    (folder / "pedalboard_workers.py").write_text(WORKERS, encoding="utf-8", newline="\n")
     monkeypatch.syspath_prepend(str(folder))
     monkeypatch.setenv("PYTHONPATH", str(folder))
     monkeypatch.delitem(sys.modules, "pedalboard_workers", raising=False)
@@ -848,7 +848,7 @@ def test_render_runs_the_worker_on_the_sound(
     sound = resolved(instrument, "presets/Top")
     assert instrument.render(RenderRequest(sound, PERFORMANCE, path), 30) is None
     assert isinstance(read_raw_audio(path, PERFORMANCE.samples), Audio)
-    job = json.loads((tmp_path / "out.npy.job.json").read_text())
+    job = json.loads((tmp_path / "out.npy.job.json").read_text(encoding="utf-8"))
     assert job["state"] == encode_state(build_state(b"chunk"))
     assert (job["path"], job["plugin_name"]) == (str(tmp_path / "Serum.vst3"), None)
     assert job["performance"]["samples"] == PERFORMANCE.samples
@@ -873,7 +873,10 @@ def test_render_waits_longer_on_each_attempt(
     path = tmp_path / "out.npy"
     request = RenderRequest(resolved(instrument, None), PERFORMANCE, path, attempt=attempt)
     assert instrument.render(request, 30) is None
-    assert json.loads((tmp_path / "out.npy.job.json").read_text())["settle_s"] == settle_s
+    assert (
+        json.loads((tmp_path / "out.npy.job.json").read_text(encoding="utf-8"))["settle_s"]
+        == settle_s
+    )
 
 
 @pytest.mark.parametrize(
@@ -917,10 +920,12 @@ def test_capture_runs_the_worker_from_the_start_sound(
     result = capture(instrument, path, resolved(instrument, "saved/pad"))
     assert result == Captured(Json.of({"state": encode_state(b"captured")}))
     assert isinstance(read_raw_audio(path, PERFORMANCE.samples), Audio)
-    job = json.loads((tmp_path / "preview.npy.job.json").read_text())
+    job = json.loads((tmp_path / "preview.npy.job.json").read_text(encoding="utf-8"))
     assert job["state"] == encode_state(b"saved-state")
     assert capture(instrument, tmp_path / "default.npy") == result
-    assert json.loads((tmp_path / "default.npy.job.json").read_text())["state"] is None
+    assert (
+        json.loads((tmp_path / "default.npy.job.json").read_text(encoding="utf-8"))["state"] is None
+    )
 
 
 @pytest.mark.parametrize(
@@ -985,7 +990,7 @@ def test_check_name_refuses_a_name_differing_only_in_case(tmp_path: Path) -> Non
 def test_store_writes_the_saved_format(tmp_path: Path) -> None:
     instrument = make_instrument(tmp_path)
     instrument.store(Identifier("pad"), "a warm pad", captured(), replace=False)
-    data = json.loads((saved_dir(tmp_path) / "pad.json").read_text())
+    data = json.loads((saved_dir(tmp_path) / "pad.json").read_text(encoding="utf-8"))
     assert data == {"description": "a warm pad", "state": encode_state(b"test-state")}
 
 
@@ -1082,6 +1087,7 @@ def test_two_processes_storing_one_name_save_one_sound(
             [sys.executable, "-c", STORER, str(tmp_path), name, str(go)],
             stdout=subprocess.PIPE,
             text=True,
+            encoding="utf-8",
         )
         for name in names
     ]
@@ -1216,7 +1222,7 @@ def plain_suffix():
 
 def format_module(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> str:
     name = f"preset_formats_{tmp_path.name.replace('-', '_')}"
-    (tmp_path / f"{name}.py").write_text(TEXT_FORMATS)
+    (tmp_path / f"{name}.py").write_text(TEXT_FORMATS, encoding="utf-8", newline="\n")
     monkeypatch.syspath_prepend(str(tmp_path))
     return name
 
@@ -1236,7 +1242,7 @@ def test_create_scans_the_suffix_of_a_format_named_by_import_path(
 ) -> None:
     module = format_module(tmp_path, monkeypatch)
     (tmp_path / "presets").mkdir()
-    (tmp_path / "presets" / "Warm.txt").write_text("a warm pad\n")
+    (tmp_path / "presets" / "Warm.txt").write_text("a warm pad\n", encoding="utf-8", newline="\n")
     (tmp_path / "presets" / "Bright.fxp").write_bytes(fxp_bytes(b"state"))
 
     made = create_serum(tmp_path, [f"{module}:text_format"])

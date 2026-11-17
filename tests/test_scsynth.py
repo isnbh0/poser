@@ -54,7 +54,9 @@ def make_source(directory: Path) -> Path:
     source = directory / "demo"
     source.mkdir(parents=True)
     (source / f"{SYNTH_NAME}.scsyndef").write_bytes(DEMO_SYNTHDEF)
-    (source / f"{SYNTH_NAME}.json").write_text('{"cc": {"1": "brightness"}}')
+    (source / f"{SYNTH_NAME}.json").write_text(
+        '{"cc": {"1": "brightness"}}', encoding="utf-8", newline="\n"
+    )
     return source
 
 
@@ -138,7 +140,7 @@ def test_sounds_list_default_builtin_sources_and_saved(tmp_path: Path) -> None:
     saved = tmp_path / "sounds" / "sc"
     saved.mkdir(parents=True)
     (saved / "kept.scsyndef").write_bytes(DEMO_SYNTHDEF)
-    (saved / "kept.json").write_text("{}")
+    (saved / "kept.json").write_text("{}", encoding="utf-8", newline="\n")
     instrument = make_instrument(tmp_path, make_stub(tmp_path), {"demo": source})
     listing = instrument.sounds()
     assert [entry.ref.name for entry in listing.entries] == [
@@ -364,7 +366,9 @@ def test_identity_repeats_and_tracks_bytes(tmp_path: Path) -> None:
     assert resolve(instrument).identity != first
 
     (source / f"{SYNTH_NAME}.scsyndef").write_bytes(DEMO_SYNTHDEF)
-    (source / f"{SYNTH_NAME}.json").write_text('{"cc": {"2": "brightness"}}')
+    (source / f"{SYNTH_NAME}.json").write_text(
+        '{"cc": {"2": "brightness"}}', encoding="utf-8", newline="\n"
+    )
     assert resolve(instrument).identity != first
 
 
@@ -375,7 +379,7 @@ def test_unrelated_source_change_leaves_identity(tmp_path: Path) -> None:
     instrument = make_instrument(tmp_path, make_stub(tmp_path), {"demo": source, "more": other})
     first = resolve(instrument).identity
     (other / "late.scsyndef").write_bytes(DEMO_SYNTHDEF)
-    (other / "late.json").write_text("{}")
+    (other / "late.json").write_text("{}", encoding="utf-8", newline="\n")
     assert resolve(instrument).identity == first, "the scan happened twice"
 
 
@@ -465,7 +469,7 @@ def _source_paths() -> list[Path]:
 
 def _imported_modules(path: Path) -> set[str]:
     modules: set[str] = set()
-    for node in ast.walk(ast.parse(path.read_text(), filename=str(path))):
+    for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"), filename=str(path))):
         if isinstance(node, ast.Import):
             modules.update(alias.name for alias in node.names)
         elif isinstance(node, ast.ImportFrom) and node.module and not node.level:
@@ -501,7 +505,9 @@ def test_boundary_catches_an_adapter_import(tmp_path: Path) -> None:
     smuggled.write_text(
         "import pedalboard\n"
         "from poser.adapters import loading\n"
-        "from poser.core.audio import SAMPLE_RATE\n"
+        "from poser.core.audio import SAMPLE_RATE\n",
+        encoding="utf-8",
+        newline="\n",
     )
     assert sorted(_boundary_violations([smuggled])) == [
         f"{smuggled.name}: pedalboard",
@@ -527,7 +533,11 @@ def test_voice_bytes_are_golden() -> None:
 
 def test_boundary_catches_a_pedalboard_import(tmp_path: Path) -> None:
     smuggled = tmp_path / "smuggled.py"
-    smuggled.write_text("import pedalboard\nfrom poser.core.audio import SAMPLE_RATE\n")
+    smuggled.write_text(
+        "import pedalboard\nfrom poser.core.audio import SAMPLE_RATE\n",
+        encoding="utf-8",
+        newline="\n",
+    )
     assert _boundary_violations([smuggled]) == [f"{smuggled.name}: pedalboard"]
 
 
@@ -550,7 +560,9 @@ def test_guide_composes_into_a_scratch_workspace(
         "[instruments.sc]\n"
         'adapter = "poser_scsynth.instrument:create"\n'
         f'scsynth = "{tmp_path / "missing-scsynth"}"\n'
-        'guide = "The built-in sound is `sc:builtin/additive-voice`."\n'
+        'guide = "The built-in sound is `sc:builtin/additive-voice`."\n',
+        encoding="utf-8",
+        newline="\n",
     )
 
     def fail(*_args: object, **_kwargs: object) -> None:

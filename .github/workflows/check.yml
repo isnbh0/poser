@@ -51,9 +51,7 @@ jobs:
       # and the pending step fails when a listed file has no failing test, so this list is exactly
       # the files with a Windows failure.
       WINDOWS_PENDING: >-
-        tests/test_cli.py tests/test_delivery.py tests/test_release.py tests/test_render_dirs.py
-        tests/test_scsynth.py tests/test_song_formats.py tests/test_wav.py tests/test_workspace.py
-        tests/test_workspace_init_transaction.py
+        tests/test_release.py tests/test_scsynth.py
     steps:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v10.3.3

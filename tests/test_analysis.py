@@ -238,7 +238,7 @@ def test_a_metered_song_has_one_level_per_declared_bar(tmp_path: Path) -> None:
     for levels in (report.nodes[0].measurements.span_dbfs, report.mix.measurements.span_dbfs):
         assert levels[0] == LEVEL_FLOOR_DBFS
         assert levels[1] > -40
-    data = json.loads(setup.record(report.run).joinpath("report.json").read_text())
+    data = json.loads(setup.record(report.run).joinpath("report.json").read_text(encoding="utf-8"))
     assert data["spans"] == [{"beat": 0, "end": 3, "number": 1}, {"beat": 3, "end": 6, "number": 2}]
 
 
@@ -299,7 +299,7 @@ def test_full_analysis_writes_latest_results_and_a_record(tmp_path: Path) -> Non
         "report.json",
         "song.json",
     ]
-    kept = json.loads((record / "report.json").read_text())
+    kept = json.loads((record / "report.json").read_text(encoding="utf-8"))
     assert kept == report_to_data(report)
 
 
@@ -408,7 +408,7 @@ def test_unusable_stem_fails_the_run_and_removes_earlier_results(
     assert setup.store.latest() is None
     assert report.run == 2
     assert tree(setup.record(2)) == ["report.json", "song.json"]
-    kept = json.loads((setup.record(2) / "report.json").read_text())
+    kept = json.loads((setup.record(2) / "report.json").read_text(encoding="utf-8"))
     assert kept["status"] == "incomplete"
     assert "mix" not in kept
     assert "spectrogram" not in kept["nodes"][0]
@@ -502,7 +502,10 @@ def test_records_number_on_and_hold_the_song_and_its_digest(tmp_path: Path) -> N
         failed.song_sha256
         == hashlib.sha256((setup.record(3) / "song.json").read_bytes()).hexdigest()
     )
-    assert json.loads((setup.record(2) / "song.json").read_text())["tracks"][0]["gain"] == -3
+    assert (
+        json.loads((setup.record(2) / "song.json").read_text(encoding="utf-8"))["tracks"][0]["gain"]
+        == -3
+    )
 
 
 def test_report_nodes_stay_aligned_with_the_graph(tmp_path: Path) -> None:
@@ -644,7 +647,7 @@ def test_a_graph_song_is_analyzed_and_its_record_holds_the_wiring(tmp_path: Path
     # The mix sums the leaves: the driven lead and the dry bass, each at its own gain.
     assert np.allclose(mix.samples, 0.5 * 10 ** (-6 / 20) + 0.2)
 
-    record = json.loads((setup.record(1) / "song.json").read_text())
+    record = json.loads((setup.record(1) / "song.json").read_text(encoding="utf-8"))
     assert record["mode"] == "acyclic"
     assert record["wires"] == [
         {"from_name": "lead", "to_name": "lead.drive", "kind": "audio", "gain_db": 0}
@@ -663,7 +666,12 @@ def test_rewiring_changes_the_record_digest_and_reanalysis_keeps_it(tmp_path: Pa
 
     assert rewired.song_sha256 != first.song_sha256
     assert rewired.run == 2
-    assert json.loads((setup.record(2) / "song.json").read_text())["wires"][0]["gain_db"] == -12
+    assert (
+        json.loads((setup.record(2) / "song.json").read_text(encoding="utf-8"))["wires"][0][
+            "gain_db"
+        ]
+        == -12
+    )
 
     again = setup.analyze(graph_song(rewired=True))
 

@@ -18,7 +18,7 @@ NOTE = {"beat": 0, "pitch": 60, "length": 1, "velocity": 100}
 def write_yaml(path: Path, effects: list[str]) -> Path:
     track = {"name": "lead", "sound": "synth", "notes": [NOTE], "effects": effects}
     data = {"bpm": 120, "tracks": [track], "marks": {"parts": [{"beat": 0, "end": 1, "text": "a"}]}}
-    path.write_text(yaml.safe_dump(data))
+    path.write_text(yaml.safe_dump(data), encoding="utf-8", newline="\n")
     return path
 
 
@@ -28,7 +28,9 @@ def write_graph_script(path: Path) -> Path:
         "def build() -> Graph:\n"
         "    lead = TrackNode('lead', sound='synth', notes=(Note(0, 60, 1, 100),))\n"
         "    room = EffectNode('room', effect='reverb')\n"
-        "    return Graph(120, (lead, room), (Wire('lead', 'room', 'audio'),))\n"
+        "    return Graph(120, (lead, room), (Wire('lead', 'room', 'audio'),))\n",
+        encoding="utf-8",
+        newline="\n",
     )
     return path
 

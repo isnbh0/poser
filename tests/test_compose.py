@@ -215,13 +215,13 @@ path = "Missing.vst3"
 
 def write_config(tmp_path: Path, text: str, module: str = "") -> Path:
     path = tmp_path / "poser.toml"
-    path.write_text(textwrap.dedent(text).format(module=module))
+    path.write_text(textwrap.dedent(text).format(module=module), encoding="utf-8", newline="\n")
     return path
 
 
 def adapters_module(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> ModuleType:
     name = f"compose_adapters_{uuid.uuid4().hex}"
-    (tmp_path / f"{name}.py").write_text(ADAPTERS)
+    (tmp_path / f"{name}.py").write_text(ADAPTERS, encoding="utf-8", newline="\n")
     monkeypatch.syspath_prepend(str(tmp_path))
     return importlib.import_module(name)
 
@@ -253,14 +253,14 @@ def test_the_reference_config_loads_one_pedalboard_instrument() -> None:
 
 def test_text_parser_matches_path_reader(tmp_path: Path) -> None:
     path = tmp_path / "poser.toml"
-    path.write_text(SERUM)
+    path.write_text(SERUM, encoding="utf-8", newline="\n")
     assert parse_config(SERUM, path) == read_config(path)
 
 
 @pytest.mark.parametrize("text", ["[instruments]\n", "instruments = ["])
 def test_text_parser_matches_path_reader_errors(tmp_path: Path, text: str) -> None:
     path = tmp_path / "poser.toml"
-    path.write_text(text)
+    path.write_text(text, encoding="utf-8", newline="\n")
     with pytest.raises(ConfigError) as parse_error:
         parse_config(text, path)
     with pytest.raises(ConfigError) as read_error:
@@ -729,7 +729,7 @@ def test_load_imports_no_adapter_module(tmp_path: Path) -> None:
     )
 
     result = subprocess.run(
-        [sys.executable, "-c", script], capture_output=True, text=True, check=True
+        [sys.executable, "-c", script], capture_output=True, text=True, check=True, encoding="utf-8"
     )
 
     assert result.stdout.strip() == "['poser.adapters', 'poser.adapters.loading']"

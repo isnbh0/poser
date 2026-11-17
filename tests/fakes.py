@@ -558,7 +558,7 @@ class FakeSongStore:
         runs = [int(entry.name) for entry in records.iterdir() if entry.name.isdigit()]
         draft = FakeRecordDraft(self._draft(), max(runs, default=0) + 1)
         try:
-            draft.path(f"song{suffix}").write_text(song_text, encoding="utf-8")
+            draft.path(f"song{suffix}").write_text(song_text, encoding="utf-8", newline="\n")
             yield draft
             draft.directory.rename(self.record_path(draft.run))
         finally:
@@ -669,7 +669,7 @@ class FakeVisualizer:
         if self.raises is not None:
             raise self.raises
         self.drawn.append((path, title))
-        path.write_text(title, encoding="utf-8")
+        path.write_text(title, encoding="utf-8", newline="\n")
 
 
 class FakeRecordWriter:

@@ -155,5 +155,6 @@ def test_analysis_reads_the_stems_render_wrote(
     assert [node["status"] for node in report["nodes"]] == ["analyzed"]
     song_dir = workspace.renders / "songs" / "x.yaml"
     assert report["mix"]["path"] == "audio/mix.wav"
-    assert (song_dir / "latest").readlink() == Path("history/1")
+    # A relative symlink, or on Windows a junction with an absolute target.
+    assert (song_dir / "latest").resolve() == (song_dir / "history" / "1").resolve()
     assert (song_dir / "latest" / report["mix"]["path"]).is_file()

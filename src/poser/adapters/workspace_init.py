@@ -13,6 +13,7 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from poser.core.names import is_inner_relative
 from poser.core.ports import ConfigError
 
 TEMP_PREFIX = ".poser-tmp-"
@@ -158,7 +159,7 @@ class WorkspaceInitializer:
 
     def _target(self, name: str) -> Path:
         relative = Path(name)
-        if relative.is_absolute() or ".." in relative.parts or not relative.parts:
+        if not is_inner_relative(relative):
             raise ConfigError(f"unsafe initialization target {name!r}")
         path = self.directory / relative
         for parent in path.parents:

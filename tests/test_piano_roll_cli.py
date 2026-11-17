@@ -19,7 +19,9 @@ PNG = b"\x89PNG\r\n\x1a\n"
 def workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     (tmp_path / "poser.toml").write_text(
         '[instruments.synth]\nadapter = "pedalboard"\nplugin = "/unavailable.vst3"\n'
-        '[adapters]\nsong_formats = ["yaml", "script"]\n'
+        '[adapters]\nsong_formats = ["yaml", "script"]\n',
+        encoding="utf-8",
+        newline="\n",
     )
     monkeypatch.chdir(tmp_path)
     return tmp_path
@@ -95,7 +97,7 @@ def test_rejected_before_execution(
 @pytest.mark.parametrize("replace", [False, True])
 def test_publish_modes(tmp_path: Path, *, replace: bool) -> None:
     song = tmp_path / "song.py"
-    song.write_text("input")
+    song.write_text("input", encoding="utf-8", newline="\n")
     output = tmp_path / "roll.png"
     if replace:
         output.write_bytes(b"old")
@@ -161,7 +163,7 @@ def test_cleanup_never_changes_outcome(
     fail_draw: bool,
 ) -> None:
     song = tmp_path / "song.py"
-    song.write_text("input")
+    song.write_text("input", encoding="utf-8", newline="\n")
     output = tmp_path / "roll.png"
 
     def deny(self: Path, *, missing_ok: bool = False) -> None:
@@ -199,11 +201,13 @@ def test_command_errors(
     if problem == "suffix":
         output = workspace / "roll.jpg"
     elif problem == "config":
-        (workspace / "poser.toml").write_text("invalid")
+        (workspace / "poser.toml").write_text("invalid", encoding="utf-8", newline="\n")
     elif problem == "song":
-        song.write_text("def build(): raise ValueError('broken song')")
+        song.write_text(
+            "def build(): raise ValueError('broken song')", encoding="utf-8", newline="\n"
+        )
     elif problem == "ancestor":
-        output.write_text("ancestor")
+        output.write_text("ancestor", encoding="utf-8", newline="\n")
         output /= "child.png"
     elif problem == "existing":
         output.write_bytes(b"old")
@@ -231,7 +235,9 @@ def test_outside_direct_graph(
         "from poser.core.song import Note\n"
         "def build():\n"
         "    return Graph(120, (TrackNode('lead', sound='synth', "
-        "notes=(Note(0, 60, 2, 100),)),), meter=Meter((MeterSpan(0, 1.5),)))\n"
+        "notes=(Note(0, 60, 2, 100),)),), meter=Meter((MeterSpan(0, 1.5),)))\n",
+        encoding="utf-8",
+        newline="\n",
     )
     rolls: list[PianoRoll] = []
     original = Composition.piano_roll_drawer
@@ -258,7 +264,7 @@ def test_outside_direct_graph(
 
 def test_competing_regular_file(tmp_path: Path) -> None:
     song = tmp_path / "song.py"
-    song.write_text("input")
+    song.write_text("input", encoding="utf-8", newline="\n")
     output = tmp_path / "roll.png"
 
     def draw(path: Path) -> None:
@@ -273,7 +279,7 @@ def test_competing_regular_file(tmp_path: Path) -> None:
 
 def test_exclusive_commit_race(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     song = tmp_path / "song.py"
-    song.write_text("input")
+    song.write_text("input", encoding="utf-8", newline="\n")
     output = tmp_path / "roll.png"
     link = os.link
 
@@ -294,7 +300,7 @@ def test_exclusive_commit_race(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
 
 def test_unsupported_song(workspace: Path, capsys: pytest.CaptureFixture[str]) -> None:
     song = workspace / "song.txt"
-    song.write_text("invalid")
+    song.write_text("invalid", encoding="utf-8", newline="\n")
     assert piano_roll.main([str(song), "--output", "roll.png"]) == 2
     assert "cannot read" in capsys.readouterr().err
     assert not (workspace / "roll.png").exists()
@@ -353,6 +359,6 @@ def test_replace_existing_png(workspace: Path) -> None:
 
 def test_script_registration() -> None:
     root = Path(__file__).parents[1]
-    project = tomllib.loads((root / "pyproject.toml").read_text())
+    project = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
     assert project["project"]["scripts"]["piano-roll"] == "poser.cli.piano_roll:main"
     assert callable(piano_roll.main)

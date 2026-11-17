@@ -94,7 +94,7 @@ def test_invalid_render_payload_fails_without_spawn(
 def test_unencodable_parameter_name_is_rejected_when_resolving(tmp_path: Path) -> None:
     source = make_source(tmp_path)
     meta_path = next(source.glob("*.json"))
-    meta_path.write_text(json.dumps({"cc": {"1": "\ud800"}}), encoding="utf-8")
+    meta_path.write_text(json.dumps({"cc": {"1": "\ud800"}}), encoding="utf-8", newline="\n")
     instrument = make_instrument(tmp_path, None, {"demo": source})
     ref = next(
         entry.ref

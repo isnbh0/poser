@@ -107,7 +107,11 @@ class CommandWorkspace:
         return self.root / "renders"
 
     def write_config(self, text: str) -> None:
-        self.config.write_text(textwrap.dedent(text).format(module=self.module.__name__))
+        self.config.write_text(
+            textwrap.dedent(text).format(module=self.module.__name__),
+            encoding="utf-8",
+            newline="\n",
+        )
 
 
 def make_workspace(
@@ -122,7 +126,7 @@ def make_workspace(
     """
     root.mkdir(parents=True, exist_ok=True)
     name = f"cli_adapters_{uuid.uuid4().hex}"
-    (root / f"{name}.py").write_text(ADAPTERS)
+    (root / f"{name}.py").write_text(ADAPTERS, encoding="utf-8", newline="\n")
     monkeypatch.syspath_prepend(str(root))
     workspace = CommandWorkspace(root.resolve(), importlib.import_module(name))
     workspace.write_config(instruments + adapters)
@@ -137,7 +141,7 @@ def write_song(path: Path, *tracks: tuple[str, str], velocity: int = 100) -> Pat
     path.parent.mkdir(parents=True, exist_ok=True)
     note = {**NOTE, "velocity": velocity}
     data = {"bpm": 120, "tracks": [{"name": n, "sound": s, "notes": [note]} for n, s in tracks]}
-    path.write_text(yaml.safe_dump(data))
+    path.write_text(yaml.safe_dump(data), encoding="utf-8", newline="\n")
     return path
 
 
@@ -150,7 +154,9 @@ def write_script_song(path: Path, sound: str, marker: Path | None = None) -> Pat
         "from poser import Note, Song, Track\n\n\n"
         "def build() -> Song:\n"
         f"{touch}"
-        f"    return Song(120, (Track('lead', {sound!r}, (Note(0, 60, 1, 100),)),))\n"
+        f"    return Song(120, (Track('lead', {sound!r}, (Note(0, 60, 1, 100),)),))\n",
+        encoding="utf-8",
+        newline="\n",
     )
     return path
 

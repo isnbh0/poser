@@ -40,7 +40,7 @@ def snapshot(fs: FileSystem, root: Path) -> dict[str, tuple[str, str]]:
             found[path.name] = ("dir", "")
             found.update({f"{path.name}/{k}": v for k, v in snapshot(fs, path).items()})
         else:
-            found[path.name] = ("file", path.read_text())
+            found[path.name] = ("file", path.read_text(encoding="utf-8"))
     return found
 
 
@@ -156,7 +156,7 @@ def test_sync_accepts_a_written_file_and_a_directory(fs: FileSystem, tmp_path: P
 def make_target(root: Path, name: str = "a") -> Path:
     target = root / "history" / name
     target.mkdir(parents=True)
-    (target / "report.json").write_text(name)
+    (target / "report.json").write_text(name, encoding="utf-8", newline="\n")
     return target
 
 
@@ -170,7 +170,7 @@ def test_make_link_leads_to_its_target_and_creates_nothing_else(
     assert {path.name for path in tmp_path.iterdir()} == before | {"latest"}
     assert fs.is_link(link)
     assert link.resolve() == target.resolve()
-    assert (link / "report.json").read_text() == "a"
+    assert (link / "report.json").read_text(encoding="utf-8") == "a"
 
 
 @pytest.mark.parametrize("existing", ["link", "directory", "file"])
@@ -184,9 +184,9 @@ def test_make_link_refuses_anything_already_there(
         fs.make_link(link, "history/b")
     elif existing == "directory":
         link.mkdir()
-        (link / "kept").write_text("mine")
+        (link / "kept").write_text("mine", encoding="utf-8", newline="\n")
     else:
-        link.write_text("mine")
+        link.write_text("mine", encoding="utf-8", newline="\n")
     before = snapshot(fs, tmp_path)
     with pytest.raises(FileExistsError):
         fs.make_link(link, "history/a")
@@ -197,7 +197,7 @@ def test_is_link_is_false_for_a_directory_a_file_and_a_missing_path(
     fs: FileSystem, tmp_path: Path
 ) -> None:
     (tmp_path / "directory").mkdir()
-    (tmp_path / "file").write_text("x")
+    (tmp_path / "file").write_text("x", encoding="utf-8", newline="\n")
     for name in ("directory", "file", "missing"):
         assert not fs.is_link(tmp_path / name), name
 
@@ -209,7 +209,9 @@ def test_remove_link_leaves_its_target_untouched(fs: FileSystem, tmp_path: Path)
     fs.remove_link(link)
     assert not fs.is_link(link)
     assert not link.exists(follow_symlinks=False)
-    assert {path.name: path.read_text() for path in target.iterdir()} == {"report.json": "a"}
+    assert {path.name: path.read_text(encoding="utf-8") for path in target.iterdir()} == {
+        "report.json": "a"
+    }
 
 
 # Publication
@@ -218,7 +220,7 @@ def test_remove_link_leaves_its_target_untouched(fs: FileSystem, tmp_path: Path)
 def make_source(root: Path) -> Path:
     source = root / "source"
     (source / "inner").mkdir(parents=True)
-    (source / "inner" / "file").write_text("contents")
+    (source / "inner" / "file").write_text("contents", encoding="utf-8", newline="\n")
     return source
 
 
@@ -239,11 +241,11 @@ def test_publish_directory_refuses_an_existing_destination(
     source = make_source(tmp_path)
     destination = tmp_path / "destination"
     if existing == "file":
-        destination.write_text("mine")
+        destination.write_text("mine", encoding="utf-8", newline="\n")
     else:
         destination.mkdir()
         if existing == "directory":
-            (destination / "kept").write_text("mine")
+            (destination / "kept").write_text("mine", encoding="utf-8", newline="\n")
     before = snapshot(fs, tmp_path)
     with pytest.raises(FileExistsError):
         fs.publish_directory(source, destination)

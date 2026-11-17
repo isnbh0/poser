@@ -160,7 +160,7 @@ def test_saved_format_round_trips_write_sound(tmp_path: Path) -> None:
     sound = SavedSound("warm pad", bytes(range(256)))
     SavedFormat().write_sound(path, sound)
     assert SavedFormat().read_sound(path) == sound
-    assert set(json.loads(path.read_text())) == {"description", "state"}
+    assert set(json.loads(path.read_text(encoding="utf-8"))) == {"description", "state"}
     assert [entry.name for entry in tmp_path.iterdir()] == ["pad.json"]
     replacement = SavedSound("cold pad", b"other")
     SavedFormat().write_sound(path, replacement)
@@ -171,7 +171,7 @@ def test_saved_format_round_trips_write_sound(tmp_path: Path) -> None:
 def test_saved_format_failed_write_leaves_no_temporary_file(tmp_path: Path) -> None:
     target = tmp_path / "pad.json"
     target.mkdir()  # Replacing a directory with a file fails after the temporary file exists.
-    (target / "keep").write_text("")
+    (target / "keep").write_text("", encoding="utf-8", newline="\n")
     with pytest.raises(OSError, match=r"pad\.json"):
         SavedFormat().write_sound(target, SavedSound("warm", b"s"))
     assert sorted(entry.name for entry in tmp_path.iterdir()) == ["pad.json"]

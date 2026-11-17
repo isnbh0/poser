@@ -62,7 +62,7 @@ def _import_targets(path: Path) -> list[tuple[str, tuple[str, ...]]]:
     `import a.b` is `("a.b", ())`; `from a.b import c, d` is `("a.b", ("c", "d"))`.
     """
     targets: list[tuple[str, tuple[str, ...]]] = []
-    for node in ast.walk(ast.parse(path.read_text(), filename=str(path))):
+    for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"), filename=str(path))):
         if isinstance(node, ast.Import):
             targets.extend((alias.name, ()) for alias in node.names)
         elif isinstance(node, ast.ImportFrom):
@@ -150,7 +150,7 @@ def find_cycle(graph: Mapping[str, set[str]]) -> list[str] | None:
 def has_dynamic_import(path: Path) -> bool:
     """Return whether the file calls `importlib.import_module` or `__import__`, or imports
     `import_module` from `importlib`."""
-    for node in ast.walk(ast.parse(path.read_text(), filename=str(path))):
+    for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"), filename=str(path))):
         if isinstance(node, ast.ImportFrom) and node.module == "importlib":
             if any(alias.name == "import_module" for alias in node.names):
                 return True
@@ -246,7 +246,9 @@ def test_dynamic_imports_only_in_loaders() -> None:
 
 def test_boundary_check_can_fail(tmp_path: Path) -> None:
     module = tmp_path / "module.py"
-    module.write_text("import yaml\nfrom poser.adapters import song_formats\n")
+    module.write_text(
+        "import yaml\nfrom poser.adapters import song_formats\n", encoding="utf-8", newline="\n"
+    )
     found = imports(module)
     assert found == {"yaml", "poser.adapters"}
     assert not any(core_allows(name) for name in found)
@@ -258,27 +260,35 @@ def test_boundary_check_can_fail(tmp_path: Path) -> None:
     assert layer_allows("poser.core.rendering", "poser.core.loading")
 
     locking = tmp_path / "locking.py"
-    locking.write_text("import os\nimport shutil\nfrom fcntl import flock\n")
+    locking.write_text(
+        "import os\nimport shutil\nfrom fcntl import flock\n", encoding="utf-8", newline="\n"
+    )
     assert file_system_imports(locking) == ["fcntl", "shutil"]
 
     assert find_cycle({"a": {"b"}, "b": {"a"}}) == ["a", "b", "a"]
     assert find_cycle({"a": {"b"}, "b": set()}) is None
 
     calls = tmp_path / "calls.py"
-    calls.write_text("import importlib\nimportlib.import_module('x')\n")
+    calls.write_text(
+        "import importlib\nimportlib.import_module('x')\n", encoding="utf-8", newline="\n"
+    )
     assert has_dynamic_import(calls)
     builtin = tmp_path / "builtin.py"
-    builtin.write_text("__import__('x')\n")
+    builtin.write_text("__import__('x')\n", encoding="utf-8", newline="\n")
     assert has_dynamic_import(builtin)
     attribute = tmp_path / "attribute.py"
-    attribute.write_text("import builtins\nbuiltins.__import__('x')\n")
+    attribute.write_text(
+        "import builtins\nbuiltins.__import__('x')\n", encoding="utf-8", newline="\n"
+    )
     assert has_dynamic_import(attribute)
     named = tmp_path / "named.py"
-    named.write_text("from importlib import import_module\n")
+    named.write_text("from importlib import import_module\n", encoding="utf-8", newline="\n")
     assert has_dynamic_import(named)
 
     command = tmp_path / "command.py"
-    command.write_text("from poser.cli import common\nfrom poser import compose\n")
+    command.write_text(
+        "from poser.cli import common\nfrom poser import compose\n", encoding="utf-8", newline="\n"
+    )
     assert {"poser.cli.common", "poser.compose"} <= {
         name for name in adapter_edges(command) if adapter_refuses(name)
     }
@@ -288,14 +298,18 @@ def test_boundary_check_can_fail(tmp_path: Path) -> None:
     assert not is_adapter("poser.adaptersx")
 
     plugins = tmp_path / "plugins.py"
-    plugins.write_text("import mido\nfrom pedalboard import load_plugin\nimport pedalboard.io\n")
+    plugins.write_text(
+        "import mido\nfrom pedalboard import load_plugin\nimport pedalboard.io\n",
+        encoding="utf-8",
+        newline="\n",
+    )
     assert sorted(name for name in imports(plugins) if is_plugin_code(name)) == [
         "mido",
         "pedalboard",
     ]
 
     relative = tmp_path / "relative.py"
-    relative.write_text("from . import x\n")
+    relative.write_text("from . import x\n", encoding="utf-8", newline="\n")
     with pytest.raises(pytest.fail.Exception):
         imports(relative)
 
@@ -364,7 +378,7 @@ def test_composition_imports_only_the_adapter_loader() -> None:
 def test_importing_the_composition_loads_no_adapter_library() -> None:
     script = "import json, sys\nimport poser.compose\nprint(json.dumps(sorted(sys.modules)))\n"
     result = subprocess.run(
-        [sys.executable, "-c", script], capture_output=True, text=True, check=True
+        [sys.executable, "-c", script], capture_output=True, text=True, check=True, encoding="utf-8"
     )
     loaded = json.loads(result.stdout)
     assert "poser.compose" in loaded
@@ -403,7 +417,11 @@ def test_the_file_system_facility_s_users_import_without_fcntl() -> None:
     statements = "".join(f"import {module}\n" for module in FACILITY_USERS)
     script = f"import sys\nsys.modules['fcntl'] = None\n{statements}"
     result = subprocess.run(
-        [sys.executable, "-c", script], check=False, capture_output=True, text=True
+        [sys.executable, "-c", script],
+        check=False,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
     )
     assert result.returncode == 0, result.stderr
 
@@ -434,7 +452,7 @@ def test_importing_poser_loads_no_adapter_library() -> None:
     statements = "".join(f"import {module}\n" for module, _ in core_modules())
     script = f"import json, sys\nimport poser\n{statements}print(json.dumps(sorted(sys.modules)))\n"
     result = subprocess.run(
-        [sys.executable, "-c", script], capture_output=True, text=True, check=True
+        [sys.executable, "-c", script], capture_output=True, text=True, check=True, encoding="utf-8"
     )
     loaded = json.loads(result.stdout)
     assert "poser.core.song" in loaded

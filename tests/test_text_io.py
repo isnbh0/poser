@@ -1,6 +1,7 @@
-"""Product code names the encoding of every text it reads or writes, and the newline of every text
-it writes, so its text bytes are the same whatever the platform's defaults. On Windows, text I/O
-without an encoding uses the ANSI code page, and text written without a newline gets CRLF."""
+"""poser's code and its tests name the encoding of every text they read or write, and the newline
+of every text they write, so their text bytes are the same whatever the platform's defaults. On
+Windows, text I/O without an encoding uses the ANSI code page, and text written without a newline
+gets CRLF."""
 
 import ast
 from pathlib import Path
@@ -8,7 +9,12 @@ from pathlib import Path
 import pytest
 
 REPO = Path(__file__).resolve().parent.parent
-PRODUCT = (REPO / "src" / "poser", REPO / "packages" / "poser-scsynth" / "src", REPO / "scripts")
+CHECKED = (
+    REPO / "src" / "poser",
+    REPO / "packages" / "poser-scsynth" / "src",
+    REPO / "scripts",
+    REPO / "tests",
+)
 WRITING_MODES = frozenset("wax+")
 SUBPROCESS_TEXT_CALLS = frozenset(
     f"subprocess.{name}" for name in ("run", "Popen", "check_output", "check_call", "call")
@@ -149,8 +155,8 @@ def _problems(source: str) -> list[tuple[int, str]]:
     return text_io_problems(ast.parse(prelude + source))
 
 
-def test_product_text_io_names_encoding_and_newline() -> None:
-    files = sorted(path for root in PRODUCT for path in root.rglob("*.py"))
+def test_text_io_names_encoding_and_newline() -> None:
+    files = sorted(path for root in CHECKED for path in root.rglob("*.py"))
     assert files
     found = [
         f"{path.relative_to(REPO)}:{line}: {reason}"

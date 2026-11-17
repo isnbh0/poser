@@ -40,7 +40,7 @@ def interrupt_unit(song: FileSongStore, key: str) -> None:
 
 def interrupt_record(song: FileSongStore) -> None:
     with song.write_record("song", YAML, latest=True) as record:
-        record.path("report.json").write_text("partial")
+        record.path("report.json").write_text("partial", encoding="utf-8", newline="\n")
         raise WriteInterruptedError
 
 
@@ -99,7 +99,7 @@ def test_file_render_store_keeps_the_documented_layout(tmp_path: Path) -> None:
         with song.write_record("song text", YAML, latest=True) as record:
             for relative in ("images/node-0.png", "images/mix.png", "audio/mix.wav"):
                 record.path(relative).write_bytes(b"file")
-            record.path("report.json").write_text("report")
+            record.path("report.json").write_text("report", encoding="utf-8", newline="\n")
     preview = store.preview_path(Identifier("serum"), Identifier("pad"))
     preview.write_bytes(b"preview")
 
@@ -120,8 +120,8 @@ def test_file_render_store_keeps_the_documented_layout(tmp_path: Path) -> None:
         ".sound-previews/serum/pad.wav",
     }
     assert leads_to(song_dir / "latest", song.record_path(1))
-    assert (song_dir / "latest" / "report.json").read_text() == "report"
-    assert (song_dir / "objects" / KEY_A / "meta.json").read_text() == (
+    assert (song_dir / "latest" / "report.json").read_text(encoding="utf-8") == "report"
+    assert (song_dir / "objects" / KEY_A / "meta.json").read_text(encoding="utf-8") == (
         '{"stems": [{"status": "rendered", "peak_dbfs": -6.0}, '
         '{"status": "rendered", "peak_dbfs": -6.0}]}\n'
     )
@@ -169,7 +169,9 @@ def test_a_damaged_unit_is_not_found(tmp_path: Path, damage: str) -> None:
         case "no meta":
             (unit / "meta.json").unlink()
         case "bad meta":
-            (unit / "meta.json").write_text('{"stems": [{"status": "lost", "peak_dbfs": 0}]}')
+            (unit / "meta.json").write_text(
+                '{"stems": [{"status": "lost", "peak_dbfs": 0}]}', encoding="utf-8", newline="\n"
+            )
         case "extra stem":
             (unit / "2.wav").write_bytes(b"three")
         case _:
@@ -193,11 +195,13 @@ def test_drafts_are_never_found_and_sweep_deletes_them(tmp_path: Path) -> None:
     song_dir = tmp_path / "renders" / "songs" / "a.yaml"
     unit_draft = song_dir / "objects" / ".tmp-left"
     unit_draft.mkdir(parents=True)
-    (unit_draft / "meta.json").write_text('{"stems": [{"status": "rendered", "peak_dbfs": 0}]}')
+    (unit_draft / "meta.json").write_text(
+        '{"stems": [{"status": "rendered", "peak_dbfs": 0}]}', encoding="utf-8", newline="\n"
+    )
     (unit_draft / "0.wav").write_bytes(b"stem")
     record_draft = song_dir / "history" / ".tmp-left"
     record_draft.mkdir(parents=True)
-    (record_draft / "song.yaml").write_text("song")
+    (record_draft / "song.yaml").write_text("song", encoding="utf-8", newline="\n")
     native().make_link(song_dir / "latest.tmp-left", "history/.tmp-left")
     with song.lock():
         with song.write_record("song", YAML, latest=False) as record:
@@ -235,17 +239,17 @@ def test_latest_follows_the_newest_complete_record(tmp_path: Path) -> None:
     song = renders(tmp_path).song(SongId("songs/a.yaml"))
     latest = tmp_path / "renders" / "songs" / "a.yaml" / "latest"
     with song.write_record("first", YAML, latest=True) as record:
-        record.path("report.json").write_text("1")
+        record.path("report.json").write_text("1", encoding="utf-8", newline="\n")
     assert leads_to(latest, song.record_path(1))
     with song.write_record("second", YAML, latest=True) as record:
-        record.path("report.json").write_text("2")
+        record.path("report.json").write_text("2", encoding="utf-8", newline="\n")
     assert leads_to(latest, song.record_path(2))
-    assert (latest / "report.json").read_text() == "2"
+    assert (latest / "report.json").read_text(encoding="utf-8") == "2"
     with song.write_record("third", YAML, latest=False):
         pass
     assert not latest.exists()
     assert not is_link(latest)
-    assert (song.record_path(2) / "report.json").read_text() == "2"
+    assert (song.record_path(2) / "report.json").read_text(encoding="utf-8") == "2"
     assert not drafts(tmp_path)
 
 
@@ -257,11 +261,11 @@ def test_latest_follows_the_newest_complete_record(tmp_path: Path) -> None:
 def test_latest_holds_a_relative_target_that_survives_moving_the_studio(tmp_path: Path) -> None:
     song = renders(tmp_path / "before").song(SongId("songs/a.yaml"))
     with song.write_record("first", YAML, latest=True) as record:
-        record.path("report.json").write_text("1")
+        record.path("report.json").write_text("1", encoding="utf-8", newline="\n")
     (tmp_path / "before").rename(tmp_path / "after")
     latest = tmp_path / "after" / "renders" / "songs" / "a.yaml" / "latest"
     assert latest.readlink() == Path("history/1")
-    assert (latest / "report.json").read_text() == "1"
+    assert (latest / "report.json").read_text(encoding="utf-8") == "1"
 
 
 @pytest.mark.parametrize("complete", [False, True])
@@ -310,7 +314,7 @@ def test_clear_latest_removes_only_the_link(tmp_path: Path) -> None:
         pass
     song.clear_latest()
     assert not is_link(song_dir / "latest")
-    assert (song.record_path(1) / "song.yaml").read_text() == "first"
+    assert (song.record_path(1) / "song.yaml").read_text(encoding="utf-8") == "first"
     song.clear_latest()
 
 
@@ -466,7 +470,10 @@ def test_records_number_after_the_highest_record(tmp_path: Path) -> None:
 def test_a_record_path_cannot_leave_the_record(tmp_path: Path) -> None:
     song = renders(tmp_path).song(SongId("songs/a.yaml"))
     with song.write_record("song", YAML, latest=False) as record:
-        for relative in ("../escape", "/abs", ""):
+        outer = ["../escape", "/abs", ""]
+        if sys.platform == "win32":
+            outer += ["a\\..\\..\\escape", "C:escape", "\\abs"]
+        for relative in outer:
             with pytest.raises(ValueError, match="inside the record"):
                 record.path(relative)
 
@@ -491,6 +498,7 @@ def test_a_second_process_finds_the_song_busy(tmp_path: Path) -> None:
         [sys.executable, "-c", LOCK_HOLDER, str(tmp_path / "renders"), "songs/a.yaml"],
         stdout=subprocess.PIPE,
         text=True,
+        encoding="utf-8",
     ) as holder:
         try:
             assert holder.stdout is not None

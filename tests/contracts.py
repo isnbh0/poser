@@ -58,14 +58,14 @@ def check_song_format_contract(fmt: object, sample_song: Song, tmp_path: Path) -
     for suffix in fmt.suffixes:
         assert suffix == suffix.lower()
     unreadable = tmp_path / f"unreadable{fmt.suffixes[0]}"
-    unreadable.write_text("this is not a song: [\n")
+    unreadable.write_text("this is not a song: [\n", encoding="utf-8", newline="\n")
     with pytest.raises(SongError):
         fmt.load(unreadable)
     with pytest.raises(SongError):
         fmt.load(tmp_path / f"missing{fmt.suffixes[0]}")
     if isinstance(fmt, RecordWriter):
         written = tmp_path / f"written{fmt.suffix}"
-        written.write_text(fmt.dump(sample_song))
+        written.write_text(fmt.dump(sample_song), encoding="utf-8", newline="\n")
         assert fmt.load(written) == sample_song
 
 
@@ -286,7 +286,7 @@ def _interrupt_unit(store: SongStore, key: str) -> None:
 
 def _interrupt_record(store: SongStore, suffix: Suffix) -> None:
     with store.write_record("interrupted", suffix, latest=True) as record:
-        record.path("report.json").write_text("partial", encoding="utf-8")
+        record.path("report.json").write_text("partial", encoding="utf-8", newline="\n")
         raise _InterruptedError
 
 
@@ -363,7 +363,7 @@ def check_render_store_contract(make: Callable[[Path], object], tmp_path: Path) 
         assert image.parent.is_dir()
         image.write_bytes(b"image")
         assert record.relative(image) == "images/node-0.png"
-        record.path("report.json").write_text("report 1", encoding="utf-8")
+        record.path("report.json").write_text("report 1", encoding="utf-8", newline="\n")
     first = records.record_path(1)
     assert (first / "song.yaml").read_text(encoding="utf-8") == "song 1"
     assert (first / "images" / "node-0.png").read_bytes() == b"image"
@@ -395,7 +395,7 @@ def check_render_store_contract(make: Callable[[Path], object], tmp_path: Path) 
         draft.stem_path(0).write_bytes(b"other song")
         draft.describe(0, StemStatus.RENDERED, -6.0)
     with other.write_record("song", Suffix(".yaml"), latest=True) as record:
-        record.path("report.json").write_text("report", encoding="utf-8")
+        record.path("report.json").write_text("report", encoding="utf-8", newline="\n")
     other_unit = other.find(KEY_A)
     assert other_unit is not None
     paths += [other_unit.stem_path(0), other.record_path(1) / "song.yaml"]

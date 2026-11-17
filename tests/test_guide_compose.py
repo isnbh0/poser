@@ -165,7 +165,9 @@ def test_the_tonal_guide_comes_with_the_tonal_framework(
 ) -> None:
     workspace = make_workspace(tmp_path / "studio", monkeypatch)
     if setting:
-        workspace.write_config(workspace.config.read_text() + "[adapters]\n" + setting)
+        workspace.write_config(
+            workspace.config.read_text(encoding="utf-8") + "[adapters]\n" + setting
+        )
     composition = load(workspace.config, workspace.root / "sounds", workspace.renders)
 
     assert (TONAL_GUIDE in required_guide(composition)) is has_tonal
@@ -181,7 +183,9 @@ def test_the_chords_guide_comes_with_the_chords_vocabulary(
 ) -> None:
     workspace = make_workspace(tmp_path / "studio", monkeypatch)
     if setting:
-        workspace.write_config(workspace.config.read_text() + "[adapters]\n" + setting)
+        workspace.write_config(
+            workspace.config.read_text(encoding="utf-8") + "[adapters]\n" + setting
+        )
     composition = load(workspace.config, workspace.root / "sounds", workspace.renders)
 
     assert (CHORDS_GUIDE in required_guide(composition)) is has_chords
@@ -211,7 +215,9 @@ def test_the_key_guide_comes_with_the_key_vocabulary(
 ) -> None:
     workspace = make_workspace(tmp_path / "studio", monkeypatch)
     if setting:
-        workspace.write_config(workspace.config.read_text() + "[adapters]\n" + setting)
+        workspace.write_config(
+            workspace.config.read_text(encoding="utf-8") + "[adapters]\n" + setting
+        )
     composition = load(workspace.config, workspace.root / "sounds", workspace.renders)
 
     assert (KEY_GUIDE in required_guide(composition)) is has_key

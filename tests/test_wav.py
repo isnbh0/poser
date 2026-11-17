@@ -1,13 +1,13 @@
 """Tests of the WAV adapter, which reads and writes stem-format audio."""
 
 import os
-import stat
 from collections.abc import Callable
 from pathlib import Path
 
 import numpy as np
 import pytest
 from contracts import check_audio_files_contract
+from helpers import assert_mode
 from pedalboard.io import WriteableAudioFile
 
 from poser.adapters.wav import WavAudioFiles
@@ -134,4 +134,4 @@ def test_write_gives_the_file_the_umask_based_mode(tmp_path: Path) -> None:
         WavAudioFiles().write(tmp_path / "stem.wav", audio)
     finally:
         os.umask(umask)
-    assert stat.S_IMODE((tmp_path / "stem.wav").stat().st_mode) == 0o644
+    assert_mode(tmp_path / "stem.wav", 0o644)

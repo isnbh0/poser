@@ -73,6 +73,10 @@ def test_every_module_imports() -> None:
     for name in [*expected, *([backend] if backend else [])]:
         assert name in names, name
     result = subprocess.run(
-        [sys.executable, "-c", IMPORTER, *names], check=True, capture_output=True, text=True
+        [sys.executable, "-c", IMPORTER, *names],
+        check=True,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
     )
     assert json.loads(result.stdout) == {}

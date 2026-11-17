@@ -2,10 +2,12 @@
 
 import os
 import stat
+import sys
 from collections.abc import Callable
 from pathlib import Path
 
 import pytest
+from helpers import assert_mode
 
 from poser.adapters.workspace_init import WorkspaceInitializer
 from poser.core.ports import ConfigError
@@ -20,7 +22,7 @@ OUTPUTS = {
 
 def tree(root: Path) -> dict[str, bytes | None]:
     return {
-        str(path.relative_to(root)): None if path.is_dir() else path.read_bytes()
+        path.relative_to(root).as_posix(): None if path.is_dir() else path.read_bytes()
         for path in root.rglob("*")
     }
 
@@ -50,7 +52,7 @@ def test_publish_creates_targets_with_bytes_and_mode(tmp_path: Path) -> None:
     for name, data in {**OUTPUTS, ".gitignore": b"renders/\n"}.items():
         path = tmp_path / name
         assert path.read_bytes() == data
-        assert stat.S_IMODE(path.stat().st_mode) == 0o644
+        assert_mode(path, 0o644)
         assert path.stat().st_nlink == 1
     assert temps(tmp_path) == []
     # Only the targets exist: no journal, lock, or other initialization namespace.
@@ -90,7 +92,7 @@ def test_failure_after_second_target_rolls_back_everything(
     with pytest.raises(ConfigError, match=r"demo\.yaml: cannot create"):
         WorkspaceInitializer(tmp_path).publish(outputs, expected_ignore=b"owner\n")
     assert tree(tmp_path) == {".gitignore": b"owner\n"}
-    assert stat.S_IMODE(ignore.stat().st_mode) == 0o640
+    assert_mode(ignore, 0o640)
 
 
 def test_rollback_restores_a_replaced_gitignore(
@@ -117,10 +119,11 @@ def test_rollback_restores_a_replaced_gitignore(
             {**OUTPUTS, ".gitignore": b"owner\nrenders/\n"}, expected_ignore=b"owner\n"
         )
     assert tree(tmp_path) == {".gitignore": b"owner\n"}
-    assert stat.S_IMODE(ignore.stat().st_mode) == 0o640
+    assert_mode(ignore, 0o640)
     assert ignore.stat().st_mtime_ns == 2_000_000_000
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="Windows cannot replace a read-only file")
 def test_replaced_gitignore_keeps_its_mode(tmp_path: Path) -> None:
     ignore = tmp_path / ".gitignore"
     ignore.write_bytes(b"owner\n")
@@ -129,7 +132,7 @@ def test_replaced_gitignore_keeps_its_mode(tmp_path: Path) -> None:
         {".gitignore": b"owner\nrenders/\n"}, expected_ignore=b"owner\n"
     )
     assert ignore.read_bytes() == b"owner\nrenders/\n"
-    assert stat.S_IMODE(ignore.stat().st_mode) == 0o444
+    assert_mode(ignore, 0o444)
 
 
 def test_gitignore_changed_before_replace_refuses(
@@ -138,11 +141,16 @@ def test_gitignore_changed_before_replace_refuses(
     ignore = tmp_path / ".gitignore"
     ignore.write_bytes(b"owner\n")
     ignore.chmod(0o600)
+    # The mode the .gitignore reports, which Windows gives as 0o666; its temp file gets it.
+    ignore_mode = stat.S_IMODE(ignore.stat().st_mode)
     fchmod = os.fchmod
+    edited = False
 
     def mutate(fd: int, mode: int) -> None:
+        nonlocal edited
         fchmod(fd, mode)
-        if mode == 0o600:
+        if mode == ignore_mode and not edited:
+            edited = True
             ignore.write_bytes(b"owner edited\n")
 
     monkeypatch.setattr(os, "fchmod", mutate)

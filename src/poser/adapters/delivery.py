@@ -8,6 +8,7 @@ from contextlib import contextmanager, suppress
 from pathlib import Path
 
 from poser.adapters.filesystem import FileSystem, native
+from poser.core.names import is_inner_relative
 from poser.core.ports import StagedDelivery
 
 
@@ -56,7 +57,7 @@ class FileDeliveryWriter:
             path = Path(tempfile.mkdtemp(prefix=".poser-export-", dir=destination.parent))
             stage = _Stage(self._fs, path, destination)
             for relative, data in files.items():
-                if relative.is_absolute() or ".." in relative.parts or not relative.parts:
+                if not is_inner_relative(relative):
                     raise ValueError(f"unsafe bundle member: {relative}")
                 target = path / relative
                 target.parent.mkdir(parents=True, exist_ok=True)

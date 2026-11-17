@@ -1,6 +1,7 @@
 """Tests for finding a workspace and filling command path options from it."""
 
 import json
+import sys
 from collections.abc import Callable
 from pathlib import Path
 
@@ -20,7 +21,7 @@ from poser.cli.workspace import (
 
 def mark(root: Path) -> Path:
     root.mkdir(parents=True, exist_ok=True)
-    (root / "poser.toml").write_text("")
+    (root / "poser.toml").write_text("", encoding="utf-8", newline="\n")
     return root
 
 
@@ -45,7 +46,7 @@ def test_search_starts_in_the_working_directory(tmp_path: Path) -> None:
 
 
 def test_a_plugins_toml_no_longer_marks_a_workspace(tmp_path: Path) -> None:
-    (tmp_path / "plugins.toml").write_text("")
+    (tmp_path / "plugins.toml").write_text("", encoding="utf-8", newline="\n")
 
     with pytest.raises(WorkspaceError):
         find_workspace(tmp_path)
@@ -174,6 +175,9 @@ def test_song_outside_the_base_is_refused(tmp_path: Path) -> None:
 
 
 def test_path_that_is_no_song_id_is_refused(tmp_path: Path) -> None:
-    for path in (tmp_path, tmp_path / "a\\b.yaml"):
+    paths = [tmp_path]
+    if sys.platform != "win32":  # On Windows a backslash separates, so `a\\b.yaml` is `a/b.yaml`.
+        paths.append(tmp_path / "a\\b.yaml")
+    for path in paths:
         with pytest.raises(SongOutsideWorkspaceError):
             song_id(tmp_path, path)

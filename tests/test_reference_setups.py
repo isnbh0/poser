@@ -28,7 +28,7 @@ def test_explicit_paths_and_optional_presets(
     assert config.instruments[0].spec.options["path"] == str(plugin)
     assert "sources" not in config.instruments[0].spec.options
     template = tomllib.loads(
-        files("poser.reference_setups.surge").joinpath("poser.toml").read_text()
+        files("poser.reference_setups.surge").joinpath("poser.toml").read_text(encoding="utf-8")
     )
     assert config.instruments[0].guide == template["instruments"]["surge"]["guide"]
     presets = tmp_path / "factory patches"
@@ -202,28 +202,28 @@ def test_windows_without_vst3_folder_variables_names_the_retry(
 def test_failures_do_not_mutate_project(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(surge, "plugin_paths", lambda: ())
     ignore = tmp_path / ".gitignore"
-    ignore.write_text("existing\n")
+    ignore.write_text("existing\n", encoding="utf-8", newline="\n")
     assert main([str(tmp_path), "--setup", "surge"]) == 2
     assert sorted(p.name for p in tmp_path.iterdir()) == [".gitignore"]
-    assert ignore.read_text() == "existing\n"
+    assert ignore.read_text(encoding="utf-8") == "existing\n"
     plugin = tmp_path / "plugin.vst3"
     plugin.mkdir()
-    (tmp_path / "AGENTS.md").write_text("owned")
+    (tmp_path / "AGENTS.md").write_text("owned", encoding="utf-8", newline="\n")
     assert main([str(tmp_path), "--setup", "surge", "--plugin-path", str(plugin)]) == 2
-    assert ignore.read_text() == "existing\n"
-    assert (tmp_path / "AGENTS.md").read_text() == "owned"
+    assert ignore.read_text(encoding="utf-8") == "existing\n"
+    assert (tmp_path / "AGENTS.md").read_text(encoding="utf-8") == "owned"
 
 
 def test_gitignore_symlink_refused(tmp_path: Path) -> None:
     plugin = tmp_path / "plugin.vst3"
     plugin.mkdir()
     outside = tmp_path / "outside"
-    outside.write_text("untouched")
+    outside.write_text("untouched", encoding="utf-8", newline="\n")
     project = tmp_path / "project"
     project.mkdir()
     (project / ".gitignore").symlink_to(outside)
     assert main([str(project), "--setup", "surge", "--plugin-path", str(plugin)]) == 2
-    assert outside.read_text() == "untouched"
+    assert outside.read_text(encoding="utf-8") == "untouched"
     assert sorted(p.name for p in project.iterdir()) == [".gitignore"]
     assert (project / ".gitignore").is_symlink()
     assert (project / ".gitignore").resolve() == outside
@@ -234,5 +234,5 @@ def test_the_packaged_songs_declare_a_meter() -> None:
     showcase = build()
     assert showcase.meter == four
     assert len(four.bars(63.5)) == 16
-    demo = files("poser.reference_setups.surge").joinpath("demo.yaml").read_text()
+    demo = files("poser.reference_setups.surge").joinpath("demo.yaml").read_text(encoding="utf-8")
     assert parse_song(yaml.safe_load(demo)).meter == four

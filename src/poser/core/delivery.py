@@ -14,7 +14,7 @@ from typing import ClassVar
 from poser.core.analysis import REPORT_NAME, AnalysisTools, _analyze
 from poser.core.jsonvalue import JsonValue
 from poser.core.loading import load_song
-from poser.core.names import Identifier, SongId
+from poser.core.names import Identifier, SongId, is_inner_relative
 from poser.core.ports import (
     AudioFiles,
     DeliveryWriter,
@@ -144,7 +144,7 @@ def capture_inputs(
     captured_song = source(song)
     captured_includes: list[InputSnapshot] = []
     for include in includes:
-        if include.is_absolute() or ".." in include.parts or not include.parts:
+        if not is_inner_relative(include):
             raise ValueError(f"include must be a nonescaping source-relative file: {include}")
         item = source(source_root / include, preserve_name=True)
         if item.path != captured_song.path and item not in captured_includes:
@@ -276,10 +276,8 @@ class PublishedDelivery:
         for name, digest in artifacts.items():
             relative = Path(name)
             target = self.destination / relative
-            if (
-                relative.is_absolute()
-                or ".." in relative.parts
-                or not target.resolve().is_relative_to(self.destination.resolve())
+            if not is_inner_relative(relative) or not target.resolve().is_relative_to(
+                self.destination.resolve()
             ):
                 raise ValueError("published delivery has an unsafe artifact reference")
             if not target.is_file() or sha256(target.read_bytes()) != digest:
