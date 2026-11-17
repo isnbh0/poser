@@ -8,6 +8,7 @@ marked `real_scsynth` and run under `make test-real`.
 """
 
 import os
+import re
 import shutil
 import sys
 import time
@@ -41,11 +42,17 @@ BUNDLE_CANDIDATES = (
 
 def windows_candidates() -> list[Path]:
     """The installer's engines, `%ProgramFiles%\\SuperCollider-<version>\\scsynth.exe`, newest
-    name first."""
+    version first."""
     program_files = os.environ.get("PROGRAMFILES")  # Windows environment names ignore case.
     if sys.platform != "win32" or not program_files:
         return []
-    return sorted(Path(program_files).glob("SuperCollider-*/scsynth.exe"), reverse=True)
+    engines = Path(program_files).glob("SuperCollider-*/scsynth.exe")
+    return sorted(engines, key=lambda engine: version_key(engine.parent.name), reverse=True)
+
+
+def version_key(folder: str) -> tuple[int, ...]:
+    """The version numbers in an installer folder's name, so `3.14.1` sorts after `3.9`."""
+    return tuple(int(number) for number in re.findall(r"\d+", folder))
 
 
 def real_scsynth() -> Path:
@@ -107,6 +114,17 @@ def test_real_render_is_exact_finite_and_deterministic(
     assert first.samples.shape[1] == first.frames
     assert np.isfinite(first.samples).all()
     assert (tmp_path / "first.npy").read_bytes() == (tmp_path / "second.npy").read_bytes()
+
+
+def test_real_render_needs_no_supercollider_folder(
+    instrument: ScsynthInstrument, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An account that never ran SuperCollider has no synthdef folder; on macOS and Linux a fresh
+    HOME stands for one. Windows CI's account has none either."""
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    render_song(instrument, tmp_path, two_note_song(), "fresh.npy")
 
 
 def test_real_render_peaks_audibly(instrument: ScsynthInstrument, tmp_path: Path) -> None:
@@ -271,7 +289,7 @@ def test_check_instruments_accepts_the_adapter(
     config.write_text(
         "[instruments.sc]\n"
         'adapter = "poser_scsynth.instrument:create"\n'
-        f'scsynth = "{real_scsynth()}"\n',
+        f"scsynth = '{real_scsynth()}'\n",
         encoding="utf-8",
         newline="\n",
     )
@@ -299,9 +317,9 @@ def two_engine_composition(tmp_path: Path) -> tuple[Composition, Path]:
     config.write_text(
         REPO_CONFIG.read_text(encoding="utf-8") + "\n[instruments.sc]\n"
         'adapter = "poser_scsynth.instrument:create"\n'
-        f'scsynth = "{real_scsynth()}"\n'
+        f"scsynth = '{real_scsynth()}'\n"
         "\n[instruments.sc.sources]\n"
-        f'demo = "{source}"\n',
+        f"demo = '{source}'\n",
         encoding="utf-8",
         newline="\n",
     )

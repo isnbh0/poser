@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 import pytest
 from contracts import check_instrument_contract
-from distlib.scripts import ScriptMaker
+from distlib.scripts import ScriptMaker, enquote_executable
 from poser_scsynth.instrument import ScsynthInstrument, create
 from poser_scsynth.scores import build_score, hz
 
@@ -73,7 +73,8 @@ def make_stub(directory: Path) -> Path:
     """Write the stub engine into `directory`, a launcher .exe on Windows and an executable
     script elsewhere, and return its path."""
     maker = ScriptMaker(str(STUB_SOURCE.parent), str(directory))
-    maker.executable = str(stub_interpreter())
+    # Set by hand, the executable is used as given; a path with a space needs its quotes.
+    maker.executable = enquote_executable(str(stub_interpreter()))
     (written,) = maker.make(STUB_SOURCE.name)
     return Path(written)
 
@@ -407,7 +408,7 @@ def test_crashed_names_stderr(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
 
 def test_timed_out_reaps_the_child(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     woke = tmp_path / "woke"
-    monkeypatch.setenv("SCSTUB_SLEEP", "2")
+    monkeypatch.setenv("SCSTUB_SLEEP", "4")
     monkeypatch.setenv("SCSTUB_WOKE", str(woke))
     instrument = make_instrument(tmp_path, make_stub(tmp_path), {"demo": make_source(tmp_path)})
     started = time.monotonic()
@@ -415,9 +416,9 @@ def test_timed_out_reaps_the_child(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     elapsed = time.monotonic() - started
     assert isinstance(failure, RenderFailure)
     assert failure.status is RenderFailureStatus.TIMED_OUT
-    assert elapsed < 1.8, "render returned before the stub's sleep ended: the child was killed"
+    assert elapsed < 3.0, "render returned before the stub's sleep ended: the child was killed"
     # Past the moment the stub would wake, it has written nothing: it died with the kill.
-    time.sleep(max(0.0, started + 3.0 - time.monotonic()))
+    time.sleep(max(0.0, started + 5.5 - time.monotonic()))
     assert not woke.exists()
 
 

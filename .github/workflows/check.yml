@@ -63,7 +63,8 @@ jobs:
       - name: Plugin-free suite except the pending files (required)
         timeout-minutes: 30
         run: |
-          $ignored = -split $env:WINDOWS_PENDING | ForEach-Object { "--ignore=$_" }
+          # @() keeps a single pending file an array, which @ignored splats as one argument each.
+          $ignored = @(-split $env:WINDOWS_PENDING | ForEach-Object { "--ignore=$_" })
           uv run pytest -q -rs @ignored
       - name: Type-check the Windows backends (required)
         if: ${{ !cancelled() }}

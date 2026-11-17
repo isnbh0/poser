@@ -300,8 +300,13 @@ class ScsynthInstrument:
         score_path = directory / "score.osc"
         score_path.write_bytes(score)
         output_path = directory / "output.wav"
+        # `-D 0` skips loading the account's synthdef folder at startup: the score sends every
+        # synthdef, and on an account that never ran SuperCollider the folder is missing and
+        # scsynth would report "*** ERROR: open directory failed".
         command = [
             str(scsynth),
+            "-D",
+            "0",
             "-N",
             str(score_path),
             "_",  # No input file.

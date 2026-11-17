@@ -15,7 +15,9 @@ and does not do:
 - `SCSTUB_NAN=1` — write NaN into the first block (the adapter owns finiteness).
 
 The real engine's behaviors mirrored here: malformed records are a loud failure; a score whose
-messages are unusable still renders silence silently.
+messages are unusable still renders silence silently; and, as on an account that never ran
+SuperCollider, loading synthdefs at startup (no `-D 0`) prints `*** ERROR: open directory failed`
+and the render goes on.
 """
 
 import math
@@ -81,6 +83,9 @@ def main(argv: list[str]) -> int:
         time.sleep(float(sleep))
         if woke := os.environ.get("SCSTUB_WOKE"):
             Path(woke).write_bytes(b"")
+    load = argv.index("-D") if "-D" in argv else None
+    if load is None or argv[load + 1] != "0":
+        print("*** ERROR: open directory failed '<account>/synthdefs'")
     if "-N" not in argv:
         print("stub: no -N in argv", file=sys.stderr)
         return 1
