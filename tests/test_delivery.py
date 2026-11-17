@@ -1,6 +1,8 @@
 """Delivery counterexamples: no plugins, network, or playback."""
 
+import errno
 import json
+import os
 import shutil
 import sys
 from collections.abc import Callable, Generator, Mapping
@@ -779,6 +781,23 @@ def test_writer_cleanup_does_not_remove_owner_content(harness: Harness) -> None:
     assert isinstance(harness.run(), DeliveryIOFailed)
     assert (harness.destination.parent / "owner").read_text() == "keep"
     assert not harness.destination.exists()
+
+
+def test_writer_accepts_a_root_that_refuses_creation_as_access_denied(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Windows refuses to create a drive root as access denied, where POSIX reports it as
+    existing."""
+    real_mkdir = os.mkdir
+
+    def mkdir(path: str | os.PathLike[str], mode: int = 0o777) -> None:
+        target = Path(path)
+        if target.anchor and target == Path(target.anchor):
+            raise PermissionError(errno.EACCES, "Access is denied", str(target))
+        real_mkdir(path, mode)
+
+    monkeypatch.setattr(os, "mkdir", mkdir)
+    assert isinstance(harness.run(), PublishedDelivery)
 
 
 def test_safe_include_symlink_preserves_declared_editable_filename(harness: Harness) -> None:

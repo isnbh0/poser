@@ -47,7 +47,8 @@ class FileDeliveryWriter:
             for parent in reversed(destination.parents):
                 try:
                     parent.mkdir()
-                except FileExistsError:
+                except OSError:
+                    # Windows refuses to create a drive root as access denied, not as existing.
                     if not parent.is_dir():
                         raise
                 else:
