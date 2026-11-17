@@ -59,9 +59,26 @@ def renders(tmp_path: Path) -> FileRenderStore:
 
 
 def files_under(directory: Path) -> set[str]:
-    return {
-        path.relative_to(directory).as_posix() for path in directory.rglob("*") if path.is_file()
-    }
+    """Return the files under `directory` by relative path, without following links."""
+    found: set[str] = set()
+    for path in directory.iterdir():
+        if is_link(path):
+            continue
+        if path.is_dir():
+            found |= {f"{path.name}/{inner}" for inner in files_under(path)}
+        elif path.is_file():
+            found.add(path.name)
+    return found
+
+
+def is_link(path: Path) -> bool:
+    """Whether `path` is a link, as the platform's file-system backend sees it."""
+    return native().is_link(path)
+
+
+def leads_to(link: Path, record: Path) -> bool:
+    """Whether `link` is a link that leads to the record directory `record`."""
+    return is_link(link) and link.resolve() == record.resolve()
 
 
 def run(store: FileSongStore) -> None:
@@ -102,8 +119,7 @@ def test_file_render_store_keeps_the_documented_layout(tmp_path: Path) -> None:
         "songs/demo.yaml/history/1/images/mix.png",
         ".sound-previews/serum/pad.wav",
     }
-    assert (song_dir / "latest").is_symlink()
-    assert (song_dir / "latest").readlink() == Path("history/1")
+    assert leads_to(song_dir / "latest", song.record_path(1))
     assert (song_dir / "latest" / "report.json").read_text() == "report"
     assert (song_dir / "objects" / KEY_A / "meta.json").read_text() == (
         '{"stems": [{"status": "rendered", "peak_dbfs": -6.0}, '
@@ -182,7 +198,7 @@ def test_drafts_are_never_found_and_sweep_deletes_them(tmp_path: Path) -> None:
     record_draft = song_dir / "history" / ".tmp-left"
     record_draft.mkdir(parents=True)
     (record_draft / "song.yaml").write_text("song")
-    (song_dir / "latest.tmp-left").symlink_to("history/.tmp-left")
+    native().make_link(song_dir / "latest.tmp-left", "history/.tmp-left")
     with song.lock():
         with song.write_record("song", YAML, latest=False) as record:
             assert record.run == 1
@@ -220,17 +236,32 @@ def test_latest_follows_the_newest_complete_record(tmp_path: Path) -> None:
     latest = tmp_path / "renders" / "songs" / "a.yaml" / "latest"
     with song.write_record("first", YAML, latest=True) as record:
         record.path("report.json").write_text("1")
-    assert latest.readlink() == Path("history/1")
+    assert leads_to(latest, song.record_path(1))
     with song.write_record("second", YAML, latest=True) as record:
         record.path("report.json").write_text("2")
-    assert latest.readlink() == Path("history/2")
+    assert leads_to(latest, song.record_path(2))
     assert (latest / "report.json").read_text() == "2"
     with song.write_record("third", YAML, latest=False):
         pass
     assert not latest.exists()
-    assert not latest.is_symlink()
+    assert not is_link(latest)
     assert (song.record_path(2) / "report.json").read_text() == "2"
     assert not drafts(tmp_path)
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="Windows links are junctions, which hold absolute targets, so `latest` does not "
+    "survive moving the studio",
+)
+def test_latest_holds_a_relative_target_that_survives_moving_the_studio(tmp_path: Path) -> None:
+    song = renders(tmp_path / "before").song(SongId("songs/a.yaml"))
+    with song.write_record("first", YAML, latest=True) as record:
+        record.path("report.json").write_text("1")
+    (tmp_path / "before").rename(tmp_path / "after")
+    latest = tmp_path / "after" / "renders" / "songs" / "a.yaml" / "latest"
+    assert latest.readlink() == Path("history/1")
+    assert (latest / "report.json").read_text() == "1"
 
 
 @pytest.mark.parametrize("complete", [False, True])
@@ -247,14 +278,14 @@ def test_latest_is_cleared_before_a_record_is_published(
 
     def crash_on_publish(self: Path, target: Path) -> Path:
         if Path(target) == song.record_path(2):
-            assert not latest.is_symlink()
+            assert not is_link(latest)
             raise WriteInterruptedError
         return rename(self, target)
 
     monkeypatch.setattr(Path, "rename", crash_on_publish)
     with pytest.raises(WriteInterruptedError), song.write_record("second", YAML, latest=complete):
         pass
-    assert not latest.is_symlink()
+    assert not is_link(latest)
     assert song.record_path(1).is_dir()
 
 
@@ -266,7 +297,7 @@ def test_an_exception_leaves_no_record_and_latest_as_it_was(tmp_path: Path) -> N
     with pytest.raises(WriteInterruptedError):
         interrupt_record(song)
     assert not song.record_path(2).exists()
-    assert latest.readlink() == Path("history/1")
+    assert leads_to(latest, song.record_path(1))
     assert not drafts(tmp_path)
     with song.write_record("second", YAML, latest=True) as record:
         assert record.run == 2
@@ -278,7 +309,7 @@ def test_clear_latest_removes_only_the_link(tmp_path: Path) -> None:
     with song.write_record("first", YAML, latest=True):
         pass
     song.clear_latest()
-    assert not (song_dir / "latest").is_symlink()
+    assert not is_link(song_dir / "latest")
     assert (song.record_path(1) / "song.yaml").read_text() == "first"
     song.clear_latest()
 
@@ -290,7 +321,7 @@ def test_a_latest_directory_from_an_older_layout_is_replaced(tmp_path: Path) -> 
     (old / "mix.wav").write_bytes(b"old mix")
     with song.write_record("first", YAML, latest=True):
         pass
-    assert old.readlink() == Path("history/1")
+    assert leads_to(old, song.record_path(1))
 
 
 def test_song_refuses_the_store_s_own_names(tmp_path: Path) -> None:
