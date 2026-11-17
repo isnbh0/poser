@@ -2,6 +2,7 @@
 
 import os
 import subprocess
+import sys
 import tomllib
 from importlib.resources import files
 from pathlib import Path
@@ -179,6 +180,26 @@ def test_missing_plugin_diagnostic_links_to_recovery(
     assert surge.DOC_URL in diagnostic
     assert "--plugin-path" in diagnostic
     assert snapshot(target) == {}
+
+
+def test_an_unsupported_platform_is_named_and_writes_nothing(
+    tmp_path: Path,
+    plugin: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    target = tmp_path / "studio"
+    presets = tmp_path / "presets"
+    presets.mkdir()
+    monkeypatch.setattr(sys, "platform", "win32")
+    assert init_workspace.main([*args(target, plugin), "--presets-path", str(presets)]) == 2
+    diagnostic = capsys.readouterr().err
+    assert diagnostic.startswith("init-workspace: ")
+    assert "win32" in diagnostic
+    assert "docs/setup.md#prerequisites" in diagnostic
+    assert "poser.toml:" not in diagnostic
+    for name in ("AGENTS.md", "POSER.md", "CLAUDE.md", "poser.toml", "songs/demo.yaml"):
+        assert not (target / name).exists(), name
 
 
 def test_bad_overrides_do_not_mutate_existing_project(

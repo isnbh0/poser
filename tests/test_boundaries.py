@@ -31,10 +31,8 @@ ADAPTER_LIBRARIES = ("pedalboard", "mido", "yaml", "matplotlib", "scipy", "pylou
 CLI = POSER / "cli"
 COMPOSE = POSER / "compose.py"
 PLUGIN_LOADERS = {"poser/adapters/pedalboard/worker.py"}
-FCNTL_USERS = {
-    "poser/adapters/filestore.py",
-    "poser/adapters/pedalboard/instrument.py",
-}
+FCNTL_USERS = {"poser/adapters/filesystem_posix.py"}
+CTYPES_USERS = {"poser/adapters/filesystem_posix.py"}
 LIBRARY_HOMES = {
     "pyloudnorm": {"poser/adapters/measuring.py"},
     "scipy": {"poser/adapters/measuring.py"},
@@ -389,6 +387,30 @@ def test_analysis_libraries_stay_in_their_adapters() -> None:
 def test_only_locking_modules_import_fcntl() -> None:
     found = files_importing(lambda name: name.split(".", 1)[0] == "fcntl")
     assert found == FCNTL_USERS
+
+
+FACILITY_USERS = (
+    "poser.adapters.filesystem",
+    "poser.adapters.filestore",
+    "poser.adapters.delivery",
+    "poser.adapters.pedalboard.instrument",
+)
+
+
+def test_the_file_system_facility_s_users_import_without_fcntl() -> None:
+    """On Windows, where `fcntl` does not exist, they import, and building them names the
+    platform instead of failing to import."""
+    statements = "".join(f"import {module}\n" for module in FACILITY_USERS)
+    script = f"import sys\nsys.modules['fcntl'] = None\n{statements}"
+    result = subprocess.run(
+        [sys.executable, "-c", script], check=False, capture_output=True, text=True
+    )
+    assert result.returncode == 0, result.stderr
+
+
+def test_only_the_posix_file_system_imports_ctypes() -> None:
+    found = files_importing(lambda name: name.split(".", 1)[0] == "ctypes")
+    assert found == CTYPES_USERS
 
 
 def test_only_the_wav_adapter_reads_audio_files() -> None:

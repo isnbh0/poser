@@ -2,6 +2,7 @@
 
 import json
 import math
+import sys
 from pathlib import Path
 
 import pytest
@@ -252,6 +253,24 @@ def test_bad_config_exits_2_before_any_work(
         f"render-song: {workspace.config}: instruments.synth: unknown option 'loud'\n"
     )
     assert not marker.exists()
+
+
+def test_an_unsupported_platform_exits_2_naming_it(
+    workspace: CommandWorkspace,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    write_song(workspace.root / SONG, ("lead", "synth"))
+    monkeypatch.setattr(sys, "platform", "win32")
+
+    assert render.main([SONG]) == EXIT_BAD_CONFIG
+
+    diagnostic = capsys.readouterr().err
+    assert diagnostic.startswith("render-song: ")
+    assert "win32" in diagnostic
+    assert "docs/setup.md#prerequisites" in diagnostic
+    assert "poser.toml:" not in diagnostic
+    assert not workspace.renders.exists()
 
 
 # analyze-song

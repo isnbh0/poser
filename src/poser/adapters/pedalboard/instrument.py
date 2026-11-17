@@ -6,18 +6,16 @@ either re-renders its stems with no one bumping a version by hand. The identity 
 Serum's default patch does not repeat between renders, and its stems are still cached.
 """
 
-import fcntl
-import os
 import plistlib
 import tempfile
 import threading
 import xml.parsers.expat
-from collections.abc import Generator, Mapping
-from contextlib import contextmanager
+from collections.abc import Mapping
 from importlib import metadata, resources
 from pathlib import Path
 from typing import cast
 
+from poser.adapters.filesystem import FileSystem, native
 from poser.adapters.isolation import WorkerCrashedError, WorkerTimedOutError, run_isolated
 from poser.adapters.loading import load_object
 from poser.adapters.pedalboard.config import (
@@ -137,7 +135,11 @@ class PedalboardInstrument:
     """
 
     def __init__(
-        self, config: PedalboardConfig, sounds_dir: Path, formats: Mapping[Suffix, PresetFormat]
+        self,
+        config: PedalboardConfig,
+        sounds_dir: Path,
+        formats: Mapping[Suffix, PresetFormat],
+        fs: FileSystem,
     ) -> None:
         if not formats:
             raise ValueError(f"instrument {config.name!r} needs at least one preset format")
@@ -147,6 +149,7 @@ class PedalboardInstrument:
         self._config = config
         self._sounds_dir = sounds_dir
         self._formats = dict(formats)
+        self._fs = fs
         self._lock = threading.Lock()
         self._configured: SourceScan | None = None
         self._saved: SourceScan | None = None
@@ -315,23 +318,14 @@ class PedalboardInstrument:
             return f"saved sound {name!r} exists; pass --replace"
         return existing[0] if existing else target
 
-    @contextmanager
-    def _saved_lock(self, directory: Path) -> Generator[None]:
-        """Hold the saved directory's lock, waiting for another store to finish."""
-        fd = os.open(directory / LOCK_NAME, os.O_RDWR | os.O_CREAT, 0o644)
-        try:
-            fcntl.flock(fd, fcntl.LOCK_EX)
-            yield
-        finally:
-            os.close(fd)
-
     def store(
         self, name: Identifier, description: str, captured: Captured, *, replace: bool
     ) -> SoundRef | str:
         sound = SavedSound(description, decode_state(payload_state(captured.payload)))
         directory = saved_dir(self._config, self._sounds_dir)
         directory.mkdir(parents=True, exist_ok=True)
-        with self._saved_lock(directory):
+        # Wait for another store to finish.
+        with self._fs.lock(directory / LOCK_NAME, wait=True):
             target = self._target(name, replace=replace)
             if isinstance(target, str):
                 return target
@@ -532,7 +526,11 @@ def create(
     name: Identifier, options: Mapping[str, JsonValue], context: AdapterContext
 ) -> PedalboardInstrument:
     """The factory for `pedalboard`. Relative paths in the options resolve against the workspace
-    root, and saved sounds live under the command's sounds directory."""
+    root, and saved sounds live under the command's sounds directory.
+
+    Raises UnsupportedPlatformError on a platform the file-system facility has no backend for.
+    """
+    fs = native()
     config = from_options(name, options, context.root)
     owner = f"instrument {config.name!r}"
     formats: dict[Suffix, PresetFormat] = {}
@@ -541,7 +539,7 @@ def create(
         if fmt.suffix in formats:
             raise ConfigError(f"{owner}: two preset formats read {fmt.suffix!r} files")
         formats[fmt.suffix] = fmt
-    return PedalboardInstrument(config, context.sounds_dir, formats)
+    return PedalboardInstrument(config, context.sounds_dir, formats, fs)
 
 
 def create_effect(

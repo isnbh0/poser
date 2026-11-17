@@ -23,6 +23,7 @@ from contracts import check_instrument_contract, check_sound_capture_contract
 from helpers import fxp_bytes
 from test_performance import cc_track, performed
 
+from poser.adapters.filesystem import native
 from poser.adapters.isolation import WorkerCrashedError, WorkerTimedOutError
 from poser.adapters.pedalboard import instrument as instrument_module
 from poser.adapters.pedalboard import worker as worker_module
@@ -84,6 +85,7 @@ from poser.core.ports import (
     ResolvedEffect,
     ResolvedSound,
     SoundFailure,
+    UnsupportedPlatformError,
 )
 from poser.core.rendering import RENDER_ATTEMPTS
 from poser.core.song import ControlChange, Note
@@ -209,7 +211,7 @@ def make_instrument(
     if not sources:
         sources = {"presets": tmp_path / "presets"}
     config = make_config(tmp_path, path, **sources)
-    return PedalboardInstrument(config, tmp_path / "sounds", FORMATS)
+    return PedalboardInstrument(config, tmp_path / "sounds", FORMATS, native())
 
 
 def saved_dir(tmp_path: Path) -> Path:
@@ -364,10 +366,10 @@ def test_from_options_resolves_relative_paths_against_base(tmp_path: Path) -> No
 def test_instrument_refuses_formats_that_do_not_match_their_suffixes(tmp_path: Path) -> None:
     config = make_config(tmp_path)
     with pytest.raises(ValueError, match="at least one preset format"):
-        PedalboardInstrument(config, tmp_path / "sounds", {})
+        PedalboardInstrument(config, tmp_path / "sounds", {}, native())
     with pytest.raises(ValueError, match="has the suffix"):
         PedalboardInstrument(
-            config, tmp_path / "sounds", {Suffix(".json"): FORMATS[Suffix(".fxp")]}
+            config, tmp_path / "sounds", {Suffix(".json"): FORMATS[Suffix(".fxp")]}, native()
         )
 
 
@@ -703,6 +705,7 @@ def test_constructing_an_instrument_reads_nothing_and_starts_nothing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     config = make_config(tmp_path, tmp_path / "Missing.vst3", presets=tmp_path / "presets")
+    fs = native()
     with monkeypatch.context() as patch:
         for module, name in [
             (io, "open"),
@@ -715,7 +718,7 @@ def test_constructing_an_instrument_reads_nothing_and_starts_nothing(
             (instrument_module, "run_isolated"),
         ]:
             patch.setattr(module, name, refuse)
-        PedalboardInstrument(config, tmp_path / "sounds", FORMATS)
+        PedalboardInstrument(config, tmp_path / "sounds", FORMATS, fs)
     assert sorted(path.name for path in tmp_path.iterdir()) == []
 
 
@@ -1014,6 +1017,7 @@ def test_store_refuses_a_name_two_files_share(
 STORER = """
 import sys, time
 from pathlib import Path
+from poser.adapters.filesystem import native
 from poser.adapters.pedalboard.config import PedalboardConfig
 from poser.adapters.pedalboard.formats import PRESET_FORMATS
 from poser.adapters.pedalboard.instrument import PedalboardInstrument
@@ -1026,7 +1030,7 @@ from poser.core.sounds import SoundRef
 root, name, go = Path(sys.argv[1]), sys.argv[2], Path(sys.argv[3])
 config = PedalboardConfig(Identifier("serum"), root / "Serum.vst3", None, {}, tuple(PRESET_FORMATS))
 formats = {fmt.suffix: fmt for fmt in PRESET_FORMATS.values()}
-instrument = PedalboardInstrument(config, root / "sounds", formats)
+instrument = PedalboardInstrument(config, root / "sounds", formats, native())
 captured = Captured(Json.of({"state": encode_state(name.encode())}))
 print("ready", flush=True)
 while not go.exists():
@@ -1087,7 +1091,7 @@ def test_pedalboard_instrument_meets_the_sound_capture_contract(
 
     def make(directory: Path) -> PedalboardInstrument:
         config = make_config(tmp_path, presets=tmp_path / "presets")
-        return PedalboardInstrument(config, directory, FORMATS)
+        return PedalboardInstrument(config, directory, FORMATS, native())
 
     def make_captured(instrument: object) -> Captured:
         assert isinstance(instrument, PedalboardInstrument)
@@ -1212,6 +1216,16 @@ def test_create_scans_the_suffix_of_a_format_named_by_import_path(
     ]
     assert not (tmp_path / "sounds").exists()
     assert not (tmp_path / "renders").exists()
+
+
+def test_create_refuses_a_platform_without_a_file_system_backend(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    assert isinstance(create_serum(tmp_path, ["fxp", "saved"]), PedalboardInstrument)
+    monkeypatch.setattr(sys, "platform", "win32")
+
+    with pytest.raises(UnsupportedPlatformError, match="win32"):
+        create_serum(tmp_path, ["fxp", "saved"])
 
 
 @pytest.mark.parametrize(

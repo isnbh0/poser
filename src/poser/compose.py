@@ -14,7 +14,8 @@ other adapter by import path, `module:attribute`, naming a factory:
 The record writer, audio files, render store, mixer, measurer, visualizer, and piano-roll drawer
 have one implementation each. They are fixed parts, built from the import paths in `FIXED`.
 
-A factory raises ConfigError for options it cannot use; any other exception is a bug in the
+A factory raises ConfigError for options it cannot use, or UnsupportedPlatformError when it
+needs a facility the running platform has no backend for; any other exception is a bug in the
 adapter and propagates. Building an adapter loads no plugin, starts no process, writes no file,
 and reads nothing but its arguments and imported modules, so a guide can be composed on a
 machine without the plugins.
@@ -56,6 +57,7 @@ from poser.core.ports import (
     RecordWriter,
     RenderStore,
     SongFormat,
+    UnsupportedPlatformError,
     Visualizer,
     Vocabulary,
     WorkspaceInitializer,
@@ -431,7 +433,7 @@ class Composition:
         owner: str | None = None,
     ) -> T:
         """Build one adapter from `use`, a name in `builtins` or an import path, naming `where` in
-        any ConfigError.
+        any ConfigError but an UnsupportedPlatformError, which names the platform instead.
 
         A factory's error that starts with `owner`, such as `instrument 'serum': `, drops it, so
         the message names the instrument once.
@@ -445,6 +447,8 @@ class Composition:
             raise self._fail(where, f"{use!r} is not a factory")
         try:
             made = factory(*args)
+        except UnsupportedPlatformError:
+            raise  # The platform, not `where`, is what cannot be used.
         except ConfigError as error:
             problem = str(error)
             if owner is not None:

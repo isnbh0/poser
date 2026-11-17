@@ -19,6 +19,7 @@ from helpers import (
     strongest_hz,
 )
 
+from poser.adapters.filesystem import native
 from poser.adapters.pedalboard.config import from_options
 from poser.adapters.pedalboard.formats import SavedFormat, SavedSound
 from poser.adapters.pedalboard.instrument import PedalboardInstrument, plugin_version
@@ -91,7 +92,10 @@ def test_a_captured_state_reaches_the_render(tmp_path: Path) -> None:
     (presets / "Test").mkdir(parents=True)
     (presets / "Test" / "low.fxp").write_bytes(fxp_bytes(component_state(state), name="low"))
     serum = PedalboardInstrument(
-        dataclasses.replace(config, sources={Identifier("test"): presets}), sounds_dir, REAL_FORMATS
+        dataclasses.replace(config, sources={Identifier("test"): presets}),
+        sounds_dir,
+        REAL_FORMATS,
+        native(),
     )
 
     song = Song(bpm=60, tracks=(Track("lead", "serum", (Note(0, 60, 1.5, 100),)),))
@@ -113,7 +117,7 @@ def test_a_long_release_preset_is_silent_until_its_note(tmp_path: Path, preset: 
     composition = real_composition(tmp_path)
     (spec,) = [item for item in composition.config.instruments if item.name == "serum"]
     config = from_options(spec.name, spec.spec.options, composition.context.root)
-    serum = PedalboardInstrument(config, tmp_path / "sounds", REAL_FORMATS)
+    serum = PedalboardInstrument(config, tmp_path / "sounds", REAL_FORMATS, native())
     note_on = NoteOn(SAMPLE_RATE // 2, 48, 100)
     performance = Performance(3 * SAMPLE_RATE // 2, (note_on, NoteOff(SAMPLE_RATE, 48)))
     first = note_on.sample

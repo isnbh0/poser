@@ -10,10 +10,14 @@ To have an agent help, paste the one-line prompt from the
 
 ## Prerequisites
 
-You need macOS, Git, [uv](https://docs.astral.sh/uv/), and Python 3.13 or later available to uv.
+You need Git, [uv](https://docs.astral.sh/uv/), and Python 3.13 or later available to uv.
 Install or locate Surge XT before initializing; the
 [Surge guide](../src/poser/reference_setups/surge/README.md) covers installation, searched
 locations, and custom paths.
+
+poser is developed and tested on macOS. Linux has the file-system support poser needs but is
+untested, and the Surge reference setup searches only macOS locations, so on Linux pass
+`--plugin-path` and `--presets-path` to `init-workspace`. Native Windows is not supported yet.
 
 ## Create and verify
 
@@ -101,6 +105,9 @@ problem and rerun export; don't hand over an earlier mix.
 See the [export contract](#export-contract) for exit codes, manifest fields, and portability limits.
 
 ## Recover from a failure
+
+If a command reports that poser's file-system support does not cover your platform, it cannot run
+there yet; see [Prerequisites](#prerequisites).
 
 If initialization reports a missing plugin or invalid path, locate or install Surge, or specify
 its existing location as described in the

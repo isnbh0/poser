@@ -8,12 +8,13 @@ A song's directory is `<renders dir>/<song id>`, and it holds:
   stems `0<stem>`, `1<stem>`, ..., one per node of the unit in the unit's node order;
 - `history/<n>/`, the records, numbered from 1: `song<record>`, `report.json`, and, in a
   complete record, `audio/mix<stem>` and `images/`;
-- `latest`, a symbolic link to `history/<n>`, present only while the newest record is complete.
+- `latest`, a directory link to `history/<n>`, present only while the newest record is complete.
 
 A unit or record is written in a `.tmp-<random>` directory beside its final place and renamed
-into place when complete, and `latest` is replaced by renaming a new link over it, so a reader
-sees each complete or not at all. `sweep` deletes the drafts an interrupted run left. Node names
-never appear in a path.
+into place when complete, so a reader sees each complete or not at all. `latest` is removed
+before a record is published and linked to it afterward, so whenever it exists it leads to the
+newest record. `sweep` deletes the drafts an interrupted run left. Node names never appear in a
+path. Locking, syncing, and links go through the `FileSystem` facility the store is built with.
 
 Every run takes the lock, so every song directory that holds anything holds `.lock`, and
 `song` refuses an id whose directory would be inside another song's, or hold one. `lock` checks
@@ -23,16 +24,16 @@ directory are followed as the filesystem follows them.
 """
 
 import errno
-import fcntl
 import json
 import os
 import re
 import shutil
 import tempfile
 from collections.abc import Collection, Generator, Mapping
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from pathlib import Path, PurePosixPath
 
+from poser.adapters.filesystem import FileSystem, native
 from poser.adapters.loading import refuse_options
 from poser.core.jsonvalue import JsonValue, json_object
 from poser.core.names import Identifier, SongId, Suffix
@@ -89,21 +90,13 @@ def _write_atomic(path: Path, text: str) -> None:
         temp.unlink(missing_ok=True)
 
 
-def _sync(path: Path) -> None:
-    fd = os.open(path, os.O_RDONLY)
-    try:
-        os.fsync(fd)
-    finally:
-        os.close(fd)
-
-
-def _sync_tree(directory: Path) -> None:
+def _sync_tree(fs: FileSystem, directory: Path) -> None:
     """Flush every file and directory under `directory`, and `directory` itself, to disk, so a
     rename publishes complete contents."""
     for path in directory.rglob("*"):
-        if not path.is_symlink() and (path.is_file() or path.is_dir()):
-            _sync(path)
-    _sync(directory)
+        if not fs.is_link(path) and (path.is_file() or path.is_dir()):
+            fs.sync(path)
+    fs.sync(directory)
 
 
 def _remove_tree(directory: Path) -> None:
@@ -146,17 +139,6 @@ def _inside_another_song(renders_dir: Path, song_id: SongId) -> str | None:
 
 def _holding_another_song(song_id: SongId) -> str:
     return f"song {song_id!r} would hold other songs' directories"
-
-
-@contextmanager
-def _flock(path: Path, operation: int) -> Generator[None]:
-    """Hold an advisory lock on `path`, creating the file. BlockingIOError if it is held."""
-    fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o644)
-    try:
-        fcntl.flock(fd, operation)
-        yield
-    finally:
-        os.close(fd)
 
 
 def _parse_meta(text: str) -> tuple[StemMeta, ...] | None:
@@ -252,35 +234,37 @@ class FileRecordDraft:
 class FileSongStore:
     """Everything kept for one song, in its own directory."""
 
-    def __init__(self, renders_dir: Path, song_id: SongId, stem_suffix: Suffix) -> None:
+    def __init__(
+        self, renders_dir: Path, song_id: SongId, stem_suffix: Suffix, fs: FileSystem
+    ) -> None:
         self._renders_dir = renders_dir
         self._song_id = song_id
         self._directory = renders_dir / song_id
         self._stem_suffix = stem_suffix
+        self._fs = fs
 
     @contextmanager
     def lock(self) -> Generator[None]:
         """Hold a song's lock for a run, or raise SongBusyError at once if another run holds it.
 
         Two runs on one song would publish over each other's units and number the same record.
-        The operating system releases the lock when its descriptor closes, even if the process
-        dies, so the lock file left on disk means nothing by itself.
+        The lock ends when the run's process does, however it ends, so the lock file left on disk
+        means nothing by itself.
         """
         self._renders_dir.mkdir(parents=True, exist_ok=True)
-        with _flock(self._renders_dir / SONGS_LOCK_NAME, fcntl.LOCK_EX):
-            self._check_nesting()
-            self._directory.mkdir(parents=True, exist_ok=True)
-            fd = os.open(self._directory / LOCK_NAME, os.O_RDWR | os.O_CREAT, 0o644)
-        try:
-            try:
-                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except BlockingIOError as error:
-                raise SongBusyError(
-                    f"another render-song or analyze-song is running on {self._directory.name}"
-                ) from error
+        with ExitStack() as held:
+            # The song's `.lock` is created while `.songs.lock` is held, as `_check_nesting`
+            # needs. Its lock never waits, so taking it here cannot deadlock.
+            with self._fs.lock(self._renders_dir / SONGS_LOCK_NAME, wait=True):
+                self._check_nesting()
+                self._directory.mkdir(parents=True, exist_ok=True)
+                try:
+                    held.enter_context(self._fs.lock(self._directory / LOCK_NAME, wait=False))
+                except BlockingIOError as error:
+                    raise SongBusyError(
+                        f"another render-song or analyze-song is running on {self._directory.name}"
+                    ) from error
             yield
-        finally:
-            os.close(fd)
 
     def _check_nesting(self) -> None:
         """Raise ValueError if another song's directory took this one's place since `song`.
@@ -302,8 +286,10 @@ class FileSongStore:
                     if entry.name.startswith(DRAFT_PREFIX):
                         shutil.rmtree(entry, ignore_errors=True)
         if self._directory.is_dir():
+            # Earlier versions built `latest` at a draft name; an interruption could leave one.
             for entry in self._directory.glob(f"{LATEST_NAME}{DRAFT_PREFIX}*"):
-                entry.unlink(missing_ok=True)
+                if self._fs.is_link(entry):
+                    self._fs.remove_link(entry)
 
     def find(self, key: str) -> FileStoredUnit | None:
         _check_key(key)
@@ -329,7 +315,7 @@ class FileSongStore:
         try:
             yield draft
             _write_atomic(draft.directory / META_NAME, draft.meta_text())
-            _sync_tree(draft.directory)
+            _sync_tree(self._fs, draft.directory)
             self._publish(draft.directory, objects / key, replace=replace)
         finally:
             shutil.rmtree(draft.directory, ignore_errors=True)
@@ -343,7 +329,7 @@ class FileSongStore:
             if error.errno not in (errno.EEXIST, errno.ENOTEMPTY):
                 raise
         else:
-            _sync(target.parent)
+            self._fs.sync(target.parent)
             return
         if not replace and self.find(target.name) is not None:
             return
@@ -353,7 +339,7 @@ class FileSongStore:
             draft.rename(target)
         finally:
             shutil.rmtree(old, ignore_errors=True)
-            _sync(target.parent)
+            self._fs.sync(target.parent)
 
     def keep_units(self, keys: Collection[str]) -> None:
         objects = self._directory / OBJECTS_DIR
@@ -380,35 +366,30 @@ class FileSongStore:
         try:
             _write_atomic(draft.path(f"{SONG_NAME}{suffix}"), song_text)
             yield draft
-            _sync_tree(draft.directory)
+            _sync_tree(self._fs, draft.directory)
             # Before the rename, so `latest`, whenever it exists, names the newest record.
             self.clear_latest()
             draft.directory.rename(self.record_path(run))
-            _sync(history)
+            self._fs.sync(history)
         finally:
             shutil.rmtree(draft.directory, ignore_errors=True)
         if latest:
             self._point_latest(f"{HISTORY_DIR}/{run}")
 
     def _point_latest(self, target: str) -> None:
-        """Replace `latest` with a link to `target`, relative to the song's directory, in one
-        rename."""
-        link = self._directory / LATEST_NAME
-        if link.is_dir() and not link.is_symlink():
-            shutil.rmtree(link)  # Anything at `latest` that is not the link is replaced.
-        temp = self._directory / f"{LATEST_NAME}{DRAFT_PREFIX}{os.urandom(8).hex()}"
-        temp.symlink_to(target, target_is_directory=True)
-        try:
-            temp.replace(link)
-        finally:
-            temp.unlink(missing_ok=True)
+        """Make `latest` a link to `target`, relative to the song's directory, replacing anything
+        at `latest`."""
+        self.clear_latest()
+        self._fs.make_link(self._directory / LATEST_NAME, target)
 
     def record_path(self, run: int) -> Path:
         return self._directory / HISTORY_DIR / str(run)
 
     def clear_latest(self) -> None:
         link = self._directory / LATEST_NAME
-        if link.is_symlink() or link.is_file():
+        if self._fs.is_link(link):
+            self._fs.remove_link(link)
+        elif link.is_file():
             link.unlink()
         elif link.is_dir():
             shutil.rmtree(link)  # Anything at `latest` that is not the link is removed.
@@ -417,9 +398,10 @@ class FileSongStore:
 class FileRenderStore:
     """Songs' results and saved sounds' previews under one renders directory."""
 
-    def __init__(self, renders_dir: Path, stem_suffix: Suffix) -> None:
+    def __init__(self, renders_dir: Path, stem_suffix: Suffix, fs: FileSystem) -> None:
         self._renders_dir = renders_dir
         self._stem_suffix = stem_suffix
+        self._fs = fs
 
     @property
     def stem_suffix(self) -> Suffix:
@@ -434,7 +416,7 @@ class FileRenderStore:
         root = self._renders_dir.resolve()
         if root.exists():
             for path in root.rglob("*"):
-                if path.is_symlink() and not path.resolve().is_relative_to(root):
+                if self._fs.is_link(path) and not path.resolve().is_relative_to(root):
                     raise ValueError(f"render store symlink escapes its protected root: {path}")
         return (root,)
 
@@ -447,7 +429,7 @@ class FileRenderStore:
         directory = self._renders_dir / song_id
         if directory.is_dir() and not (directory / LOCK_NAME).exists() and any(directory.iterdir()):
             raise ValueError(_holding_another_song(song_id))
-        return FileSongStore(self._renders_dir, song_id, self._stem_suffix)
+        return FileSongStore(self._renders_dir, song_id, self._stem_suffix, self._fs)
 
     def preview_path(self, instrument: Identifier, name: Identifier) -> Path:
         directory = self._renders_dir / PREVIEWS_DIR / instrument
@@ -458,6 +440,10 @@ class FileRenderStore:
 def create(
     options: Mapping[str, JsonValue], context: AdapterContext, stem_suffix: Suffix
 ) -> FileRenderStore:
-    """The factory for `files`: a store under the command's renders directory. Takes no options."""
+    """The factory for `files`: a store under the command's renders directory. Takes no options.
+
+    Raises UnsupportedPlatformError on a platform the file-system facility has no backend for.
+    """
+    fs = native()
     refuse_options(options)
-    return FileRenderStore(context.renders_dir, stem_suffix)
+    return FileRenderStore(context.renders_dir, stem_suffix, fs)

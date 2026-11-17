@@ -2,12 +2,15 @@
 
 import subprocess
 import sys
+from collections.abc import Generator
+from contextlib import AbstractContextManager, contextmanager
 from pathlib import Path
 
 import pytest
 from contracts import check_render_store_contract
 
-from poser.adapters.filestore import FileRenderStore, FileSongStore
+from poser.adapters.filestore import LOCK_NAME, SONGS_LOCK_NAME, FileRenderStore, FileSongStore
+from poser.adapters.filesystem import native
 from poser.core.names import Identifier, SongId, Suffix
 from poser.core.ports import SongBusyError, StemMeta
 from poser.core.statuses import StemStatus
@@ -52,7 +55,7 @@ def drafts(directory: Path) -> list[Path]:
 
 
 def renders(tmp_path: Path) -> FileRenderStore:
-    return FileRenderStore(tmp_path / "renders", WAV)
+    return FileRenderStore(tmp_path / "renders", WAV, native())
 
 
 def files_under(directory: Path) -> set[str]:
@@ -68,7 +71,7 @@ def run(store: FileSongStore) -> None:
 
 
 def test_file_render_store_meets_the_render_store_contract(tmp_path: Path) -> None:
-    check_render_store_contract(lambda root: FileRenderStore(root, WAV), tmp_path)
+    check_render_store_contract(lambda root: FileRenderStore(root, WAV, native()), tmp_path)
 
 
 def test_file_render_store_keeps_the_documented_layout(tmp_path: Path) -> None:
@@ -325,6 +328,56 @@ def test_lock_refuses_a_song_nested_after_its_handle_was_taken(tmp_path: Path) -
     assert not (tmp_path / "reversed" / "renders" / "songs" / "a.yaml" / ".lock").exists()
 
 
+class LockRecorder:
+    """The native file system, recording which locks are held whenever one is taken."""
+
+    def __init__(self) -> None:
+        self._native = native()
+        self.held: list[str] = []
+        self.taken: list[tuple[str, tuple[str, ...]]] = []
+
+    def lock(self, path: Path, *, wait: bool) -> AbstractContextManager[None]:
+        return self._recorded(path, wait=wait)
+
+    @contextmanager
+    def _recorded(self, path: Path, *, wait: bool) -> Generator[None]:
+        with self._native.lock(path, wait=wait):
+            self.taken.append((path.name, tuple(self.held)))
+            self.held.append(path.name)
+            try:
+                yield
+            finally:
+                self.held.remove(path.name)
+
+    def sync(self, path: Path) -> None:
+        self._native.sync(path)
+
+    def make_link(self, link: Path, target: str) -> None:
+        self._native.make_link(link, target)
+
+    def is_link(self, path: Path) -> bool:
+        return self._native.is_link(path)
+
+    def remove_link(self, path: Path) -> None:
+        self._native.remove_link(path)
+
+    def publish_directory(self, source: Path, destination: Path) -> None:
+        self._native.publish_directory(source, destination)
+
+
+def test_lock_takes_the_song_s_lock_under_the_songs_lock_and_holds_only_it(
+    tmp_path: Path,
+) -> None:
+    # `_check_nesting` relies on every locked song directory holding `.lock`, so `.lock` must be
+    # created while `.songs.lock` is held; a run must not keep other songs waiting.
+    fs = LockRecorder()
+    song = FileRenderStore(tmp_path / "renders", WAV, fs).song(SongId("songs/a.yaml"))
+    with song.lock():
+        assert fs.held == [LOCK_NAME]
+    assert fs.taken == [(SONGS_LOCK_NAME, ()), (LOCK_NAME, (SONGS_LOCK_NAME,))]
+    assert fs.held == []
+
+
 def test_lock_accepts_a_song_holding_its_own_files(tmp_path: Path) -> None:
     song = renders(tmp_path).song(SongId("songs/a.yaml"))
     publish(song, KEY_A, b"stem")
@@ -391,9 +444,10 @@ LOCK_HOLDER = """
 import sys, time
 from pathlib import Path
 from poser.adapters.filestore import FileRenderStore
+from poser.adapters.filesystem import native
 from poser.core.names import SongId, Suffix
 
-song = FileRenderStore(Path(sys.argv[1]), Suffix(".wav")).song(SongId(sys.argv[2]))
+song = FileRenderStore(Path(sys.argv[1]), Suffix(".wav"), native()).song(SongId(sys.argv[2]))
 with song.lock():
     print("locked", flush=True)
     time.sleep(60)

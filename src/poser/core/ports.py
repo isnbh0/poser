@@ -169,6 +169,14 @@ class ConfigError(Exception):
     """A workspace config or an adapter's options cannot be used."""
 
 
+class UnsupportedPlatformError(ConfigError):
+    """An adapter needs a facility that has no backend on the running platform.
+
+    The message names the platform, so the composition root passes it on without naming a
+    config location: no config change can fix it.
+    """
+
+
 @dataclass(frozen=True)
 class AdapterContext:
     """What a factory may know about the workspace it builds an adapter for."""

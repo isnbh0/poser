@@ -2,6 +2,7 @@
 
 import json
 import shutil
+import sys
 from collections.abc import Callable, Generator, Mapping
 from contextlib import contextmanager
 from dataclasses import replace
@@ -22,8 +23,10 @@ from fakes import (
 )
 from workspaces import CommandWorkspace, make_workspace, write_script_song, write_song
 
+from poser.adapters import delivery as delivery_adapter
 from poser.adapters.delivery import FileDeliveryWriter
 from poser.adapters.filestore import FileRenderStore, FileSongStore
+from poser.adapters.filesystem import native
 from poser.adapters.song_formats import ScriptSongFormat, YamlSongFormat
 from poser.cli import export
 from poser.compose import Composition, WorkspaceConfig
@@ -54,6 +57,7 @@ from poser.core.ports import (
     RenderFailure,
     SongBusyError,
     StagedDelivery,
+    UnsupportedPlatformError,
 )
 from poser.core.report import Defect
 from poser.core.statuses import RenderFailureStatus
@@ -74,14 +78,14 @@ class Harness:
         self.song = write_song(root / "songs" / "piece.yaml", ("lead", "fake"))
         self.identifier = SongId("songs/piece.yaml")
         self.destination = root / "deliveries" / "first-song"
-        self.store = FileRenderStore(root / "renders", Suffix(".npy"))
+        self.store = FileRenderStore(root / "renders", Suffix(".npy"), native())
         self.instrument = FakeInstrument("fake", {None: FakeSound(amplitude=0.2)})
         self.tools = AnalysisTools(FakeMixer(), FakeMeasurer(), SvgVisualizer())
         self.guide_path = root / "POSER.md"
         self.guide_text = "workspace reference\n"
         self.guide_path.write_text(self.guide_text)
         self.includes: tuple[Path, ...] = ()
-        self.writer: DeliveryWriter = FileDeliveryWriter()
+        self.writer: DeliveryWriter = FileDeliveryWriter(native())
         self.audio_files = NpyAudioFiles()
 
     def run(self, mutation: Callable[[], None] | None = None) -> DeliveryResult:
@@ -177,8 +181,18 @@ def test_bundle_hashes_portability_and_later_runs(harness: Harness) -> None:
     } == original
 
 
+def test_the_writer_refuses_a_platform_without_a_file_system_backend(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    assert isinstance(delivery_adapter.create(), FileDeliveryWriter)
+    monkeypatch.setattr(sys, "platform", "win32")
+    with pytest.raises(UnsupportedPlatformError, match="win32"):
+        delivery_adapter.create()
+
+
 class HookWriter(FileDeliveryWriter):
     def __init__(self, hook: Callable[[], object]) -> None:
+        super().__init__(native())
         self.hook = hook
 
     @contextmanager
@@ -553,7 +567,7 @@ def test_destination_in_a_store_s_protected_root_is_refused_before_python(
     assert not marker.exists()
     actual = cli_workspace.root / "actual"
     monkeypatch.setattr(
-        Composition, "render_store", lambda self: FileRenderStore(actual, Suffix(".wav"))
+        Composition, "render_store", lambda self: FileRenderStore(actual, Suffix(".wav"), native())
     )
     assert export.main([str(song), "--destination", str(actual / "bundle")]) == 2
     assert not marker.exists()

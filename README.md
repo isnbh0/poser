@@ -17,8 +17,10 @@ to have it help:
 Set up poser for me by following https://raw.githubusercontent.com/isnbh0/poser/main/docs/bootstrap.md
 ```
 
-Both use the free Surge XT reference setup on macOS and can continue to your first song. To move
-an existing studio to a newer poser, follow [upgrading](docs/upgrading.md).
+Both use the free Surge XT reference setup on macOS and can continue to your first song. poser is
+developed and tested on macOS; Linux has the file-system support poser needs but is untested, and
+native Windows is not supported yet (see [Prerequisites](docs/setup.md#prerequisites)). To move an
+existing studio to a newer poser, follow [upgrading](docs/upgrading.md).
 
 Hear an example and get its source in the [showcase](docs/showcase.md).
 
