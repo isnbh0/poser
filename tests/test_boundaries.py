@@ -32,7 +32,7 @@ CLI = POSER / "cli"
 COMPOSE = POSER / "compose.py"
 PLUGIN_LOADERS = {"poser/adapters/pedalboard/worker.py"}
 FCNTL_USERS = {"poser/adapters/filesystem_posix.py"}
-CTYPES_USERS = {"poser/adapters/filesystem_posix.py"}
+CTYPES_USERS = {"poser/adapters/filesystem_posix.py", "poser/adapters/isolation_windows.py"}
 WINDOWS_API_USERS = {"poser/adapters/filesystem_windows.py"}
 LIBRARY_HOMES = {
     "pyloudnorm": {"poser/adapters/measuring.py"},
@@ -408,7 +408,7 @@ def test_the_file_system_facility_s_users_import_without_fcntl() -> None:
     assert result.returncode == 0, result.stderr
 
 
-def test_only_the_posix_file_system_imports_ctypes() -> None:
+def test_only_the_platform_backends_import_ctypes() -> None:
     found = files_importing(lambda name: name.split(".", 1)[0] == "ctypes")
     assert found == CTYPES_USERS
 

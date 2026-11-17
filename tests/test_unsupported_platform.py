@@ -1,8 +1,8 @@
-"""What a command does on a real platform that lacks a facility poser needs: a file-system backend
-or plugin worker isolation.
+"""What a command does on a real platform that lacks something poser needs: a file-system backend,
+plugin worker isolation, or Pedalboard plugin loading.
 
 `tests/test_init_workspace.py` shows the same refusal by simulating a platform on macOS. This file
-runs without simulation, so it skips where every facility exists and runs in CI's Windows job.
+runs without simulation, so it skips where nothing is missing and runs in CI's Windows job.
 """
 
 import sys
@@ -12,26 +12,30 @@ import pytest
 
 from poser.adapters.filesystem import native
 from poser.adapters.isolation import check_platform
+from poser.adapters.pedalboard.instrument import check_plugin_platform
 from poser.cli import init_workspace
 from poser.core.ports import UnsupportedPlatformError
 
 
-def missing_facility() -> str | None:
-    """Return the wording that names the first missing facility, or None if none is missing."""
-    try:
-        native()
-    except UnsupportedPlatformError:
-        return "file-system support"
-    try:
-        check_platform()
-    except UnsupportedPlatformError:
-        return "worker isolation"
+def first_missing() -> str | None:
+    """Return the wording that names the first missing piece the Surge setup's instrument
+    checks, in the order its factory checks them, or None if nothing is missing."""
+    checks = (
+        (check_platform, "worker isolation"),
+        (check_plugin_platform, "Pedalboard plugin loading"),
+        (native, "file-system support"),
+    )
+    for check, wording in checks:
+        try:
+            check()
+        except UnsupportedPlatformError:
+            return wording
     return None
 
 
-MISSING = missing_facility()
+MISSING = first_missing()
 if MISSING is None:
-    pytest.skip("this platform has every facility poser needs", allow_module_level=True)
+    pytest.skip("this platform has everything poser needs", allow_module_level=True)
 
 
 def test_init_workspace_names_the_platform_and_writes_nothing(

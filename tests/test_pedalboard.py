@@ -1222,9 +1222,9 @@ def test_create_refuses_a_platform_without_worker_isolation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     assert isinstance(create_serum(tmp_path, ["fxp", "saved"]), PedalboardInstrument)
-    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(sys, "platform", "freebsd14")
 
-    with pytest.raises(UnsupportedPlatformError, match=r"worker isolation .*\(win32\)"):
+    with pytest.raises(UnsupportedPlatformError, match=r"worker isolation .*\(freebsd14\)"):
         create_serum(tmp_path, ["fxp", "saved"])
 
 
@@ -1232,9 +1232,31 @@ def test_create_effect_refuses_a_platform_without_worker_isolation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     assert isinstance(make_effect(tmp_path), PedalboardEffect)
+    monkeypatch.setattr(sys, "platform", "freebsd14")
+
+    with pytest.raises(UnsupportedPlatformError, match=r"worker isolation .*\(freebsd14\)"):
+        make_effect(tmp_path)
+
+
+WINDOWS_PLUGINS_REFUSED = r"Pedalboard plugin loading .*\(win32\).*docs/setup.md#prerequisites"
+
+
+def test_create_refuses_windows_until_it_loads_windows_plugins(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setattr(sys, "platform", "win32")
 
-    with pytest.raises(UnsupportedPlatformError, match=r"worker isolation .*\(win32\)"):
+    with pytest.raises(UnsupportedPlatformError, match=WINDOWS_PLUGINS_REFUSED):
+        create_serum(tmp_path, ["fxp", "saved"])
+    assert not (tmp_path / "sounds").exists()
+
+
+def test_create_effect_refuses_windows_until_it_loads_windows_plugins(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(sys, "platform", "win32")
+
+    with pytest.raises(UnsupportedPlatformError, match=WINDOWS_PLUGINS_REFUSED):
         make_effect(tmp_path)
 
 

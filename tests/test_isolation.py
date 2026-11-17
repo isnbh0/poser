@@ -1,4 +1,9 @@
-"""Tests for running a function in a child process."""
+"""Tests for running a function in a child process.
+
+On Windows, `sys.executable` may be a virtual environment's launcher, which starts the real
+interpreter as its child. A PID a test must kill is therefore one a script reports with
+`os.getpid()`, not `Popen.pid`.
+"""
 
 import contextlib
 import importlib
@@ -49,6 +54,11 @@ def sleep(job):
     return {"slept": job["seconds"]}
 
 
+def mark(job):
+    Path(job["path"]).write_text("ran")
+    return {"done": True}
+
+
 def noisy(job):
     print("not json {")
     sys.stdout.flush()
@@ -76,7 +86,11 @@ def spawn_and_sleep(job):
 
 def spawn_and_hold_the_gil(job):
     start_grandchild(job)
-    ctypes.PyDLL(None).sleep(job["seconds"])
+    # A PyDLL call keeps the GIL while it runs.
+    if sys.platform == "win32":
+        ctypes.PyDLL("kernel32").Sleep(job["seconds"] * 1000)
+    else:
+        ctypes.PyDLL(None).sleep(job["seconds"])
     return {"slept": job["seconds"]}
 
 
@@ -169,9 +183,6 @@ def test_the_child_ignores_modules_in_the_working_directory(
     assert run_isolated(target(workers, "done"), {}, 30) == {"done": True}
 
 
-posix_only = pytest.mark.skipif(os.name != "posix", reason="process groups are POSIX")
-
-
 def read_pids(pid_file: Path) -> tuple[int, int]:
     """Wait for the worker to write its own and its grandchild's PIDs, and return them."""
     deadline = time.monotonic() + 30
@@ -183,11 +194,30 @@ def read_pids(pid_file: Path) -> tuple[int, int]:
 
 
 def exists(pid: int) -> bool:
+    """Whether `pid` is a running process. On Windows, `os.kill(pid, 0)` would terminate it."""
+    if sys.platform == "win32":
+        import _winapi
+
+        try:
+            handle = _winapi.OpenProcess(_winapi.SYNCHRONIZE, False, pid)
+        except OSError:
+            return False
+        try:
+            return _winapi.WaitForSingleObject(handle, 0) == _winapi.WAIT_TIMEOUT
+        finally:
+            _winapi.CloseHandle(handle)
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
         return False
     return True
+
+
+def kill(pid: int) -> None:
+    """Kill `pid` unless it is already gone. On Windows, any signal but the console events
+    terminates the process."""
+    with contextlib.suppress(OSError):
+        os.kill(pid, signal.SIGTERM if sys.platform == "win32" else signal.SIGKILL)
 
 
 def wait_until_gone(pid: int) -> None:
@@ -198,7 +228,6 @@ def wait_until_gone(pid: int) -> None:
         time.sleep(0.05)
 
 
-@posix_only
 def test_a_timeout_kills_the_processes_the_worker_started(
     workers: ModuleType, tmp_path: Path
 ) -> None:
@@ -211,7 +240,6 @@ def test_a_timeout_kills_the_processes_the_worker_started(
     assert not exists(worker)
 
 
-@posix_only
 def test_a_normal_exit_leaves_the_processes_the_worker_started(
     workers: ModuleType, tmp_path: Path
 ) -> None:
@@ -223,19 +251,21 @@ def test_a_normal_exit_leaves_the_processes_the_worker_started(
         time.sleep(0.5)
         assert exists(grandchild)
     finally:
-        os.kill(grandchild, signal.SIGKILL)
+        kill(grandchild)
 
 
-@posix_only
 @pytest.mark.parametrize("worker", ["spawn_and_sleep", "spawn_and_hold_the_gil"])
 def test_the_worker_dies_with_the_process_that_started_it(
     workers: ModuleType, tmp_path: Path, worker: str
 ) -> None:
-    pid_file = tmp_path / "pids"
+    pid_file, parent_file = tmp_path / "pids", tmp_path / "parent"
     script = tmp_path / "parent.py"
     script.write_text(
+        "import os\n"
+        "from pathlib import Path\n"
         "import isolation_workers\n"
         "from poser.adapters.isolation import run_isolated\n"
+        f"Path({str(parent_file)!r}).write_text(str(os.getpid()))\n"
         f"job = {{'pid_file': {str(pid_file)!r}, 'seconds': 60}}\n"
         f"run_isolated(isolation_workers.{worker}, job, None)\n"
     )
@@ -243,18 +273,40 @@ def test_the_worker_dies_with_the_process_that_started_it(
     try:
         worker_pid, grandchild = read_pids(pid_file)
     finally:
-        parent.send_signal(signal.SIGKILL)
+        try:
+            kill(int(parent_file.read_text()))
+        except (OSError, ValueError):
+            parent.kill()
         parent.wait()
     try:
         wait_until_gone(worker_pid)
         wait_until_gone(grandchild)
     finally:
         for pid in (worker_pid, grandchild):
-            with contextlib.suppress(ProcessLookupError):
-                os.kill(pid, signal.SIGKILL)
+            kill(pid)
 
 
-@pytest.mark.parametrize("platform", ["win32", "freebsd14"])
+@pytest.mark.skipif(sys.platform != "win32", reason="Job Objects are Windows")
+def test_a_worker_the_job_cannot_hold_is_killed_before_it_runs(
+    workers: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    isolation_windows = importlib.import_module("poser.adapters.isolation_windows")
+    started: list[int] = []
+
+    def refuse(job: object, pid: int) -> NoReturn:
+        started.append(pid)
+        raise OSError("the job refused the worker")
+
+    monkeypatch.setattr(isolation_windows.WorkerJob, "start", refuse)
+    marker = tmp_path / "ran"
+    with pytest.raises(OSError, match="the job refused the worker"):
+        run_isolated(target(workers, "mark"), {"path": str(marker)}, 30)
+    (pid,) = started
+    wait_until_gone(pid)
+    assert not marker.exists()
+
+
+@pytest.mark.parametrize("platform", ["freebsd14", "cygwin"])
 def test_check_platform_refuses_platforms_without_isolation(
     monkeypatch: pytest.MonkeyPatch, platform: str
 ) -> None:
@@ -266,8 +318,8 @@ def test_check_platform_refuses_platforms_without_isolation(
         assert part in message, part
 
 
-@pytest.mark.parametrize("platform", ["darwin", "linux"])
-def test_check_platform_accepts_macos_and_linux(
+@pytest.mark.parametrize("platform", ["darwin", "linux", "win32"])
+def test_check_platform_accepts_macos_linux_and_windows(
     monkeypatch: pytest.MonkeyPatch, platform: str
 ) -> None:
     monkeypatch.setattr(sys, "platform", platform)

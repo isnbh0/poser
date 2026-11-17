@@ -2,9 +2,9 @@
 
 Process isolation protects poser from plugin code, which only adapters run. The child process
 inherits the environment but not the changes the parent made to `sys.path` at run time, so a
-target must live in an installed module or in one on `PYTHONPATH`. Isolation uses POSIX process
-groups and descriptor passing, so it runs on macOS and Linux only; `check_platform` names other
-platforms.
+target must live in an installed module or in one on `PYTHONPATH`. Isolation uses process groups
+and descriptor passing on macOS and Linux, and a Job Object on Windows (`isolation_windows`);
+`check_platform` names other platforms.
 """
 
 import contextlib
@@ -24,6 +24,7 @@ from poser.core.jsonvalue import JsonValue, is_json_value, json_object
 from poser.core.ports import UnsupportedPlatformError
 
 CHILD_CODE = "from poser.adapters.isolation import child_main; child_main()"
+CREATE_SUSPENDED = 0x00000004
 
 
 class MalformedJobError(ValueError):
@@ -53,11 +54,11 @@ def check_platform() -> None:
     refuses it at build instead of at its first render. Reads only `sys.platform`.
     """
     platform = sys.platform
-    if platform == "darwin" or platform.startswith("linux"):
+    if platform in {"darwin", "win32"} or platform.startswith("linux"):
         return
     raise UnsupportedPlatformError(
         f"poser's plugin worker isolation does not cover this platform ({platform}); it covers "
-        f"macOS and Linux. See {PREREQUISITES_URL}"
+        f"macOS, Linux, and Windows. See {PREREQUISITES_URL}"
     )
 
 
@@ -82,16 +83,27 @@ def run_isolated(
     look hung. `-P` keeps the working directory off the child's `sys.path`, and `-c` means no
     poser module runs as `__main__`, so none is loaded twice under two names.
 
-    The worker dies with poser, and so do its descendants that stay in its process group; a
-    descendant that starts its own session or group escapes. The worker leads its own session and
-    process group, so the terminal's interrupt reaches poser, not plugin code. When poser times
-    the worker out or is interrupted or raises while waiting, it kills the worker's group before
-    raising. A watcher process in that group holds the read end of a lifeline pipe whose write end
-    only poser holds; however poser ends, even by SIGKILL, the kernel closes the write end, and
-    the watcher kills the group. Being a separate process, the watcher works even while plugin
-    code holds the worker's GIL. A worker whose target returns ends its watcher first, so helper
-    processes it left running survive; after any other exit, the watcher kills the group once
-    `run_isolated` closes the write end.
+    On macOS and Linux, the worker dies with poser, and so do its descendants that stay in its
+    process group; a descendant that starts its own session or group escapes. The worker leads its
+    own session and process group, so the terminal's interrupt reaches poser, not plugin code.
+    When poser times the worker out or is interrupted or raises while waiting, it kills the
+    worker's group before raising. A watcher process in that group holds the read end of a
+    lifeline pipe whose write end only poser holds; however poser ends, even by SIGKILL, the
+    kernel closes the write end, and the watcher kills the group. Being a separate process, the
+    watcher works even while plugin code holds the worker's GIL. A worker whose target returns
+    ends its watcher first, so helper processes it left running survive; after any other exit,
+    the watcher kills the group once `run_isolated` closes the write end.
+
+    On Windows, a Job Object that only poser holds contains the worker and every process it
+    starts. The worker is created suspended and joins the job before it runs any code, because a
+    virtual environment's `python.exe` is a launcher that starts the real interpreter at once.
+    However poser ends, the system closes poser's handle to the job, and the job kills its
+    processes. When poser times the worker out or is interrupted or raises while waiting, it
+    kills the job before raising. The worker starts in a new process group, so Ctrl+C reaches
+    poser, not plugin code; Ctrl+Break and closing the console end both. A worker that exits 0
+    after writing its result releases the job, so helper processes it left running survive, and
+    the temporary files they still hold stay behind until they exit; after any other exit, poser
+    kills the job. The job controls lifetime and does not sandbox plugin code.
     """
     module = getattr(target, "__module__", None)
     qualname = getattr(target, "__qualname__", None)
@@ -102,12 +114,12 @@ def run_isolated(
     if "." in qualname or "<" in qualname:
         raise ValueError(f"a child process cannot import {module}.{qualname}")
 
-    with tempfile.TemporaryDirectory() as directory:
+    # On Windows, a helper the worker left running may still hold stderr.txt.
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=sys.platform == "win32") as directory:
         job_path = Path(directory) / "job.json"
         result_path = Path(directory) / "result.json"
         stderr_path = Path(directory) / "stderr.txt"
         job_path.write_text(json.dumps(job, allow_nan=False))
-        read_fd, write_fd = os.pipe()
         command = [
             sys.executable,
             "-P",
@@ -117,31 +129,11 @@ def run_isolated(
             qualname,
             str(job_path),
             str(result_path),
-            str(read_fd),
         ]
-        try:
-            try:
-                with stderr_path.open("wb") as stderr:
-                    process = subprocess.Popen(
-                        command,
-                        stdin=subprocess.DEVNULL,
-                        stdout=subprocess.DEVNULL,
-                        stderr=stderr,
-                        start_new_session=True,
-                        pass_fds=(read_fd,),
-                    )
-            finally:
-                os.close(read_fd)
-            try:
-                returncode = process.wait(timeout=timeout_s)
-            except subprocess.TimeoutExpired as error:
-                _end_worker(process)
-                raise WorkerTimedOutError(f"worker exceeded {timeout_s:g} seconds") from error
-            except BaseException:
-                _end_worker(process)
-                raise
-        finally:
-            os.close(write_fd)
+        if sys.platform == "win32":
+            returncode = _run_in_job(command, stderr_path, result_path, timeout_s)
+        else:
+            returncode = _run_in_group(command, stderr_path, timeout_s)
 
         if returncode != 0:
             lines = stderr_path.read_text(errors="replace").strip().splitlines()
@@ -157,9 +149,87 @@ def run_isolated(
         return result
 
 
+def _timed_out(timeout_s: float | None) -> WorkerTimedOutError:
+    return WorkerTimedOutError(f"worker exceeded {timeout_s:g} seconds")
+
+
+def _run_in_group(command: list[str], stderr_path: Path, timeout_s: float | None) -> int:
+    """Run the worker as the leader of a new session, passing it the lifeline's read end, and
+    return its exit code."""
+    assert sys.platform != "win32"  # noqa: S101 - narrows the platform for type checkers.
+    read_fd, write_fd = os.pipe()
+    try:
+        try:
+            with stderr_path.open("wb") as stderr:
+                process = subprocess.Popen(
+                    [*command, str(read_fd)],
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL,
+                    stderr=stderr,
+                    start_new_session=True,
+                    pass_fds=(read_fd,),
+                )
+        finally:
+            os.close(read_fd)
+        try:
+            return process.wait(timeout=timeout_s)
+        except subprocess.TimeoutExpired as error:
+            _end_worker(process)
+            raise _timed_out(timeout_s) from error
+        except BaseException:
+            _end_worker(process)
+            raise
+    finally:
+        os.close(write_fd)
+
+
+def _run_in_job(
+    command: list[str], stderr_path: Path, result_path: Path, timeout_s: float | None
+) -> int:
+    """Run the worker in a Job Object, created suspended and assigned before it runs, and return
+    its exit code."""
+    assert sys.platform == "win32"  # noqa: S101 - narrows the platform for type checkers.
+    from poser.adapters.isolation_windows import WorkerJob
+
+    job = WorkerJob()
+    try:
+        with stderr_path.open("wb") as stderr:
+            process = subprocess.Popen(
+                command,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=stderr,
+                creationflags=CREATE_SUSPENDED | subprocess.CREATE_NEW_PROCESS_GROUP,
+            )
+        try:
+            job.start(process.pid)
+        except BaseException:
+            process.kill()
+            process.wait()
+            raise
+        try:
+            returncode = process.wait(timeout=timeout_s)
+        except subprocess.TimeoutExpired as error:
+            job.kill()
+            process.wait()
+            raise _timed_out(timeout_s) from error
+        except BaseException:
+            job.kill()
+            process.wait()
+            raise
+        if returncode == 0 and result_path.exists():
+            job.release()
+        else:
+            job.kill()
+        return returncode
+    finally:
+        job.close()
+
+
 def _end_worker(process: subprocess.Popen[bytes]) -> None:
     """Kill the worker's process group: the worker, its watcher, and the descendants still in
     the group."""
+    assert sys.platform != "win32"  # noqa: S101 - narrows the platform for type checkers.
     # The leader is unreaped, so its group exists. macOS refuses with EPERM when every member
     # is a zombie, which, like ESRCH, means nothing is left to kill.
     with contextlib.suppress(ProcessLookupError, PermissionError):
@@ -170,6 +240,7 @@ def _end_worker(process: subprocess.Popen[bytes]) -> None:
 def _start_watcher(lifeline: int) -> int:
     """Fork a process that kills this process group once the lifeline reaches EOF, which means
     poser has ended or closed it, and return its PID. Call only while single-threaded."""
+    assert sys.platform != "win32"  # noqa: S101 - narrows the platform for type checkers.
     pid = os.fork()
     if pid == 0:
         try:
@@ -182,6 +253,7 @@ def _start_watcher(lifeline: int) -> int:
 
 
 def _end_watcher(watcher: int) -> None:
+    assert sys.platform != "win32"  # noqa: S101 - narrows the platform for type checkers.
     os.kill(watcher, signal.SIGKILL)
     os.waitpid(watcher, 0)
 
@@ -190,15 +262,22 @@ def child_main() -> None:
     """Run in the child: call the target named on the command line and write its result.
 
     An exception propagates, so the child exits nonzero with the error as its last stderr line.
-    The last argument is the lifeline. Before importing the target, while the worker is still
-    single-threaded, it forks a watcher that keeps the lifeline and kills the group at EOF; the
-    worker closes its own copy, so processes the target starts never hold it. After writing the
-    result, the worker ends the watcher, so the EOF that follows leaves its helpers running. Any
-    other exit leaves the watcher, which kills the group when `run_isolated` closes the lifeline.
+    On macOS and Linux, the last argument is the lifeline. Before importing the target, while the
+    worker is still single-threaded, it forks a watcher that keeps the lifeline and kills the
+    group at EOF; the worker closes its own copy, so processes the target starts never hold it.
+    After writing the result, the worker ends the watcher, so the EOF that follows leaves its
+    helpers running. Any other exit leaves the watcher, which kills the group when `run_isolated`
+    closes the lifeline. On Windows, the job `run_isolated` holds does this work, and there is no
+    lifeline.
     """
-    module_name, qualname, job_path, result_path, lifeline_arg = sys.argv[1:]
-    watcher = _start_watcher(int(lifeline_arg))
+    if sys.platform == "win32":
+        module_name, qualname, job_path, result_path = sys.argv[1:]
+        watcher = None
+    else:
+        module_name, qualname, job_path, result_path, lifeline = sys.argv[1:]
+        watcher = _start_watcher(int(lifeline))
     target = getattr(importlib.import_module(module_name), qualname)
     result = target(json.loads(Path(job_path).read_text()))
     Path(result_path).write_text(json.dumps(result, allow_nan=False))
-    _end_watcher(watcher)
+    if watcher is not None:
+        _end_watcher(watcher)

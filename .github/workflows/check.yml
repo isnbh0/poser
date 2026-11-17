@@ -43,7 +43,7 @@ jobs:
           "$RUNNER_TEMP/poser-venv/bin/python" -I "$GITHUB_WORKSPACE/scripts/check_distribution.py"
 
   windows:
-    name: Windows (file system and platform gate)
+    name: Windows (file system, isolation, and platform gate)
     runs-on: windows-latest
     env:
       UV_LOCKED: "1"
@@ -53,14 +53,20 @@ jobs:
         with:
           enable-cache: true
       - run: uv sync --locked
-      - name: Imports, file system, and platform gate (required)
+      - name: Show which interpreter the tests start
+        run: uv run python -c "import sys; print(sys.executable); print(sys._base_executable)"
+      - name: Imports, file system, isolation, and platform gate (required)
         run: >-
           uv run pytest -q -rs tests/test_imports.py tests/test_unsupported_platform.py
           tests/test_filesystem.py tests/test_filesystem_selection.py
-          tests/test_filesystem_windows.py tests/test_filestore.py
-      - name: Type-check the Windows backend (required)
+          tests/test_filesystem_windows.py tests/test_filestore.py tests/test_isolation.py
+          tests/test_boundaries.py
+      - name: Type-check the Windows backends (required)
         if: ${{ !cancelled() }}
-        run: uv run ty check src/poser/adapters/filesystem_windows.py
+        run: >-
+          uv run ty check src/poser/adapters/filesystem_windows.py
+          src/poser/adapters/isolation_windows.py src/poser/adapters/isolation.py
+          tests/test_isolation.py
       - name: Plugin-free suite (inventory, not yet required on Windows)
         if: ${{ !cancelled() }}
         continue-on-error: true
