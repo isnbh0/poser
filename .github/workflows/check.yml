@@ -121,7 +121,7 @@ jobs:
               Write-Output "PS> $line"
               $global:LASTEXITCODE = 0
               Invoke-Expression $line
-              if ($LASTEXITCODE -ne 0) { throw "exit code $LASTEXITCODE from: $line" }
+              if (-not $? -or $LASTEXITCODE -ne 0) { throw "exit code $LASTEXITCODE from: $line" }
             }
           }
           $docs = Join-Path $env:GITHUB_WORKSPACE docs
@@ -138,7 +138,20 @@ jobs:
           $preamble = ($upgrading -split '(?m)^## ')[0]
           $blocks = @(Get-Blocks $preamble)
           if ($blocks.Count -ne 2) { throw "expected two upgrade blocks, found $($blocks.Count)" }
-          foreach ($block in $blocks) { Invoke-Lines $block }
+          Invoke-Lines $blocks[0]
+          # The song loop reports each song that fails and goes on. Two broken songs, one in a
+          # subfolder, must give two errors, so a loop that finds no song fails here.
+          $loop = $blocks[1]
+          if ($loop.Count -ne 1) { throw "expected a one-line song loop, found $($loop.Count)" }
+          New-Item -ItemType Directory songs\nested | Out-Null
+          Set-Content -Path songs\broken.yaml -Value "bpm: 120`ntracks: 3" -Encoding Ascii
+          Copy-Item songs\broken.yaml songs\nested\broken.yml
+          Write-Output "PS> $($loop[0])"
+          $out = @(Invoke-Expression $loop[0] 2>&1 | ForEach-Object { "$_" })
+          $out | Write-Output
+          $errors = @($out | Where-Object { $_ -match "read-song: " })
+          if ($errors.Count -ne 2) { throw "expected two read-song errors, found $($errors.Count)" }
+          Remove-Item -Recurse songs\broken.yaml, songs\nested
       - name: Export the demo and check the studio's configuration (required)
         if: ${{ !cancelled() }}
         timeout-minutes: 10

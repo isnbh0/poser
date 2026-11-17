@@ -18,10 +18,10 @@ Install or locate Surge XT before initializing; the
 [Surge guide](../src/poser/reference_setups/surge/README.md) covers installation, searched
 locations, and custom paths.
 
-poser is tested on macOS and on Windows x64. Windows on Arm is not supported: Pedalboard, which
-plays VST3 instruments, publishes no build for it. Linux has the file-system support poser needs
-but is untested, and the Surge reference setup searches only macOS and Windows locations, so on
-Linux pass `--plugin-path` and `--presets-path` to `init-workspace`.
+poser is tested on macOS and on Windows x64, where CI runs Windows Server. Windows on Arm is not
+supported: Pedalboard, which plays VST3 instruments, publishes no build for it. Linux has the
+file-system support poser needs but is untested, and the Surge reference setup searches only macOS
+and Windows locations, so on Linux pass `--plugin-path` and `--presets-path` to `init-workspace`.
 
 ## Create and verify
 

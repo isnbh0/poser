@@ -1,9 +1,10 @@
 Help me set up an independent poser studio using the free Surge XT instrument. Follow
 https://raw.githubusercontent.com/isnbh0/poser/main/docs/setup.md.
-Inspect my environment first, starting with my platform. On Windows x64, use PowerShell and the
-guide's PowerShell commands. On Windows on Arm, stop and tell me that poser does not support it.
-On Linux, tell me that poser is untested there and that the Surge setup needs explicit paths,
-then ask before continuing. Preserve existing work, and ask before actions that need permission.
+Inspect my environment first, starting with my platform. On Windows x64, use the guide's
+PowerShell commands in PowerShell, or its bash commands in a bash shell. On Windows on Arm, stop
+and tell me that poser does not support it. On Linux, tell me that poser is untested there and
+that the Surge setup needs explicit paths, then ask before continuing. Preserve existing work,
+and ask before actions that need permission.
 If I already have a poser studio, upgrade it instead by following
 https://raw.githubusercontent.com/isnbh0/poser/main/docs/upgrading.md.
 If I already requested a song, continue into composition; otherwise offer it after setup.
