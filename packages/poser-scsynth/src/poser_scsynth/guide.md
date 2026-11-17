@@ -32,4 +32,7 @@ adapter = "poser_scsynth.instrument:create"
 scsynth = "/Applications/SuperCollider.app/Contents/Resources/scsynth"
 ```
 
+On Windows the path names the installer's versioned folder, in a TOML literal string so its
+backslashes stay as they are: `scsynth = 'C:\Program Files\SuperCollider-3.14.1\scsynth.exe'`.
+
 scsynth and Pedalboard tracks can share a song; each renders its own stem.

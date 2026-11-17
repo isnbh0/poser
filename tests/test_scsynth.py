@@ -7,7 +7,6 @@ decoded here field by field, so the events a performance maps to are pinned exac
 
 import ast
 import hashlib
-import shutil
 import struct
 import subprocess
 import sys
@@ -18,6 +17,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 import pytest
 from contracts import check_instrument_contract
+from distlib.scripts import ScriptMaker
 from poser_scsynth.instrument import ScsynthInstrument, create
 from poser_scsynth.scores import build_score, hz
 
@@ -60,12 +60,22 @@ def make_source(directory: Path) -> Path:
     return source
 
 
+def stub_interpreter() -> Path:
+    """The Python the stub runs on. On Windows it is the base interpreter: a venv's python.exe
+    starts the real interpreter as a child, which would break away from the launcher's job and
+    outlive a kill."""
+    if sys.platform == "win32":
+        return Path(sys.base_prefix) / "python.exe"
+    return Path(sys.executable)
+
+
 def make_stub(directory: Path) -> Path:
-    """Write the stub binary beside the test and return its path."""
-    stub = directory / "scsynth-stub"
-    shutil.copy(STUB_SOURCE, stub)
-    stub.chmod(0o755)
-    return stub
+    """Write the stub engine into `directory`, a launcher .exe on Windows and an executable
+    script elsewhere, and return its path."""
+    maker = ScriptMaker(str(STUB_SOURCE.parent), str(directory))
+    maker.executable = str(stub_interpreter())
+    (written,) = maker.make(STUB_SOURCE.name)
+    return Path(written)
 
 
 def make_instrument(
@@ -396,19 +406,19 @@ def test_crashed_names_stderr(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
 
 
 def test_timed_out_reaps_the_child(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("SCSTUB_SLEEP", "5")
-    stub = make_stub(tmp_path)
-    instrument = make_instrument(tmp_path, stub, {"demo": make_source(tmp_path)})
+    woke = tmp_path / "woke"
+    monkeypatch.setenv("SCSTUB_SLEEP", "2")
+    monkeypatch.setenv("SCSTUB_WOKE", str(woke))
+    instrument = make_instrument(tmp_path, make_stub(tmp_path), {"demo": make_source(tmp_path)})
     started = time.monotonic()
-    failure = render_failure(instrument, tmp_path, timeout_s=1.0)
+    failure = render_failure(instrument, tmp_path, timeout_s=0.5)
     elapsed = time.monotonic() - started
     assert isinstance(failure, RenderFailure)
     assert failure.status is RenderFailureStatus.TIMED_OUT
-    assert elapsed < 4.0, "render returned before the stub's sleep ended: the child was killed"
-    # The stub died before the failure returned, so nothing by its name is left running.
-    assert subprocess.run(
-        ["/usr/bin/pgrep", "-f", str(stub)], check=False, capture_output=True
-    ).returncode
+    assert elapsed < 1.8, "render returned before the stub's sleep ended: the child was killed"
+    # Past the moment the stub would wake, it has written nothing: it died with the kill.
+    time.sleep(max(0.0, started + 3.0 - time.monotonic()))
+    assert not woke.exists()
 
 
 def test_missing_binary_fails_before_spawning(tmp_path: Path) -> None:
@@ -559,7 +569,7 @@ def test_guide_composes_into_a_scratch_workspace(
     config.write_text(
         "[instruments.sc]\n"
         'adapter = "poser_scsynth.instrument:create"\n'
-        f'scsynth = "{tmp_path / "missing-scsynth"}"\n'
+        f"scsynth = '{tmp_path / 'missing-scsynth'}'\n"
         'guide = "The built-in sound is `sc:builtin/additive-voice`."\n',
         encoding="utf-8",
         newline="\n",
@@ -569,7 +579,6 @@ def test_guide_composes_into_a_scratch_workspace(
         raise AssertionError("guide composition attempted external work")
 
     import socket
-    import subprocess
 
     import pedalboard
     import poser_scsynth

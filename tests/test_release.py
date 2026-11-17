@@ -7,7 +7,7 @@ import subprocess
 import tomllib
 from importlib import metadata
 from importlib.resources import files
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from urllib.parse import unquote, urlsplit
 
 import pytest
@@ -203,12 +203,16 @@ def test_scsynth_readme_config_supplies_engine_path(tmp_path: Path) -> None:
     from poser_scsynth.config import from_options
 
     text = (REPO_DIR / "packages/poser-scsynth/README.md").read_text(encoding="utf-8")
-    (example,) = re.findall(r"```toml\n(.*?)```", text, re.DOTALL)
+    example, windows = re.findall(r"```toml\n(.*?)```", text, re.DOTALL)
     options = tomllib.loads(example)["instruments"]["sc"]
     assert options.pop("adapter") == "poser_scsynth.instrument:create"
     config = from_options("sc", options, tmp_path)
     assert config.scsynth is not None
     assert config.scsynth.name == "scsynth"
+    # The Windows line keeps its backslashes and names an absolute path there.
+    engine = PureWindowsPath(tomllib.loads(windows)["scsynth"])
+    assert engine.is_absolute()
+    assert engine.parts[-2:] == ("SuperCollider-3.14.1", "scsynth.exe")
 
 
 def test_installed_entry_points_load() -> None:

@@ -3,6 +3,7 @@
 import base64
 import json
 import struct
+import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Never
 
@@ -125,8 +126,13 @@ def test_output_wire_rate_cannot_be_supplied_independently() -> None:
 
 
 def test_nonexecutable_binary_is_load_failed(tmp_path: Path) -> None:
-    stub = make_stub(tmp_path)
-    stub.chmod(0o644)
+    if sys.platform == "win32":
+        # Windows runs any file whose bytes are a program, so this one holds text.
+        stub = tmp_path / "scsynth.exe"
+        stub.write_bytes(b"not a program\n")
+    else:
+        stub = make_stub(tmp_path)
+        stub.chmod(0o644)
     instrument = make_instrument(tmp_path, stub, {"demo": make_source(tmp_path)})
 
     failure = render_failure(instrument, tmp_path)

@@ -18,6 +18,16 @@ adapter = "poser_scsynth.instrument:create"
 scsynth = "/Applications/SuperCollider.app/Contents/Resources/scsynth"
 ```
 
+On Windows, the installer puts the engine in a folder named for its version, such as
+`C:\Program Files\SuperCollider-3.14.1\scsynth.exe`. Write a Windows path in a TOML literal
+string, in single quotes, so its backslashes stay as they are:
+
+```toml
+scsynth = 'C:\Program Files\SuperCollider-3.14.1\scsynth.exe'
+```
+
+poser itself does not support native Windows yet; see the platforms in `docs/setup.md`.
+
 Use an absolute path; poser does not search `PATH`.
 
 ## Install the adapter package

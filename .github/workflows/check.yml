@@ -51,7 +51,7 @@ jobs:
       # and the pending step fails when a listed file has no failing test, so this list is exactly
       # the files with a Windows failure.
       WINDOWS_PENDING: >-
-        tests/test_release.py tests/test_scsynth.py
+        tests/test_release.py
     steps:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v10.3.3
@@ -159,3 +159,32 @@ jobs:
             "tests/test_pedalboard_real.py::test_a_render_has_exactly_the_performance_s_frames" `
             "tests/test_pedalboard_real.py::test_a_windows_plugin_loads_from_its_binary_as_from_its_bundle"
           if ($LASTEXITCODE -ne 0) { throw "the real-plugin tests failed" }
+      - name: Install SuperCollider (required)
+        if: ${{ !cancelled() }}
+        timeout-minutes: 15
+        env:
+          SC_URL: https://github.com/supercollider/supercollider/releases/download/Version-3.14.1/SuperCollider-3.14.1_Release-x64-VS-426edf6.exe
+          SC_SHA256: ebb27352978539ad5d0e8bb6707cee10c3c59abcd9acb0c2b2d6221081396f30
+        run: |
+          $setup = Join-Path $env:RUNNER_TEMP "SuperCollider-3.14.1-setup.exe"
+          curl.exe -fsSL -o $setup $env:SC_URL
+          if ($LASTEXITCODE -ne 0) { throw "could not download $env:SC_URL" }
+          $hash = (Get-FileHash -Algorithm SHA256 $setup).Hash
+          if ($hash -ne $env:SC_SHA256) { throw "SHA-256 $hash is not the pinned $env:SC_SHA256" }
+          # An NSIS installer: /S runs it silently into its default folder.
+          $installer = Start-Process -FilePath $setup -ArgumentList "/S" -Wait -PassThru
+          if ($installer.ExitCode -ne 0) {
+            throw "the SuperCollider installer exited with code $($installer.ExitCode)"
+          }
+          $scsynth = Join-Path $env:ProgramFiles "SuperCollider-3.14.1\scsynth.exe"
+          if (-not (Test-Path -PathType Leaf $scsynth)) { throw "no engine at $scsynth" }
+      # Without SCSYNTH_PATH, so the tests' own lookup finds the installed engine; a skip fails.
+      - name: scsynth renders (required)
+        if: ${{ !cancelled() }}
+        timeout-minutes: 15
+        run: |
+          $output = uv run pytest -m real_scsynth -q -rs tests/test_scsynth_real.py 2>&1
+          $status = $LASTEXITCODE
+          $output | Write-Output
+          if ($status -ne 0) { throw "the real-scsynth tests failed" }
+          if ($output -match "skipped") { throw "a real-scsynth test skipped" }

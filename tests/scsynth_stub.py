@@ -9,6 +9,8 @@ and does not do:
 
 - `SCSTUB_EXIT=7` — print a message to stderr and exit 7 (a crashed engine).
 - `SCSTUB_SLEEP=2` — sleep N seconds past any timeout before writing (a hung engine).
+- `SCSTUB_WOKE=<path>` — write that file when the sleep ends, so a test sees the stub outlive
+  its kill.
 - `SCSTUB_SHORT=1` — write one block instead of the score's full length (padding exercise).
 - `SCSTUB_NAN=1` — write NaN into the first block (the adapter owns finiteness).
 
@@ -77,6 +79,8 @@ def main(argv: list[str]) -> int:
         return int(mode)
     if sleep := os.environ.get("SCSTUB_SLEEP"):
         time.sleep(float(sleep))
+        if woke := os.environ.get("SCSTUB_WOKE"):
+            Path(woke).write_bytes(b"")
     if "-N" not in argv:
         print("stub: no -N in argv", file=sys.stderr)
         return 1

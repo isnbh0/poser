@@ -1,12 +1,15 @@
 """The scsynth adapter's real-engine tests: they need SuperCollider installed.
 
-Every test locates the engine from `SCSYNTH_PATH` or the standard app-bundle path and skips
-cleanly without one, so `make check` on a machine without SuperCollider is unchanged. They are
+Every test locates the engine from `SCSYNTH_PATH`, the standard install locations (the macOS app
+bundle, `/usr/bin` and `/usr/local/bin`, and on Windows the installer's
+`%ProgramFiles%\\SuperCollider-*` folders, newest name first), or `PATH`, and skips cleanly
+without one, so `make check` on a machine without SuperCollider is unchanged. They are
 marked `real_scsynth` and run under `make test-real`.
 """
 
 import os
 import shutil
+import sys
 import time
 from pathlib import Path
 
@@ -36,11 +39,21 @@ BUNDLE_CANDIDATES = (
 )
 
 
+def windows_candidates() -> list[Path]:
+    """The installer's engines, `%ProgramFiles%\\SuperCollider-<version>\\scsynth.exe`, newest
+    name first."""
+    program_files = os.environ.get("PROGRAMFILES")  # Windows environment names ignore case.
+    if sys.platform != "win32" or not program_files:
+        return []
+    return sorted(Path(program_files).glob("SuperCollider-*/scsynth.exe"), reverse=True)
+
+
 def real_scsynth() -> Path:
-    """Return the engine's path from SCSYNTH_PATH, an app bundle, or PATH, or skip."""
+    """Return the engine's path from SCSYNTH_PATH, an install location, or PATH, or skip."""
     env = os.environ.get("SCSYNTH_PATH")
     candidates = [Path(env)] if env else []
     candidates += [Path(path) for path in BUNDLE_CANDIDATES]
+    candidates += windows_candidates()
     if found := shutil.which("scsynth"):
         candidates.append(Path(found))
     for candidate in candidates:
