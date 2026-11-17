@@ -1,5 +1,5 @@
-"""What a command does on a real platform that lacks something poser needs: a file-system backend,
-plugin worker isolation, or Pedalboard plugin loading.
+"""What a command does on a real platform that lacks something poser needs: a file-system backend
+or plugin worker isolation.
 
 `tests/test_init_workspace.py` shows the same refusal by simulating a platform on macOS. This file
 runs without simulation, so it skips where nothing is missing and runs in CI's Windows job.
@@ -12,7 +12,6 @@ import pytest
 
 from poser.adapters.filesystem import native
 from poser.adapters.isolation import check_platform
-from poser.adapters.pedalboard.instrument import check_plugin_platform
 from poser.cli import init_workspace
 from poser.core.ports import UnsupportedPlatformError
 
@@ -22,7 +21,6 @@ def first_missing() -> str | None:
     checks, in the order its factory checks them, or None if nothing is missing."""
     checks = (
         (check_platform, "worker isolation"),
-        (check_plugin_platform, "Pedalboard plugin loading"),
         (native, "file-system support"),
     )
     for check, wording in checks:

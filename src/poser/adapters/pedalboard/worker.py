@@ -6,6 +6,7 @@ target loads no plugin code. Every performance renders through `render_fresh`, o
 just loaded.
 """
 
+import sys
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -18,6 +19,7 @@ import numpy as np
 
 from poser.adapters.isolation import MalformedJobError, job_fields, optional_str
 from poser.adapters.pedalboard.config import INITIALIZATION_TIMEOUT_S
+from poser.adapters.pedalboard.plugin_files import windows_binary
 from poser.adapters.pedalboard.state import decode_state, encode_state
 from poser.core.audio import (
     NUM_CHANNELS,
@@ -122,10 +124,27 @@ def _parse(
     return fields, plugin_name, raw_state, performance, Path(target)
 
 
+def loadable_path(path: str) -> str:
+    """Return the file Pedalboard loads for the configured `path`.
+
+    On Windows, Pedalboard loads a VST3 only from its binary, so a bundle directory resolves to
+    `Contents\\x86_64-win\\<bundle name>`, and a file stays as it is. Elsewhere, Pedalboard loads a
+    macOS bundle directly and maps a Linux bundle itself, so the path stays as it is. Raises
+    FileNotFoundError for a Windows bundle without an x64 binary.
+    """
+    if sys.platform != "win32":
+        return path
+    binary = windows_binary(Path(path))
+    if binary != Path(path) and not binary.is_file():
+        raise FileNotFoundError(f"{path} has no Windows x64 binary at {binary}")
+    return str(binary)
+
+
 def load_external(path: str, plugin_name: str | None) -> "VST3Plugin | AudioUnitPlugin":
-    """Load the plugin at `path` with the class its suffix names, so a failure reports only that
-    format's error. A path with another suffix tries every format. Raises whatever the plugin
-    code raises."""
+    """Load the plugin at `path`, through `loadable_path`, with the class its suffix names, so a
+    failure reports only that format's error. A path with another suffix tries every format.
+    Raises whatever the plugin code raises."""
+    path = loadable_path(path)
     # Imported here so the parent never loads plugin code, and per branch because pedalboard
     # defines `AudioUnitPlugin` only on macOS.
     suffix = Path(path).suffix.lower()

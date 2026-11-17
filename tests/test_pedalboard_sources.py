@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 
 import pytest
-from helpers import fxp_bytes
+from helpers import fxp_bytes, needs_posix_permissions
 
 from poser.adapters.pedalboard.config import PedalboardConfig
 from poser.adapters.pedalboard.formats import (
@@ -92,6 +92,7 @@ def test_walk_follows_symlinked_folders_without_looping(tmp_path: Path) -> None:
     assert list(walk(root)) == ["Pack/Lead.fxp"]
 
 
+@needs_posix_permissions
 def test_walk_raises_for_an_unreadable_folder(tmp_path: Path) -> None:
     locked = tmp_path / "presets" / "Locked"
     locked.mkdir(parents=True)
@@ -224,6 +225,7 @@ def test_the_saved_scan_ignores_subfolders(tmp_path: Path) -> None:
     assert found.unavailable == frozenset()
 
 
+@needs_posix_permissions
 def test_an_unreadable_saved_folder_is_a_saved_sound_problem(tmp_path: Path) -> None:
     sounds = tmp_path / "sounds"
     cfg = config(tmp_path)
@@ -266,6 +268,7 @@ def test_scan_reports_a_file_as_a_configured_source(tmp_path: Path) -> None:
     assert [problem for problem in found.problems if "is not a directory" in problem]
 
 
+@needs_posix_permissions
 def test_scan_reports_an_unreadable_configured_source(tmp_path: Path) -> None:
     locked = tmp_path / "presets" / "Locked"
     locked.mkdir(parents=True)

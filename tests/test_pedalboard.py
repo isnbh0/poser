@@ -20,7 +20,7 @@ from typing import NoReturn, cast
 import numpy as np
 import pytest
 from contracts import check_instrument_contract, check_sound_capture_contract
-from helpers import fxp_bytes
+from helpers import fxp_bytes, needs_posix_permissions, write_pe
 from test_performance import cc_track, performed
 
 from poser.adapters.filesystem import native
@@ -50,6 +50,7 @@ from poser.adapters.pedalboard.worker import (
     NotLoaded,
     capture_job,
     load_external,
+    loadable_path,
     midi_note,
     performance_messages,
     render_duration_s,
@@ -343,10 +344,11 @@ def test_from_options_refuses(
 
 
 def test_from_options_resolves_relative_paths_against_base(tmp_path: Path) -> None:
+    root = Path(tmp_path.anchor)  # `/` on macOS and Linux, a drive's root on Windows.
     options: dict[str, JsonValue] = {
         "path": "plugins/Serum.vst3",
         "plugin_name": "Serum",
-        "sources": {"presets": "presets", "factory": "/Library/Serum"},
+        "sources": {"presets": "presets", "factory": str(root / "Library" / "Serum")},
     }
     config = from_options("serum", options, tmp_path)
     assert config == PedalboardConfig(
@@ -355,12 +357,13 @@ def test_from_options_resolves_relative_paths_against_base(tmp_path: Path) -> No
         plugin_name="Serum",
         sources={
             Identifier("presets"): tmp_path / "presets",
-            Identifier("factory"): Path("/Library/Serum"),
+            Identifier("factory"): root / "Library" / "Serum",
         },
         formats=("fxp", "saved"),
     )
-    absolute = from_options("serum", {"path": "/s.vst3", "formats": ["saved"]}, tmp_path)
-    assert (absolute.path, absolute.formats) == (Path("/s.vst3"), ("saved",))
+    options = {"path": str(root / "s.vst3"), "formats": ["saved"]}
+    absolute = from_options("serum", options, tmp_path)
+    assert (absolute.path, absolute.formats) == (root / "s.vst3", ("saved",))
 
 
 def test_instrument_refuses_formats_that_do_not_match_their_suffixes(tmp_path: Path) -> None:
@@ -510,6 +513,24 @@ def test_plugin_version_is_none_for_a_truncated_plist(
     assert resolved(make_instrument(tmp_path, tmp_path / "Cut.vst3"), None).identity
 
 
+def test_plugin_version_reads_a_windows_bundle_s_binary(tmp_path: Path) -> None:
+    bundle = tmp_path / "Surge XT.vst3"
+    write_pe(bundle / "Contents" / "x86_64-win" / "Surge XT.vst3", file_version=(1, 3, 4, 0))
+    assert plugin_version(bundle) == "1.3.4.0"
+
+
+def test_plugin_version_reads_a_single_file_plugin(tmp_path: Path) -> None:
+    assert plugin_version(write_pe(tmp_path / "Plugin.vst3", file_version=(2, 0, 1, 9))) == (
+        "2.0.1.9"
+    )
+
+
+def test_plugin_version_prefers_the_info_plist(tmp_path: Path) -> None:
+    bundle = write_bundle(tmp_path / "Serum.vst3", CFBundleShortVersionString="1.3")
+    write_pe(bundle / "Contents" / "x86_64-win" / "Serum.vst3", file_version=(9, 9, 9, 9))
+    assert plugin_version(bundle) == "1.3"
+
+
 def identity(tmp_path: Path, plugin: Path, name: str | None = None) -> str:
     return resolved(make_instrument(tmp_path, plugin), name).identity
 
@@ -540,6 +561,15 @@ def test_identity_changes_with_the_plugin_version(tmp_path: Path) -> None:
     write_bundle(plugin, CFBundleShortVersionString="1.4", CFBundleVersion="1369")
     third = identity(tmp_path, plugin)
     assert len({first, second, third}) == 3
+
+
+def test_identity_changes_with_the_windows_binary_s_version(tmp_path: Path) -> None:
+    plugin = tmp_path / "Surge XT.vst3"
+    binary = plugin / "Contents" / "x86_64-win" / "Surge XT.vst3"
+    write_pe(binary, file_version=(1, 3, 4, 0))
+    first = identity(tmp_path, plugin)
+    write_pe(binary, file_version=(1, 3, 4, 1))
+    assert identity(tmp_path, plugin) != first
 
 
 def test_identity_changes_with_the_pedalboard_version(
@@ -770,7 +800,8 @@ def test_load_external_loads_with_the_class_the_suffix_names(
 
 def test_a_vst3_that_fails_to_scan_reports_only_the_vst3_error(tmp_path: Path) -> None:
     bundle = tmp_path / "Broken.vst3"
-    bundle.mkdir()
+    # Windows loads the binary; macOS loads the bundle, which holds nothing it can load.
+    write(bundle / "Contents" / "x86_64-win" / "Broken.vst3", b"not a plugin")
 
     with pytest.raises(ImportError) as raised:
         load_external(str(bundle), None)
@@ -958,6 +989,7 @@ def test_store_writes_the_saved_format(tmp_path: Path) -> None:
     assert data == {"description": "a warm pad", "state": encode_state(b"test-state")}
 
 
+@needs_posix_permissions
 def test_resolve_reports_an_unreadable_saved_folder_as_a_saved_sound(tmp_path: Path) -> None:
     directory = saved_dir(tmp_path)
     write_saved(directory / "pad.json")
@@ -1238,26 +1270,47 @@ def test_create_effect_refuses_a_platform_without_worker_isolation(
         make_effect(tmp_path)
 
 
-WINDOWS_PLUGINS_REFUSED = r"Pedalboard plugin loading .*\(win32\).*docs/setup.md#prerequisites"
-
-
-def test_create_refuses_windows_until_it_loads_windows_plugins(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_create_effect_builds_on_windows(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # An instrument also needs `native()`, which imports `msvcrt` under a simulated `win32`; CI's
+    # Windows job builds instruments for real.
     monkeypatch.setattr(sys, "platform", "win32")
 
-    with pytest.raises(UnsupportedPlatformError, match=WINDOWS_PLUGINS_REFUSED):
-        create_serum(tmp_path, ["fxp", "saved"])
-    assert not (tmp_path / "sounds").exists()
+    assert isinstance(make_effect(tmp_path), PedalboardEffect)
 
 
-def test_create_effect_refuses_windows_until_it_loads_windows_plugins(
+def test_loadable_path_names_a_windows_bundle_s_binary(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    bundle = tmp_path / "Surge XT.vst3"
+    binary = write_pe(bundle / "Contents" / "x86_64-win" / "Surge XT.vst3")
     monkeypatch.setattr(sys, "platform", "win32")
 
-    with pytest.raises(UnsupportedPlatformError, match=WINDOWS_PLUGINS_REFUSED):
-        make_effect(tmp_path)
+    assert loadable_path(str(bundle)) == str(binary)
+    assert loadable_path(str(binary)) == str(binary)
+
+
+def test_loadable_path_refuses_a_windows_bundle_without_a_binary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bundle = tmp_path / "Mac Only.vst3"
+    (bundle / "Contents" / "MacOS").mkdir(parents=True)
+    binary = bundle / "Contents" / "x86_64-win" / "Mac Only.vst3"
+    monkeypatch.setattr(sys, "platform", "win32")
+
+    with pytest.raises(FileNotFoundError) as raised:
+        loadable_path(str(bundle))
+    assert str(raised.value) == f"{bundle} has no Windows x64 binary at {binary}"
+
+
+@pytest.mark.parametrize("platform", ["darwin", "linux"])
+def test_loadable_path_keeps_the_path_off_windows(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, platform: str
+) -> None:
+    bundle = tmp_path / "Surge XT.vst3"
+    write_pe(bundle / "Contents" / "x86_64-win" / "Surge XT.vst3")
+    monkeypatch.setattr(sys, "platform", platform)
+
+    assert loadable_path(str(bundle)) == str(bundle)
 
 
 @pytest.mark.parametrize(

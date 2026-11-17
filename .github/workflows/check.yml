@@ -43,7 +43,7 @@ jobs:
           "$RUNNER_TEMP/poser-venv/bin/python" -I "$GITHUB_WORKSPACE/scripts/check_distribution.py"
 
   windows:
-    name: Windows (file system, isolation, and platform gate)
+    name: Windows (file system, isolation, and Pedalboard)
     runs-on: windows-latest
     env:
       UV_LOCKED: "1"
@@ -55,18 +55,56 @@ jobs:
       - run: uv sync --locked
       - name: Show which interpreter the tests start
         run: uv run python -c "import sys; print(sys.executable); print(sys._base_executable)"
-      - name: Imports, file system, isolation, and platform gate (required)
+      - name: Imports, file system, isolation, and Pedalboard (required)
         run: >-
           uv run pytest -q -rs tests/test_imports.py tests/test_unsupported_platform.py
           tests/test_filesystem.py tests/test_filesystem_selection.py
           tests/test_filesystem_windows.py tests/test_filestore.py tests/test_isolation.py
-          tests/test_boundaries.py
+          tests/test_boundaries.py tests/test_plugin_files.py tests/test_pedalboard.py
+          tests/test_pedalboard_sources.py
       - name: Type-check the Windows backends (required)
         if: ${{ !cancelled() }}
         run: >-
           uv run ty check src/poser/adapters/filesystem_windows.py
           src/poser/adapters/isolation_windows.py src/poser/adapters/isolation.py
+          src/poser/adapters/pedalboard/plugin_files.py src/poser/adapters/pedalboard/worker.py
           tests/test_isolation.py
+      # The portable zip holds the plugin bundles beside `SurgeXTData`, where Surge finds its
+      # factory data with no installation. The release publishes no digest; the pin is computed
+      # from a download.
+      - name: Surge XT through Pedalboard (required)
+        if: ${{ !cancelled() }}
+        timeout-minutes: 20
+        env:
+          SURGE_URL: https://github.com/surge-synthesizer/releases-xt/releases/download/1.3.4/surge-xt-win64-1.3.4-portable-install.zip
+          SURGE_SHA256: a5f2376702ad218c0382640ed0c7b9ebb222ba2410a210879899c0f726859d8e
+        run: |
+          $zip = Join-Path $env:RUNNER_TEMP "surge-xt-1.3.4.zip"
+          curl.exe -fsSL -o $zip $env:SURGE_URL
+          if ($LASTEXITCODE -ne 0) { throw "could not download $env:SURGE_URL" }
+          $hash = (Get-FileHash -Algorithm SHA256 $zip).Hash
+          if ($hash -ne $env:SURGE_SHA256) { throw "SHA-256 $hash is not the pinned $env:SURGE_SHA256" }
+          & "$env:SystemRoot\System32\tar.exe" -xf $zip -C $env:RUNNER_TEMP  # bsdtar reads zip
+          if ($LASTEXITCODE -ne 0) { throw "could not extract $zip" }
+          $root = Join-Path $env:RUNNER_TEMP "Surge Synth Team"
+          $bundle = Join-Path $root "Surge XT.vst3"
+          $presets = Join-Path $root "SurgeXTData\patches_factory"
+          $config = Get-Content -Raw src/poser/reference_setups/surge/poser.toml
+          $config = $config -replace '(?m)^path = [^\r\n]*', "path = '$bundle'"
+          $config = $config -replace '(?m)^presets = [^\r\n]*', "presets = '$presets'"
+          Set-Content -NoNewline -Encoding utf8 -Path poser.toml -Value $config
+          Get-Content poser.toml
+          $code = "import sys; from pathlib import Path; " +
+            "from poser.adapters.pedalboard.instrument import plugin_version; " +
+            "print(plugin_version(Path(sys.argv[1])))"
+          $version = "$(uv run python -c $code $bundle)".Trim()
+          Write-Output "plugin_version: $version"
+          if ($LASTEXITCODE -ne 0 -or $version -ne "1.3.4.0") { throw "expected 1.3.4.0" }
+          uv run pytest -m real_plugins -q -rs `
+            "tests/test_pedalboard_real.py::test_each_instrument_meets_the_instrument_contract" `
+            "tests/test_pedalboard_real.py::test_a_render_has_exactly_the_performance_s_frames" `
+            "tests/test_pedalboard_real.py::test_a_windows_plugin_loads_from_its_binary_as_from_its_bundle"
+          if ($LASTEXITCODE -ne 0) { throw "the real-plugin tests failed" }
       - name: Plugin-free suite (inventory, not yet required on Windows)
         if: ${{ !cancelled() }}
         continue-on-error: true

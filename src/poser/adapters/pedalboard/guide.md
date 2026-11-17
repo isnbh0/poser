@@ -4,6 +4,10 @@ A Pedalboard instrument plays a VST3 or Audio Unit plugin. A track names one of 
 `<instrument>:<source>/<path>`, exactly as `uv run list-sounds` prints it, such as
 `synth:presets/Bass/Growl`.
 
+Audio Unit plugins load only on macOS. On Windows, `path` names the `.vst3` bundle or the binary
+inside it, `Contents\x86_64-win\<name>.vst3`. Write a Windows path in TOML as a literal string,
+in single quotes, such as `path = 'C:\Program Files\Common Files\VST3\Synth.vst3'`.
+
 - A bare instrument name, such as `synth`, is the plugin's default patch.
 - `<source>` is a preset folder named in the instrument's options, and `<path>` is a file's path
   inside it, with `/` between folders and without the file's suffix. Case matters.
@@ -31,8 +35,9 @@ so a preset's tempo-synced LFOs, sequences, or delays may not follow it.
 An `[effects.<name>]` table in `poser.toml` is one effect recipe, which a track's `effects` list
 names. Two shapes are allowed:
 
-- `adapter = "pedalboard"` with `path`: a VST3 or Audio Unit **effect** plugin (multi-plugin
-  bundles are not supported; an instrument plugin refuses with `is not an effect`).
+- `adapter = "pedalboard"` with `path`: a VST3 or Audio Unit **effect** plugin, named as an
+  instrument's plugin is (multi-plugin bundles are not supported; an instrument plugin refuses
+  with `is not an effect`).
 - `adapter = "pedalboard"` with `builtin`: a Pedalboard-native effect class, such as `Gain`,
   `Reverb`, or `Distortion`, and optional `parameters`, a table of the class's keyword arguments
   (`gain_db = -6`). Native effects need no vendor plugin.

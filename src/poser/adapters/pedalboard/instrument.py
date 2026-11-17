@@ -7,7 +7,6 @@ Serum's default patch does not repeat between renders, and its stems are still c
 """
 
 import plistlib
-import sys
 import tempfile
 import threading
 import xml.parsers.expat
@@ -16,7 +15,7 @@ from importlib import metadata, resources
 from pathlib import Path
 from typing import cast
 
-from poser.adapters.filesystem import PREREQUISITES_URL, FileSystem, native
+from poser.adapters.filesystem import FileSystem, native
 from poser.adapters.isolation import (
     WorkerCrashedError,
     WorkerTimedOutError,
@@ -39,6 +38,7 @@ from poser.adapters.pedalboard.formats import (
     SavedFormat,
     SavedSound,
 )
+from poser.adapters.pedalboard.plugin_files import pe_version, windows_binary
 from poser.adapters.pedalboard.sources import (
     DEFAULT_DESCRIPTION,
     SourceScan,
@@ -79,7 +79,6 @@ from poser.core.ports import (
     ResolvedSound,
     SoundFailure,
     SoundListing,
-    UnsupportedPlatformError,
 )
 from poser.core.sounds import SoundEntry, SoundRef
 from poser.core.statuses import RenderFailureStatus, SoundFailureStatus
@@ -100,11 +99,20 @@ def _effect_result(result: JsonValue) -> RenderFailure | None:
 
 
 def plugin_version(path: Path) -> str | None:
-    """Return a plugin bundle's version from its `Info.plist`, or None when it has none.
+    """Return a plugin's version, or None when it has none.
 
-    The build number counts, so a build-only update changes the version. An unreadable or corrupt
-    `Info.plist` gives None, as a missing one does, so it never stops a sound from resolving.
+    A bundle's `Info.plist` comes first, as on macOS, and its build number counts, so a build-only
+    update changes the version. Without one, the version is the fixed file version of the Windows
+    binary `path` names (`plugin_files.pe_version`), which is read as bytes. An unreadable or
+    corrupt source gives None, as a missing one does, so it never stops a sound from resolving.
     """
+    version = _plist_version(path)
+    if version is None:
+        return pe_version(windows_binary(path))
+    return version
+
+
+def _plist_version(path: Path) -> str | None:
     try:
         with (path / "Contents" / "Info.plist").open("rb") as plist:
             info = plistlib.load(plist)
@@ -529,34 +537,16 @@ def _preset_format(owner: str, entry: str) -> PresetFormat:
     return made
 
 
-def check_plugin_platform() -> None:
-    """Raise UnsupportedPlatformError on Windows, where this adapter cannot load plugins yet.
-
-    A Windows VST3 bundle keeps its binary under `Contents\\x86_64-win` and has no `Info.plist`,
-    so `plugin_version` would find no version, and a plugin upgrade would leave its cached stems
-    in use. The factories call this when built, after `check_platform`. Reads only
-    `sys.platform`.
-    """
-    platform = sys.platform
-    if platform == "win32":
-        raise UnsupportedPlatformError(
-            f"poser's Pedalboard plugin loading does not cover this platform ({platform}) yet: it "
-            "reads a plugin's version only from macOS bundle metadata, and it is untested with "
-            f"Windows plugins. See {PREREQUISITES_URL}"
-        )
-
-
 def create(
     name: Identifier, options: Mapping[str, JsonValue], context: AdapterContext
 ) -> PedalboardInstrument:
     """The factory for `pedalboard`. Relative paths in the options resolve against the workspace
     root, and saved sounds live under the command's sounds directory.
 
-    Raises UnsupportedPlatformError on a platform without worker isolation, Pedalboard plugin
-    loading (`check_plugin_platform`), or a file-system backend.
+    Raises UnsupportedPlatformError on a platform without worker isolation or a file-system
+    backend.
     """
     check_platform()
-    check_plugin_platform()
     fs = native()
     config = from_options(name, options, context.root)
     owner = f"instrument {config.name!r}"
@@ -574,10 +564,8 @@ def create_effect(
 ) -> PedalboardEffect:
     """The factory for an effect recipe. A relative `path` resolves against the workspace root.
 
-    Raises UnsupportedPlatformError on a platform without worker isolation or Pedalboard plugin
-    loading (`check_plugin_platform`).
+    Raises UnsupportedPlatformError on a platform without worker isolation.
     """
     check_platform()
-    check_plugin_platform()
     config = effect_from_options(name, options, context.root)
     return PedalboardEffect(config)

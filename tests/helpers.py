@@ -2,6 +2,8 @@
 
 import json
 import re
+import struct
+import sys
 import tomllib
 from importlib.resources import files
 from pathlib import Path
@@ -27,6 +29,10 @@ REPO_DIR = Path(__file__).resolve().parents[1]
 SCAFFOLD_DIR = Path(str(files("poser").joinpath("scaffold")))
 SURGE_DIR = Path(str(files("poser.reference_setups.surge")))
 REAL_CONFIG = REPO_DIR / "poser.toml"
+# `chmod(0)` leaves a folder readable on Windows, where access control lists decide.
+needs_posix_permissions = pytest.mark.skipif(
+    sys.platform == "win32", reason="chmod cannot make a folder unreadable on Windows"
+)
 
 
 def set_instrument_guide(config: Path, instrument: str, note: str) -> None:
@@ -185,3 +191,69 @@ def change_time_s(reference: np.ndarray, changed: np.ndarray) -> float:
         key=lambda i: diff[:i].var() * i + diff[i:].var() * (len(diff) - i),
     )
     return float(times[split] + FRAME / SAMPLE_RATE)
+
+
+Version = tuple[int, int, int, int]
+
+
+def write_pe(
+    path: Path,
+    *,
+    file_version: Version = (1, 3, 4, 0),
+    product_version: Version = (0, 0, 0, 0),
+    pe32: bool = False,
+    signature: int = 0xFEEF04BD,
+    resource_type: int = 16,
+    resource_directory: bool = True,
+) -> Path:
+    """Write a minimal PE image whose version resource holds the given fixed versions, and return
+    its path.
+
+    The image has one section, `.rsrc`, at RVA 0x1000 and file offset 0x200. Its resource tree
+    leads from `resource_type` through ID 1 and language 0x409 to a VS_VERSIONINFO, whose
+    VS_FIXEDFILEINFO starts with `signature`. Without `resource_directory`, the optional header
+    names no resource table.
+    """
+
+    def dwords(version: Version) -> tuple[int, int]:
+        a, b, c, d = version
+        return a << 16 | b, c << 16 | d
+
+    fixed = struct.pack(
+        "<13I", signature, 0x10000, *dwords(file_version), *dwords(product_version), *[0] * 7
+    )
+    key = "VS_VERSION_INFO\0".encode("utf-16-le")
+    info = struct.pack("<HHH", 6 + len(key) + 2 + len(fixed), len(fixed), 0) + key + b"\0\0" + fixed
+
+    rva, subdirectory = 0x1000, 0x80000000
+
+    def table(entry_id: int, offset: int) -> bytes:
+        return struct.pack("<IIHHHH", 0, 0, 0, 0, 0, 1) + struct.pack("<II", entry_id, offset)
+
+    resources = (
+        table(resource_type, subdirectory | 0x18)
+        + table(1, subdirectory | 0x30)
+        + table(0x409, 0x48)
+        + struct.pack("<IIII", rva + 0x58, len(info), 0, 0)
+        + info
+    )
+
+    count_offset, directories_offset = (92, 96) if pe32 else (108, 112)
+    optional = bytearray(directories_offset + 16 * 8)
+    struct.pack_into("<H", optional, 0, 0x10B if pe32 else 0x20B)
+    struct.pack_into("<I", optional, count_offset, 16)
+    if resource_directory:
+        struct.pack_into("<II", optional, directories_offset + 2 * 8, rva, len(resources))
+    machine = 0x14C if pe32 else 0x8664
+    coff = b"PE\0\0" + struct.pack("<HHIIIHH", machine, 1, 0, 0, 0, len(optional), 0x2022)
+    section = b".rsrc\0\0\0" + struct.pack(
+        "<IIIIIIHHI", len(resources), rva, len(resources), 0x200, 0, 0, 0, 0, 0x40000040
+    )
+    dos = bytearray(0x40)
+    dos[:2] = b"MZ"
+    struct.pack_into("<I", dos, 0x3C, len(dos))
+    headers = bytes(dos) + coff + bytes(optional) + section
+    assert len(headers) <= 0x200
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(headers.ljust(0x200, b"\0") + resources)
+    return path

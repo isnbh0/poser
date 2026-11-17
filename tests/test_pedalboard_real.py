@@ -23,6 +23,7 @@ from poser.adapters.filesystem import native
 from poser.adapters.pedalboard.config import from_options
 from poser.adapters.pedalboard.formats import SavedFormat, SavedSound
 from poser.adapters.pedalboard.instrument import PedalboardInstrument, plugin_version
+from poser.adapters.pedalboard.plugin_files import windows_binary
 from poser.adapters.pedalboard.state import component_state
 from poser.core.audio import SAMPLE_RATE, SILENCE_DBFS, Audio, measure_peak_dbfs, read_raw_audio
 from poser.core.names import Identifier
@@ -63,6 +64,39 @@ def test_a_render_has_exactly_the_performance_s_frames(tmp_path: Path) -> None:
             audio = render(instrument, ref, SHORT, tmp_path / f"{name}-{index}.npy")
             assert audio.frames == SHORT.samples
     assert presets, "no instrument lists a preset"
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="only Windows loads a VST3 from its x64 binary")
+def test_a_windows_plugin_loads_from_its_binary_as_from_its_bundle(tmp_path: Path) -> None:
+    composition = real_composition(tmp_path)
+    pedalboard = {
+        name
+        for name, instrument in composition.instruments().items()
+        if isinstance(instrument, PedalboardInstrument)
+    }
+    # Long enough for a plugin's latency to pass, unlike SHORT.
+    performance = Performance(SAMPLE_RATE // 2, (NoteOn(0, 60, 100), NoteOff(SAMPLE_RATE // 4, 60)))
+    bundles = 0
+    for item in composition.config.instruments:
+        if item.name not in pedalboard:
+            continue
+        config = from_options(item.name, item.spec.options, composition.context.root)
+        if not config.path.is_dir():
+            continue
+        bundles += 1
+        binary = windows_binary(config.path)
+        version = plugin_version(config.path)
+        assert version is not None, f"{config.path} has no readable version"
+        assert plugin_version(binary) == version
+        for index, path in enumerate((config.path, binary)):
+            instrument = PedalboardInstrument(
+                dataclasses.replace(config, path=path), tmp_path / "sounds", REAL_FORMATS, native()
+            )
+            ref = SoundRef(Identifier(item.name))
+            audio = render(instrument, ref, performance, tmp_path / f"{item.name}-{index}.npy")
+            assert audio.frames == performance.samples
+            assert measure_peak_dbfs(audio.samples) > SILENCE_DBFS, path
+    assert bundles, "no Pedalboard instrument names a bundle directory"
 
 
 def captured_state(instrument_path: Path, tmp_path: Path) -> bytes:
