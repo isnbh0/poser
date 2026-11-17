@@ -206,8 +206,9 @@ class WorkerJob:
                 _kernel32.CloseHandle(thread)
 
     def kill(self) -> None:
-        """Terminate every process in the job, and wait up to `KILL_WAIT_S` seconds for them all
-        to end, so the files they held can be deleted."""
+        """Terminate every process in the job, and wait up to `KILL_WAIT_S` seconds until none
+        remains in it. A process leaves the job as it exits, which can be shortly before its
+        handles are closed."""
         if not _kernel32.TerminateJobObject(self._handle, KILLED_EXIT_CODE):
             raise _last_error()
         deadline = time.monotonic() + KILL_WAIT_S

@@ -236,8 +236,10 @@ def test_a_timeout_kills_the_processes_the_worker_started(
     with pytest.raises(WorkerTimedOutError):
         run_isolated(target(workers, "spawn_and_sleep"), job, 1)
     worker, grandchild = read_pids(pid_file)
+    # On Windows, the worker's interpreter is a child of the launcher `run_isolated` started, so,
+    # like the grandchild, it ends shortly after the kill rather than before the call returns.
     wait_until_gone(grandchild)
-    assert not exists(worker)
+    wait_until_gone(worker)
 
 
 def test_a_normal_exit_leaves_the_processes_the_worker_started(
