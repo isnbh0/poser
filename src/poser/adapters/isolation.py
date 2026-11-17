@@ -24,7 +24,11 @@ from poser.adapters.filesystem import PREREQUISITES_URL
 from poser.core.jsonvalue import JsonValue, is_json_value, json_object
 from poser.core.ports import UnsupportedPlatformError
 
-CHILD_CODE = "from poser.adapters.isolation import child_main; child_main()"
+# The worker writes its stderr as UTF-8, whatever the locale, UTF-8 mode, or PYTHONIOENCODING.
+CHILD_CODE = (
+    "import sys; sys.stderr.reconfigure(encoding='utf-8', errors='backslashreplace'); "
+    "from poser.adapters.isolation import child_main; child_main()"
+)
 CREATE_SUSPENDED = 0x00000004
 WAIT_SLICE_S = 0.1
 
@@ -139,8 +143,8 @@ def run_isolated(
             returncode = _run_in_group(command, stderr_path, timeout_s)
 
         if returncode != 0:
-            # The worker is a Python child, which writes its stderr in the locale's encoding.
-            stderr = stderr_path.read_text(encoding="locale", errors="replace")
+            # Native code in the worker can write any bytes to its stderr.
+            stderr = stderr_path.read_text(encoding="utf-8", errors="replace")
             lines = stderr.strip().splitlines()
             last_line = lines[-1] if lines else "no error output"
             raise WorkerCrashedError(f"exit code {returncode}: {last_line}")

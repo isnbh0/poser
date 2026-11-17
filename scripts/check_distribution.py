@@ -22,12 +22,12 @@ def require(condition: object, message: str) -> None:
 def run(name: str, *args: str, cwd: Path) -> str:
     executable = Path(sysconfig.get_path("scripts")) / name
     result = subprocess.run(
-        [sys.executable, "-I", str(executable), *args],
+        [sys.executable, "-I", "-X", "utf8", str(executable), *args],
         cwd=cwd,
         check=False,
         text=True,
-        # The console script is a Python child, which writes the pipe in the locale's encoding.
-        encoding="locale",
+        # UTF-8 mode makes the console script write the pipe as UTF-8; -I ignores PYTHONIOENCODING.
+        encoding="utf-8",
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
     )

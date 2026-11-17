@@ -54,7 +54,7 @@ def test_success_writes_current_guide_and_loadable_demo(
     presets.mkdir()
     demo = files("poser.reference_setups.surge").joinpath("demo.yaml").read_bytes()
     assert init_workspace.main([*args(target, plugin), "--presets-path", str(presets)]) == 0
-    config = tomllib.loads((target / "poser.toml").read_text())
+    config = tomllib.loads((target / "poser.toml").read_text(encoding="utf-8"))
     surge = config["instruments"]["surge"]
     assert surge["path"] == str(plugin.resolve())
     assert surge["sources"]["presets"] == str(presets.resolve())
@@ -68,12 +68,14 @@ def test_success_writes_current_guide_and_loadable_demo(
     assert song.tracks
     assert {str(track.sound) for track in song.tracks} == {"surge"}
     composition = load(target / "poser.toml", target / "sounds", target / "renders")
-    instructions = (target / "AGENTS.md").read_text()
-    assert instructions == files("poser").joinpath("scaffold", "agents.md").read_text()
+    instructions = (target / "AGENTS.md").read_text(encoding="utf-8")
+    assert instructions == files("poser").joinpath("scaffold", "agents.md").read_text(
+        encoding="utf-8"
+    )
     assert "[POSER.md](POSER.md)" in instructions
     assert not instructions.startswith(GENERATED)
-    assert (target / "CLAUDE.md").read_text() == "@AGENTS.md\n"
-    text = (target / "POSER.md").read_text()
+    assert (target / "CLAUDE.md").read_text(encoding="utf-8") == "@AGENTS.md\n"
+    text = (target / "POSER.md").read_text(encoding="utf-8")
     assert text == guide.workspace_guide(composition)
     assert text.startswith(GENERATED + "\n")
     assert guide.main(["--config", str(target / "poser.toml"), "--check"]) == 0
@@ -129,7 +131,7 @@ def test_later_guide_updates_use_studio_config_not_setup_resource(
 
     monkeypatch.setattr(init_workspace, "prepare", fail)
     assert guide.main(["--config", str(config)]) == 0
-    assert "SENTINEL-NOTE" in (target / "POSER.md").read_text()
+    assert "SENTINEL-NOTE" in (target / "POSER.md").read_text(encoding="utf-8")
     assert resource.read_bytes() == original
 
 
@@ -137,7 +139,11 @@ def test_yaml_only_studio_reads_yaml_and_refuses_scripts(tmp_path: Path, plugin:
     target = tmp_path / "studio"
     assert init_workspace.main(args(target, plugin)) == 0
     config = target / "poser.toml"
-    config.write_text(config.read_text() + '\n[adapters]\nsong_formats = ["yaml"]\n')
+    config.write_text(
+        config.read_text(encoding="utf-8") + '\n[adapters]\nsong_formats = ["yaml"]\n',
+        encoding="utf-8",
+        newline="\n",
+    )
     composition = load(config, target / "sounds", target / "renders")
     assert isinstance(
         load_song(target / "songs/demo.yaml", composition.song_formats()).source, Song
@@ -207,8 +213,10 @@ def test_bad_overrides_do_not_mutate_existing_project(
 ) -> None:
     target = tmp_path / "project"
     target.mkdir()
-    (target / "pyproject.toml").write_text("[project]\nname = 'mine'\n")
-    (target / ".gitignore").write_text(".venv/\n")
+    (target / "pyproject.toml").write_text(
+        "[project]\nname = 'mine'\n", encoding="utf-8", newline="\n"
+    )
+    (target / ".gitignore").write_text(".venv/\n", encoding="utf-8", newline="\n")
     before = snapshot(target)
     for command in (
         args(target, tmp_path / "absent.vst3"),
@@ -221,7 +229,7 @@ def test_bad_overrides_do_not_mutate_existing_project(
 
 def test_regular_file_is_not_a_vst_bundle(tmp_path: Path) -> None:
     plugin = tmp_path / "file.vst3"
-    plugin.write_text("not a bundle")
+    plugin.write_text("not a bundle", encoding="utf-8", newline="\n")
     target = tmp_path / "new"
     assert init_workspace.main(args(target, plugin)) == 2
     assert snapshot(target) == {}
@@ -230,9 +238,9 @@ def test_regular_file_is_not_a_vst_bundle(tmp_path: Path) -> None:
 def test_merges_existing_ignore(tmp_path: Path, plugin: Path) -> None:
     target = tmp_path / "project"
     target.mkdir()
-    (target / ".gitignore").write_text(".venv/\nnode_modules")
+    (target / ".gitignore").write_text(".venv/\nnode_modules", encoding="utf-8", newline="\n")
     assert init_workspace.main(args(target, plugin)) == 0
-    text = (target / ".gitignore").read_text()
+    text = (target / ".gitignore").read_text(encoding="utf-8")
     assert text.startswith(".venv/\nnode_modules\n")
     assert "renders/" in text
 
@@ -245,8 +253,8 @@ def test_existing_owned_output_refuses_without_changes(
 ) -> None:
     target = tmp_path / "project"
     (target / existing).parent.mkdir(parents=True, exist_ok=True)
-    (target / existing).write_text("mine")
-    (target / ".gitignore").write_text("mine\n")
+    (target / existing).write_text("mine", encoding="utf-8", newline="\n")
+    (target / ".gitignore").write_text("mine\n", encoding="utf-8", newline="\n")
     before = snapshot(target)
     assert init_workspace.main(args(target, plugin)) == 2
     assert snapshot(target) == before
@@ -259,9 +267,9 @@ def test_incompatible_targets_refuse_without_changes(
     target = tmp_path / "project"
     target.mkdir()
     external = tmp_path / "external"
-    external.write_text("untouched")
+    external.write_text("untouched", encoding="utf-8", newline="\n")
     if kind == "parent-file":
-        (target / "songs").write_text("mine")
+        (target / "songs").write_text("mine", encoding="utf-8", newline="\n")
     elif kind == "ignore-directory":
         (target / ".gitignore").mkdir()
     elif kind == "dangling":
@@ -271,7 +279,7 @@ def test_incompatible_targets_refuse_without_changes(
     before = snapshot(target)
     assert init_workspace.main(args(target, plugin)) == 2
     assert snapshot(target) == before
-    assert external.read_text() == "untouched"
+    assert external.read_text(encoding="utf-8") == "untouched"
 
 
 def test_composition_failure_does_not_write(
@@ -279,7 +287,7 @@ def test_composition_failure_does_not_write(
 ) -> None:
     target = tmp_path / "project"
     target.mkdir()
-    (target / ".gitignore").write_text("keep\n")
+    (target / ".gitignore").write_text("keep\n", encoding="utf-8", newline="\n")
     before = snapshot(target)
 
     def fail(*_args: object) -> str:
@@ -294,7 +302,7 @@ def test_composition_failure_does_not_write(
 def test_persists_advice(tmp_path: Path, plugin: Path, advice: str) -> None:
     target = tmp_path / "studio"
     assert init_workspace.main([*args(target, plugin), "--advice", advice]) == 0
-    config = tomllib.loads((target / "poser.toml").read_text())
+    config = tomllib.loads((target / "poser.toml").read_text(encoding="utf-8"))
     assert config["guidance"]["advice"] is (advice == "on")
     assert guide.main(["--config", str(target / "poser.toml"), "--check"]) == 0
 

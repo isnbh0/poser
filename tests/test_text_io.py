@@ -39,6 +39,8 @@ def _called(func: ast.expr, imported: dict[str, str]) -> tuple[str, bool]:
     if isinstance(func, ast.Name):
         return imported.get(func.id, func.id), False
     if isinstance(func, ast.Attribute):
+        if func.attr in ("read_text", "write_text"):
+            return f".{func.attr}", True
         if isinstance(func.value, ast.Name) and func.value.id in imported:
             return f"{imported[func.value.id]}.{func.attr}", False
         return f".{func.attr}", True
@@ -57,7 +59,12 @@ def _mode(call: ast.Call, position: int, default: str) -> str | None:
 
 
 def _missing(call: ast.Call, names: tuple[str, ...]) -> list[str]:
-    given = {keyword.arg for keyword in call.keywords}
+    """Return the names the call does not give, counting a keyword given as None as not given."""
+    given = {
+        keyword.arg
+        for keyword in call.keywords
+        if not (isinstance(keyword.value, ast.Constant) and keyword.value.value is None)
+    }
     return [name for name in names if name not in given]
 
 
@@ -119,10 +126,10 @@ def _named_problem(call: ast.Call, name: str, is_method: bool) -> str | None:
             problem = "io.TextIOWrapper() names no encoding"
     elif name in SUBPROCESS_TEXT_CALLS:
         keywords = {keyword.arg: keyword.value for keyword in call.keywords}
-        text = any(
-            _is_true(keywords[flag]) for flag in ("text", "universal_newlines") if flag in keywords
-        )
-        if text and "encoding" not in keywords:
+        # An `errors` argument puts the call in text mode too.
+        flags = ("text", "universal_newlines", "errors")
+        text = any(_is_true(keywords[flag]) for flag in flags if flag in keywords)
+        if text and _missing(call, ("encoding",)):
             problem = f"{name}() in text mode names no encoding"
     return problem
 
@@ -169,6 +176,9 @@ def test_product_text_io_names_encoding_and_newline() -> None:
         "from subprocess import check_output\ncheck_output(command, universal_newlines=True)",
         'io.open(p, "r+", newline="")',
         'open(p, "w", **options)',
+        "from m import GUIDE\nGUIDE.read_text()",
+        "p.read_text(encoding=None)",
+        'subprocess.run(command, errors="replace")',
     ],
 )
 def test_flags_each_unsafe_form(source: str) -> None:

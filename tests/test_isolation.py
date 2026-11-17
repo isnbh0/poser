@@ -52,6 +52,10 @@ def fail(job):
     raise RuntimeError("the target broke")
 
 
+def fail_in_text(job):
+    raise RuntimeError("the target broke: caf\\u00e9 \\ud55c\\uae00")
+
+
 def sleep(job):
     time.sleep(job["seconds"])
     return {"slept": job["seconds"]}
@@ -137,7 +141,7 @@ def workers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> ModuleType:
     """Import a worker module from a folder on both the test's and the child's path."""
     folder = tmp_path / "workers"
     folder.mkdir()
-    (folder / "isolation_workers.py").write_text(WORKERS)
+    (folder / "isolation_workers.py").write_text(WORKERS, encoding="utf-8")
     monkeypatch.syspath_prepend(str(folder))
     monkeypatch.setenv("PYTHONPATH", str(folder))
     monkeypatch.delitem(sys.modules, "isolation_workers", raising=False)
@@ -157,6 +161,18 @@ def test_run_isolated_returns_the_result_of_the_job(workers: ModuleType) -> None
 def test_run_isolated_raises_the_target_s_exception_as_a_crash(workers: ModuleType) -> None:
     with pytest.raises(WorkerCrashedError, match=r"^exit code 1: .*the target broke$"):
         run_isolated(target(workers, "fail"), {}, 30)
+
+
+@pytest.mark.parametrize("encoding", [None, "latin-1", "utf-8"])
+def test_a_crash_s_message_reads_as_the_worker_wrote_it(
+    workers: ModuleType, monkeypatch: pytest.MonkeyPatch, encoding: str | None
+) -> None:
+    if encoding is None:
+        monkeypatch.delenv("PYTHONIOENCODING", raising=False)
+    else:
+        monkeypatch.setenv("PYTHONIOENCODING", encoding)
+    with pytest.raises(WorkerCrashedError, match=r"the target broke: café 한글$"):
+        run_isolated(target(workers, "fail_in_text"), {}, 30)
 
 
 def test_run_isolated_reports_an_exit_without_output(workers: ModuleType) -> None:
