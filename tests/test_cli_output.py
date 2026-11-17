@@ -50,4 +50,5 @@ def test_read_song_prints_utf8_under_a_narrow_code_page(tmp_path: Path) -> None:
         env={**os.environ, "PYTHONIOENCODING": "ascii"},
     )
     assert result.returncode == 0, result.stderr.decode(errors="replace")
-    assert f"beats 0-1: {MARK}\n" in result.stdout.decode("utf-8")
+    # Printed lines end in the platform's newline, CRLF on Windows.
+    assert f"  beats 0-1: {MARK}" in result.stdout.decode("utf-8").splitlines()
