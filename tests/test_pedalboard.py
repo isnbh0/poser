@@ -1289,6 +1289,20 @@ def test_loadable_path_names_a_windows_bundle_s_binary(
     assert loadable_path(str(binary)) == str(binary)
 
 
+@pytest.mark.parametrize("platform", ["win32", "darwin", "linux"])
+def test_loadable_path_returns_any_other_path_exactly_as_given(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, platform: str
+) -> None:
+    # `Path` would drop the doubled separator, as it turns `/` into `\\` on Windows.
+    binary = write_pe(tmp_path / "Plugins" / "Synth.vst3")
+    given = f"{tmp_path}{os.sep}Plugins{os.sep}{os.sep}Synth.vst3"
+    monkeypatch.setattr(sys, "platform", platform)
+
+    assert loadable_path(given) == given
+    assert loadable_path("/Missing.vst3") == "/Missing.vst3"
+    assert Path(given) == binary
+
+
 def test_loadable_path_refuses_a_windows_bundle_without_a_binary(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

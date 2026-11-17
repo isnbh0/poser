@@ -48,9 +48,10 @@ advice when `[guidance] advice` is enabled.
 ## Checking
 
 - `make check` runs format, lint, types, and the tests that need no plugins.
-- CI's `windows` job runs a required selection of tests on Windows, listed in
-  `.github/workflows/check.yml`, and reports the rest of the plugin-free suite without failing. A
-  change that makes more tests pass on Windows adds them to that selection.
+- CI's `windows` job requires the plugin-free suite to pass on Windows, except the test files in
+  `WINDOWS_PENDING` in `.github/workflows/check.yml`. It reports their failures and fails when a
+  listed file has no failing test, so a change that makes a pending file pass removes it from the
+  list. The job also loads and renders Surge XT from its pinned portable build.
 - `make test-real` runs the `real_plugins` tests, which load the instruments in a root
   `poser.toml`, and the `real_scsynth` tests. The test harness finds `scsynth` through
   `SCSYNTH_PATH`, the SuperCollider app bundle, or `PATH`; the adapter itself runs only its

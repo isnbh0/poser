@@ -47,8 +47,11 @@ def pe_version(binary: Path) -> str | None:
     Reads bytes only, so no code in the file runs. The fixed file version wins, and the fixed
     product version stands in when the file version is 0.0.0.0. The format is `a.b.c.d`, so a
     build-only update changes it. A missing, unreadable, truncated, or malformed file gives None,
-    so a version never stops a sound from resolving.
+    so a version never stops a sound from resolving. A path that names no regular file, such as a
+    folder, a FIFO, a device, or a path with a NUL, gives None unopened, so reading never blocks.
     """
+    if not binary.is_file():
+        return None
     try:
         with binary.open("rb") as file:
             return _read_version(file)

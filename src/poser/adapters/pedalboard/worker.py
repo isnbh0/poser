@@ -128,14 +128,14 @@ def loadable_path(path: str) -> str:
     """Return the file Pedalboard loads for the configured `path`.
 
     On Windows, Pedalboard loads a VST3 only from its binary, so a bundle directory resolves to
-    `Contents\\x86_64-win\\<bundle name>`, and a file stays as it is. Elsewhere, Pedalboard loads a
-    macOS bundle directly and maps a Linux bundle itself, so the path stays as it is. Raises
+    `Contents\\x86_64-win\\<bundle name>`. Any other path, on any platform, comes back exactly as
+    given: Pedalboard loads a macOS bundle directly and maps a Linux bundle itself. Raises
     FileNotFoundError for a Windows bundle without an x64 binary.
     """
-    if sys.platform != "win32":
+    if sys.platform != "win32" or not Path(path).is_dir():
         return path
     binary = windows_binary(Path(path))
-    if binary != Path(path) and not binary.is_file():
+    if not binary.is_file():
         raise FileNotFoundError(f"{path} has no Windows x64 binary at {binary}")
     return str(binary)
 

@@ -43,10 +43,18 @@ jobs:
           "$RUNNER_TEMP/poser-venv/bin/python" -I "$GITHUB_WORKSPACE/scripts/check_distribution.py"
 
   windows:
-    name: Windows (file system, isolation, and Pedalboard)
+    name: Windows (plugin-free suite and Surge XT)
     runs-on: windows-latest
     env:
       UV_LOCKED: "1"
+      # The test files that still fail on Windows. Every other plugin-free test must pass there,
+      # and the last step fails when a listed file has no failing test, so this list is exactly
+      # the files with a Windows failure.
+      WINDOWS_PENDING: >-
+        tests/test_cli.py tests/test_delivery.py tests/test_guidance_modes.py tests/test_guide.py
+        tests/test_init_workspace.py tests/test_reference_setups.py tests/test_release.py
+        tests/test_render_dirs.py tests/test_scsynth.py tests/test_song_formats.py
+        tests/test_wav.py tests/test_workspace.py tests/test_workspace_init_transaction.py
     steps:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v10.3.3
@@ -55,13 +63,11 @@ jobs:
       - run: uv sync --locked
       - name: Show which interpreter the tests start
         run: uv run python -c "import sys; print(sys.executable); print(sys._base_executable)"
-      - name: Imports, file system, isolation, and Pedalboard (required)
-        run: >-
-          uv run pytest -q -rs tests/test_imports.py tests/test_unsupported_platform.py
-          tests/test_filesystem.py tests/test_filesystem_selection.py
-          tests/test_filesystem_windows.py tests/test_filestore.py tests/test_isolation.py
-          tests/test_boundaries.py tests/test_plugin_files.py tests/test_pedalboard.py
-          tests/test_pedalboard_sources.py
+      - name: Plugin-free suite except the pending files (required)
+        timeout-minutes: 30
+        run: |
+          $ignored = -split $env:WINDOWS_PENDING | ForEach-Object { "--ignore=$_" }
+          uv run pytest -q -rs @ignored
       - name: Type-check the Windows backends (required)
         if: ${{ !cancelled() }}
         run: >-
@@ -90,8 +96,12 @@ jobs:
           $bundle = Join-Path $root "Surge XT.vst3"
           $presets = Join-Path $root "SurgeXTData\patches_factory"
           $config = Get-Content -Raw src/poser/reference_setups/surge/poser.toml
-          $config = $config -replace '(?m)^path = [^\r\n]*', "path = '$bundle'"
-          $config = $config -replace '(?m)^presets = [^\r\n]*', "presets = '$presets'"
+          foreach ($line in '(?m)^path = [^\r\n]*', '(?m)^presets = [^\r\n]*') {
+            if (([regex]::Matches($config, $line)).Count -ne 1) { throw "no single match: $line" }
+          }
+          # Script block replacements, so a `$` in a path is no substitution.
+          $config = $config -replace '(?m)^path = [^\r\n]*', { "path = '$bundle'" }
+          $config = $config -replace '(?m)^presets = [^\r\n]*', { "presets = '$presets'" }
           Set-Content -NoNewline -Encoding utf8 -Path poser.toml -Value $config
           Get-Content poser.toml
           $code = "import sys; from pathlib import Path; " +
@@ -105,8 +115,19 @@ jobs:
             "tests/test_pedalboard_real.py::test_a_render_has_exactly_the_performance_s_frames" `
             "tests/test_pedalboard_real.py::test_a_windows_plugin_loads_from_its_binary_as_from_its_bundle"
           if ($LASTEXITCODE -ne 0) { throw "the real-plugin tests failed" }
-      - name: Plugin-free suite (inventory, not yet required on Windows)
+      - name: Pending files, each still failing (inventory, required)
         if: ${{ !cancelled() }}
-        continue-on-error: true
         timeout-minutes: 30
-        run: uv run pytest -q --tb=short -rfE
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $false
+          $passing = @()
+          foreach ($file in -split $env:WINDOWS_PENDING) {
+            uv run pytest -q --tb=short -rfE $file
+            switch ($LASTEXITCODE) {
+              0 { $passing += $file }  # Every test passed or skipped.
+              1 { }  # Some test failed: still pending.
+              default { throw "pytest could not run $file (exit code $LASTEXITCODE)" }
+            }
+          }
+          if ($passing) { throw "pending files that pass; remove them from WINDOWS_PENDING: $passing" }
+          exit 0  # The last pytest exited 1, which the runner would otherwise report.

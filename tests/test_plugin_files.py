@@ -1,5 +1,9 @@
 """Where a plugin's Windows binary lives, and its version, read from the binary's bytes."""
 
+import os
+import struct
+import sys
+import threading
 from collections.abc import Callable
 from pathlib import Path
 
@@ -42,6 +46,23 @@ def test_pe_version_is_none_for_a_file_that_is_no_pe_image(tmp_path: Path) -> No
     assert pe_version(tmp_path / "Text.vst3") is None
     (tmp_path / "Folder.vst3").mkdir()
     assert pe_version(tmp_path / "Folder.vst3") is None
+    assert pe_version(tmp_path / "Nul\0.vst3") is None
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Windows has no FIFOs in the file system")
+def test_pe_version_never_opens_a_fifo(tmp_path: Path) -> None:
+    fifo = tmp_path / "Plugin.vst3"
+    os.mkfifo(fifo)
+    versions: list[str | None] = []
+    reader = threading.Thread(target=lambda: versions.append(pe_version(fifo)), daemon=True)
+    reader.start()
+    reader.join(timeout=5)
+    blocked = reader.is_alive()
+    if blocked:  # Opening the FIFO waits for a writer, so release the reader.
+        os.close(os.open(fifo, os.O_WRONLY | os.O_NONBLOCK))
+        reader.join()
+    assert not blocked
+    assert versions == [None]
 
 
 MALFORMED: dict[str, Callable[[Path], Path]] = {
@@ -57,6 +78,32 @@ def test_pe_version_is_none_without_a_readable_version_resource(
 ) -> None:
     assert pe_version(write_pe(tmp_path / "Plugin.vst3")) == "1.3.4.0"
     assert pe_version(write_malformed(tmp_path / "Plugin.vst3")) is None
+
+
+RESOURCES = 0x200  # Where write_pe puts the resource section.
+# Hostile values at fields of write_pe's image, each as (offset, format, written value, value).
+HOSTILE: dict[str, tuple[int, str, int, int]] = {
+    "pe-header-past-the-end": (0x3C, "<I", 0x40, 0xFFFFFFFF),
+    "most-sections": (0x46, "<H", 1, 0xFFFF),
+    "longest-optional-header": (0x54, "<H", 240, 0xFFFF),
+    "most-type-entries": (RESOURCES + 0x0E, "<H", 1, 0xFFFF),
+    "type-named-like-rt-version": (RESOURCES + 0x10, "<I", 16, 0x80000010),
+    "name-entry-loops-to-the-root": (RESOURCES + 0x2C, "<I", 0x80000030, 0x80000000),
+    "language-entry-is-a-directory": (RESOURCES + 0x44, "<I", 0x48, 0x80000048),
+    "largest-version-data": (RESOURCES + 0x4C, "<I", 92, 0xFFFFFFFF),
+}
+
+
+@pytest.mark.parametrize(("offset", "layout", "written", "hostile"), HOSTILE.values(), ids=HOSTILE)
+def test_pe_version_is_none_for_a_hostile_header_value(
+    tmp_path: Path, offset: int, layout: str, written: int, hostile: int
+) -> None:
+    binary = write_pe(tmp_path / "Plugin.vst3")
+    data = bytearray(binary.read_bytes())
+    assert struct.unpack_from(layout, data, offset) == (written,)
+    struct.pack_into(layout, data, offset, hostile)
+    binary.write_bytes(data)
+    assert pe_version(binary) is None
 
 
 def test_pe_version_is_none_for_a_truncated_image(tmp_path: Path) -> None:
