@@ -261,13 +261,13 @@ def test_an_unsupported_platform_exits_2_naming_it(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     write_song(workspace.root / SONG, ("lead", "synth"))
-    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(sys, "platform", "freebsd14")
 
     assert render.main([SONG]) == EXIT_BAD_CONFIG
 
     diagnostic = capsys.readouterr().err
     assert diagnostic.startswith("render-song: ")
-    assert "win32" in diagnostic
+    assert "freebsd14" in diagnostic
     assert "docs/setup.md#prerequisites" in diagnostic
     assert "poser.toml:" not in diagnostic
     assert not workspace.renders.exists()

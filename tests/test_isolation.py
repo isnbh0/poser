@@ -14,8 +14,14 @@ from typing import NoReturn, cast
 
 import pytest
 
-from poser.adapters.isolation import WorkerCrashedError, WorkerTimedOutError, run_isolated
+from poser.adapters.isolation import (
+    WorkerCrashedError,
+    WorkerTimedOutError,
+    check_platform,
+    run_isolated,
+)
 from poser.core.jsonvalue import JsonValue
+from poser.core.ports import UnsupportedPlatformError
 
 WORKERS = """
 import ctypes
@@ -246,3 +252,23 @@ def test_the_worker_dies_with_the_process_that_started_it(
         for pid in (worker_pid, grandchild):
             with contextlib.suppress(ProcessLookupError):
                 os.kill(pid, signal.SIGKILL)
+
+
+@pytest.mark.parametrize("platform", ["win32", "freebsd14"])
+def test_check_platform_refuses_platforms_without_isolation(
+    monkeypatch: pytest.MonkeyPatch, platform: str
+) -> None:
+    monkeypatch.setattr(sys, "platform", platform)
+    with pytest.raises(UnsupportedPlatformError) as raised:
+        check_platform()
+    message = str(raised.value)
+    for part in (f"({platform})", "worker isolation", "docs/setup.md#prerequisites"):
+        assert part in message, part
+
+
+@pytest.mark.parametrize("platform", ["darwin", "linux"])
+def test_check_platform_accepts_macos_and_linux(
+    monkeypatch: pytest.MonkeyPatch, platform: str
+) -> None:
+    monkeypatch.setattr(sys, "platform", platform)
+    check_platform()

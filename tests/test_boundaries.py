@@ -33,6 +33,7 @@ COMPOSE = POSER / "compose.py"
 PLUGIN_LOADERS = {"poser/adapters/pedalboard/worker.py"}
 FCNTL_USERS = {"poser/adapters/filesystem_posix.py"}
 CTYPES_USERS = {"poser/adapters/filesystem_posix.py"}
+WINDOWS_API_USERS = {"poser/adapters/filesystem_windows.py"}
 LIBRARY_HOMES = {
     "pyloudnorm": {"poser/adapters/measuring.py"},
     "scipy": {"poser/adapters/measuring.py"},
@@ -398,8 +399,7 @@ FACILITY_USERS = (
 
 
 def test_the_file_system_facility_s_users_import_without_fcntl() -> None:
-    """On Windows, where `fcntl` does not exist, they import, and building them names the
-    platform instead of failing to import."""
+    """Where `fcntl` does not exist, as on Windows, they still import."""
     statements = "".join(f"import {module}\n" for module in FACILITY_USERS)
     script = f"import sys\nsys.modules['fcntl'] = None\n{statements}"
     result = subprocess.run(
@@ -411,6 +411,11 @@ def test_the_file_system_facility_s_users_import_without_fcntl() -> None:
 def test_only_the_posix_file_system_imports_ctypes() -> None:
     found = files_importing(lambda name: name.split(".", 1)[0] == "ctypes")
     assert found == CTYPES_USERS
+
+
+def test_only_the_windows_file_system_imports_windows_apis() -> None:
+    found = files_importing(lambda name: name.split(".", 1)[0] in {"msvcrt", "_winapi"})
+    assert found == WINDOWS_API_USERS
 
 
 def test_only_the_wav_adapter_reads_audio_files() -> None:

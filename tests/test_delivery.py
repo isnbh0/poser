@@ -185,8 +185,8 @@ def test_the_writer_refuses_a_platform_without_a_file_system_backend(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     assert isinstance(delivery_adapter.create(), FileDeliveryWriter)
-    monkeypatch.setattr(sys, "platform", "win32")
-    with pytest.raises(UnsupportedPlatformError, match="win32"):
+    monkeypatch.setattr(sys, "platform", "freebsd14")
+    with pytest.raises(UnsupportedPlatformError, match="freebsd14"):
         delivery_adapter.create()
 
 

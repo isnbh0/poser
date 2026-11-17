@@ -191,11 +191,11 @@ def test_an_unsupported_platform_is_named_and_writes_nothing(
     target = tmp_path / "studio"
     presets = tmp_path / "presets"
     presets.mkdir()
-    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(sys, "platform", "freebsd14")
     assert init_workspace.main([*args(target, plugin), "--presets-path", str(presets)]) == 2
     diagnostic = capsys.readouterr().err
     assert diagnostic.startswith("init-workspace: ")
-    assert "win32" in diagnostic
+    assert "freebsd14" in diagnostic
     assert "docs/setup.md#prerequisites" in diagnostic
     assert "poser.toml:" not in diagnostic
     for name in ("AGENTS.md", "POSER.md", "CLAUDE.md", "poser.toml", "songs/demo.yaml"):

@@ -16,7 +16,12 @@ from pathlib import Path
 from typing import cast
 
 from poser.adapters.filesystem import FileSystem, native
-from poser.adapters.isolation import WorkerCrashedError, WorkerTimedOutError, run_isolated
+from poser.adapters.isolation import (
+    WorkerCrashedError,
+    WorkerTimedOutError,
+    check_platform,
+    run_isolated,
+)
 from poser.adapters.loading import load_object
 from poser.adapters.pedalboard.config import (
     LOAD_SETTLE_S,
@@ -528,8 +533,10 @@ def create(
     """The factory for `pedalboard`. Relative paths in the options resolve against the workspace
     root, and saved sounds live under the command's sounds directory.
 
-    Raises UnsupportedPlatformError on a platform the file-system facility has no backend for.
+    Raises UnsupportedPlatformError on a platform without worker isolation or a file-system
+    backend.
     """
+    check_platform()
     fs = native()
     config = from_options(name, options, context.root)
     owner = f"instrument {config.name!r}"
@@ -545,6 +552,10 @@ def create(
 def create_effect(
     name: Identifier, options: Mapping[str, JsonValue], context: AdapterContext
 ) -> PedalboardEffect:
-    """The factory for an effect recipe. A relative `path` resolves against the workspace root."""
+    """The factory for an effect recipe. A relative `path` resolves against the workspace root.
+
+    Raises UnsupportedPlatformError on a platform without worker isolation.
+    """
+    check_platform()
     config = effect_from_options(name, options, context.root)
     return PedalboardEffect(config)

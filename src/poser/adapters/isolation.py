@@ -2,7 +2,9 @@
 
 Process isolation protects poser from plugin code, which only adapters run. The child process
 inherits the environment but not the changes the parent made to `sys.path` at run time, so a
-target must live in an installed module or in one on `PYTHONPATH`.
+target must live in an installed module or in one on `PYTHONPATH`. Isolation uses POSIX process
+groups and descriptor passing, so it runs on macOS and Linux only; `check_platform` names other
+platforms.
 """
 
 import contextlib
@@ -17,7 +19,9 @@ from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import TypeGuard
 
+from poser.adapters.filesystem import PREREQUISITES_URL
 from poser.core.jsonvalue import JsonValue, is_json_value, json_object
+from poser.core.ports import UnsupportedPlatformError
 
 CHILD_CODE = "from poser.adapters.isolation import child_main; child_main()"
 
@@ -40,6 +44,21 @@ def job_fields(value: object, keys: set[str], what: str) -> Mapping[str, object]
 
 def optional_str(value: object) -> TypeGuard[str | None]:
     return value is None or isinstance(value, str)
+
+
+def check_platform() -> None:
+    """Raise UnsupportedPlatformError unless the running platform has worker isolation.
+
+    An adapter that runs work through `run_isolated` calls this when built, so the platform gate
+    refuses it at build instead of at its first render. Reads only `sys.platform`.
+    """
+    platform = sys.platform
+    if platform == "darwin" or platform.startswith("linux"):
+        return
+    raise UnsupportedPlatformError(
+        f"poser's plugin worker isolation does not cover this platform ({platform}); it covers "
+        f"macOS and Linux. See {PREREQUISITES_URL}"
+    )
 
 
 class WorkerTimedOutError(Exception):

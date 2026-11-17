@@ -1218,14 +1218,24 @@ def test_create_scans_the_suffix_of_a_format_named_by_import_path(
     assert not (tmp_path / "renders").exists()
 
 
-def test_create_refuses_a_platform_without_a_file_system_backend(
+def test_create_refuses_a_platform_without_worker_isolation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     assert isinstance(create_serum(tmp_path, ["fxp", "saved"]), PedalboardInstrument)
     monkeypatch.setattr(sys, "platform", "win32")
 
-    with pytest.raises(UnsupportedPlatformError, match="win32"):
+    with pytest.raises(UnsupportedPlatformError, match=r"worker isolation .*\(win32\)"):
         create_serum(tmp_path, ["fxp", "saved"])
+
+
+def test_create_effect_refuses_a_platform_without_worker_isolation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    assert isinstance(make_effect(tmp_path), PedalboardEffect)
+    monkeypatch.setattr(sys, "platform", "win32")
+
+    with pytest.raises(UnsupportedPlatformError, match=r"worker isolation .*\(win32\)"):
+        make_effect(tmp_path)
 
 
 @pytest.mark.parametrize(

@@ -77,7 +77,11 @@ def native() -> FileSystem:
         from poser.adapters.filesystem_posix import PosixFileSystem
 
         return PosixFileSystem()
+    if platform == "win32":
+        from poser.adapters.filesystem_windows import WindowsFileSystem
+
+        return WindowsFileSystem()
     raise UnsupportedPlatformError(
         f"poser's file-system support does not cover this platform ({platform}); it covers "
-        f"macOS and Linux. See {PREREQUISITES_URL}"
+        f"macOS, Linux, and Windows. See {PREREQUISITES_URL}"
     )

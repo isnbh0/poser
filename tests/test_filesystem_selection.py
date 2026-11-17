@@ -8,7 +8,7 @@ from poser.adapters.filesystem import native
 from poser.core.ports import ConfigError, UnsupportedPlatformError
 
 
-@pytest.mark.parametrize("platform", ["win32", "freebsd14"])
+@pytest.mark.parametrize("platform", ["freebsd14", "cygwin"])
 def test_a_platform_without_a_backend_is_refused_by_name(
     monkeypatch: pytest.MonkeyPatch, platform: str
 ) -> None:
@@ -17,7 +17,7 @@ def test_a_platform_without_a_backend_is_refused_by_name(
         native()
     assert isinstance(raised.value, ConfigError)
     message = str(raised.value)
-    for part in (platform, "macOS", "Linux", "docs/setup.md#prerequisites"):
+    for part in (platform, "macOS", "Linux", "Windows", "docs/setup.md#prerequisites"):
         assert part in message, part
 
 
@@ -30,3 +30,11 @@ def test_macos_and_linux_get_the_posix_backend(
 
     monkeypatch.setattr(sys, "platform", platform)
     assert isinstance(native(), PosixFileSystem)
+
+
+def test_windows_gets_the_windows_backend(monkeypatch: pytest.MonkeyPatch) -> None:
+    pytest.importorskip("msvcrt")
+    from poser.adapters.filesystem_windows import WindowsFileSystem
+
+    monkeypatch.setattr(sys, "platform", "win32")
+    assert isinstance(native(), WindowsFileSystem)

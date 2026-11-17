@@ -106,8 +106,8 @@ See the [export contract](#export-contract) for exit codes, manifest fields, and
 
 ## Recover from a failure
 
-If a command reports that poser's file-system support does not cover your platform, it cannot run
-there yet; see [Prerequisites](#prerequisites).
+If a command reports that poser's file-system support or plugin worker isolation does not cover
+your platform, it cannot run there yet; see [Prerequisites](#prerequisites).
 
 If initialization reports a missing plugin or invalid path, locate or install Surge, or specify
 its existing location as described in the
