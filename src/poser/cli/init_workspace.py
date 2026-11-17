@@ -11,6 +11,7 @@ from poser.cli.common import command
 from poser.cli.guide import GUIDE_NAME, workspace_guide
 from poser.cli.workspace import CONFIG_NAME, Workspace
 from poser.compose import Composition, parse_config, workspace_initializer
+from poser.core.paths import is_link
 from poser.core.ports import AdapterContext, ConfigError, WorkspaceInitializer
 from poser.reference_setups.dispatch import SETUPS, prepare
 
@@ -35,13 +36,13 @@ def _preflight(
     paths = [directory / target for target in targets]
     parents = {parent for path in paths for parent in path.parents}
     for parent in sorted(parents):
-        if parent.is_symlink() and not parent.exists():
-            raise ConfigError(f"{parent} is a dangling symlink")
+        if is_link(parent) and not parent.exists():
+            raise ConfigError(f"{parent} is a dangling link")
         if parent.exists() and not parent.is_dir():
             raise ConfigError(f"{parent} is not a directory")
     ignore = directory / ".gitignore"
-    if ignore.is_symlink():
-        raise ConfigError(f"{ignore} is a symlink; refusing to merge")
+    if is_link(ignore):
+        raise ConfigError(f"{ignore} is a link; refusing to merge")
     if ignore.exists() and not ignore.is_file():
         raise ConfigError(f"{ignore} is not a regular file")
     if ignore.exists() and ignore.stat().st_nlink > 1:

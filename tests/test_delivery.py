@@ -23,6 +23,7 @@ from fakes import (
     FakeVisualizer,
     NpyAudioFiles,
 )
+from links import LINK_KINDS, make_dangling_link, make_link
 from workspaces import CommandWorkspace, make_workspace, write_script_song, write_song
 
 from poser.adapters import delivery as delivery_adapter
@@ -38,6 +39,7 @@ from poser.core.delivery import (
     AnalysisFailed,
     DeliveryIOFailed,
     DeliveryResult,
+    DestinationError,
     DestinationRefused,
     ExecutionFailed,
     InputsChanged,
@@ -735,14 +737,28 @@ def test_confinement_method_failure_is_exit_two_before_code(
     assert not marker.exists()
 
 
-def test_filestore_escape_is_not_a_confinement_promise(harness: Harness) -> None:
+@pytest.mark.parametrize("kind", LINK_KINDS)
+def test_a_render_store_link_protects_where_it_leads(harness: Harness, kind: str) -> None:
     outside = harness.root / "outside"
     outside.mkdir()
     renders = harness.root / "renders"
     renders.mkdir()
-    (renders / "escaped").symlink_to(outside, target_is_directory=True)
-    with pytest.raises(ValueError, match="symlink escapes"):
+    make_link(kind, renders / "escaped", outside)
+    harness.destination = outside / "bundle"
+    with pytest.raises(DestinationError, match="overlaps protected render root"):
         harness.run()
+    assert not harness.instrument.renders
+    harness.destination = harness.root / "deliveries" / "first-song"
+    assert isinstance(harness.run(), PublishedDelivery)
+
+
+@pytest.mark.parametrize("kind", LINK_KINDS)
+def test_a_dangling_link_at_the_destination_is_refused(harness: Harness, kind: str) -> None:
+    harness.destination.parent.mkdir(parents=True)
+    make_dangling_link(kind, harness.destination)
+    with pytest.raises(DestinationError, match="destination already exists"):
+        harness.run()
+    assert not harness.instrument.renders
 
 
 @pytest.mark.parametrize("role", ["source", "configuration"])

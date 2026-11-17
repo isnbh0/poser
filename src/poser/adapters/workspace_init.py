@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from poser.core.names import is_inner_relative
+from poser.core.paths import is_link
 from poser.core.ports import ConfigError
 
 TEMP_PREFIX = ".poser-tmp-"
@@ -165,8 +166,8 @@ class WorkspaceInitializer:
         for parent in path.parents:
             if parent == self.directory:
                 break
-            if parent.is_symlink():
-                raise ConfigError(f"{parent}: symlink parent")
+            if is_link(parent):
+                raise ConfigError(f"{parent}: linked parent")
         return path
 
     def _temps(self, names: Iterable[str]) -> list[Path]:
@@ -174,7 +175,7 @@ class WorkspaceInitializer:
         return [
             temp
             for parent in sorted(parents)
-            if parent.is_dir() and not parent.is_symlink()
+            if parent.is_dir() and not is_link(parent)
             for temp in sorted(parent.glob(TEMP_PREFIX + "*"))
             if stat.S_ISREG(temp.lstat().st_mode)
         ]
@@ -185,7 +186,7 @@ class WorkspaceInitializer:
             if name == IGNORE:
                 continue
             path = self._target(name)
-            if path.exists() or path.is_symlink():
+            if path.exists(follow_symlinks=False):
                 if not _leftover(path, data):
                     raise ConfigError(f"{path} exists")
                 found.append(name)
@@ -199,7 +200,7 @@ class WorkspaceInitializer:
             if name == IGNORE:
                 continue
             path = self._target(name)
-            if not path.exists() and not path.is_symlink():
+            if not path.exists(follow_symlinks=False):
                 continue
             if _leftover(path, data):
                 path.unlink()

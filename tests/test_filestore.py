@@ -8,10 +8,12 @@ from pathlib import Path
 
 import pytest
 from contracts import check_render_store_contract
+from links import LINK_KINDS, make_link
 
 from poser.adapters.filestore import LOCK_NAME, SONGS_LOCK_NAME, FileRenderStore, FileSongStore
 from poser.adapters.filesystem import native
 from poser.core.names import Identifier, SongId, Suffix
+from poser.core.paths import is_link
 from poser.core.ports import SongBusyError, StemMeta
 from poser.core.statuses import StemStatus
 
@@ -69,11 +71,6 @@ def files_under(directory: Path) -> set[str]:
         elif path.is_file():
             found.add(path.name)
     return found
-
-
-def is_link(path: Path) -> bool:
-    """Whether `path` is a link, as the platform's file-system backend sees it."""
-    return native().is_link(path)
 
 
 def leads_to(link: Path, record: Path) -> bool:
@@ -268,6 +265,36 @@ def test_latest_holds_a_relative_target_that_survives_moving_the_studio(tmp_path
     assert (latest / "report.json").read_text(encoding="utf-8") == "1"
 
 
+def test_a_moved_studio_s_latest_leads_inside_a_protected_root(tmp_path: Path) -> None:
+    """On Windows, `latest` still leads to the old location, which is protected; elsewhere it
+    moved with the studio."""
+    song = renders(tmp_path / "before").song(SongId("songs/a.yaml"))
+    with song.write_record("first", YAML, latest=True) as record:
+        record.path("report.json").write_text("1", encoding="utf-8", newline="\n")
+    (tmp_path / "before").rename(tmp_path / "after")
+    roots = renders(tmp_path / "after").protected_roots()
+    latest = tmp_path / "after" / "renders" / "songs" / "a.yaml" / "latest"
+    assert roots[0] == (tmp_path / "after" / "renders").resolve()
+    assert any(latest.resolve().is_relative_to(root) for root in roots)
+    assert all(root.is_absolute() and root == root.resolve() for root in roots)
+
+
+@pytest.mark.parametrize("kind", LINK_KINDS)
+def test_protected_roots_name_every_place_a_link_leads(tmp_path: Path, kind: str) -> None:
+    root = tmp_path / "renders"
+    (root / "songs" / "inner").mkdir(parents=True)
+    make_link(kind, root / "songs" / "alias", root / "songs" / "inner")
+    first, second = tmp_path / "first", tmp_path / "second"
+    first.mkdir()
+    second.mkdir()
+    make_link(kind, root / "songs" / "escape", first)
+    make_link(kind, first / "further", second)
+    make_link(kind, second / "back", first)
+    roots = renders(tmp_path).protected_roots()
+    assert roots == (root.resolve(), first.resolve(), second.resolve())
+    assert all(path == path.resolve() for path in roots)
+
+
 @pytest.mark.parametrize("complete", [False, True])
 def test_latest_is_cleared_before_a_record_is_published(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, complete: bool
@@ -389,9 +416,6 @@ class LockRecorder:
 
     def make_link(self, link: Path, target: str) -> None:
         self._native.make_link(link, target)
-
-    def is_link(self, path: Path) -> bool:
-        return self._native.is_link(path)
 
     def remove_link(self, path: Path) -> None:
         self._native.remove_link(path)

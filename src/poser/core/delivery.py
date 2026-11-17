@@ -55,7 +55,7 @@ class InputSnapshot:
     def capture(cls, path: Path, *, optional: bool = False) -> "InputSnapshot":
         try:
             if not path.is_file():
-                if optional and not path.exists() and not path.is_symlink():
+                if optional and not path.exists(follow_symlinks=False):
                     return cls(path, None)
                 raise ValueError(f"not a regular input file: {path}")
             return cls(path, path.read_bytes())
@@ -120,7 +120,7 @@ def capture_inputs(
     """Validate all argument/confinement boundaries before any song code is evaluated."""
     source_root = source_root.resolve()
     configuration_root = configuration.path.parent.resolve()
-    if destination.exists() or destination.is_symlink():
+    if destination.exists(follow_symlinks=False):
         raise DestinationError(f"destination already exists: {destination}")
     requested_destination = destination.absolute()
     destination = destination.resolve()

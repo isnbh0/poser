@@ -15,6 +15,8 @@ from collections.abc import Generator
 from contextlib import contextmanager, suppress
 from pathlib import Path
 
+from poser.core.paths import is_link
+
 assert sys.platform == "win32"  # noqa: S101 - narrows the platform for type checkers.
 
 LOCK_POLL_S = 0.05
@@ -31,9 +33,9 @@ class WindowsFileSystem:
       entries.
     - Waiting for a lock polls, because the C runtime's blocking lock gives up after ten tries.
     - Links are directory junctions, which need no privilege but hold absolute targets. After a
-      studio moves or is copied, each song's `latest` leads to the old location until that song
-      renders again. Until then, `FileRenderStore.protected_roots` refuses the junction as a link
-      that escapes the store, so `export-song` refuses every song in the studio.
+      studio moves, or is copied by a tool that keeps junctions, each song's `latest` leads to
+      the old location until that song renders or analyzes again, and
+      `FileRenderStore.protected_roots` protects the old location as one the store reaches.
     - A process killed while creating a junction can leave an empty directory at the link's path.
     """
 
@@ -93,13 +95,10 @@ class WindowsFileSystem:
         except FileExistsError:
             raise
         except OSError:
-            if link.is_dir() and not self.is_link(link):
+            if link.is_dir() and not is_link(link):
                 with suppress(OSError):
                     link.rmdir()
             raise
-
-    def is_link(self, path: Path) -> bool:
-        return path.is_symlink() or path.is_junction()
 
     def remove_link(self, path: Path) -> None:
         """Remove a junction or a directory symbolic link with `rmdir`, which Windows documents

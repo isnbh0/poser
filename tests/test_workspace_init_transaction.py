@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 from helpers import assert_mode
+from links import LINK_KINDS, make_link
 
 from poser.adapters.workspace_init import WorkspaceInitializer
 from poser.core.ports import ConfigError
@@ -187,13 +188,14 @@ def test_rollback_keeps_a_target_another_run_linked(
     assert tree(tmp_path) == {"POSER.md": b"guide\n"}
 
 
-def test_symlink_parent_refused(tmp_path: Path) -> None:
+@pytest.mark.parametrize("kind", LINK_KINDS)
+def test_linked_parent_refused(tmp_path: Path, kind: str) -> None:
     elsewhere = tmp_path / "elsewhere"
     elsewhere.mkdir()
     studio = tmp_path / "studio"
     studio.mkdir()
-    (studio / "songs").symlink_to(elsewhere)
-    with pytest.raises(ConfigError, match="symlink parent"):
+    make_link(kind, studio / "songs", elsewhere)
+    with pytest.raises(ConfigError, match="linked parent"):
         WorkspaceInitializer(studio).publish(OUTPUTS, expected_ignore=None)
     assert list(elsewhere.iterdir()) == []
     assert sorted(p.name for p in studio.iterdir()) == ["songs"]

@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 
 from poser.adapters.filesystem import FileSystem, native
+from poser.core.paths import is_link
 from poser.core.ports import UnsupportedPlatformError
 
 try:
@@ -34,7 +35,7 @@ def snapshot(fs: FileSystem, root: Path) -> dict[str, tuple[str, str]]:
     resolved target. Links are not followed."""
     found: dict[str, tuple[str, str]] = {}
     for path in sorted(root.iterdir()):
-        if fs.is_link(path):
+        if is_link(path):
             found[path.name] = ("link", str(path.resolve()))
         elif path.is_dir():
             found[path.name] = ("dir", "")
@@ -168,7 +169,7 @@ def test_make_link_leads_to_its_target_and_creates_nothing_else(
     before = {path.name for path in tmp_path.iterdir()}
     fs.make_link(link, "history/a")
     assert {path.name for path in tmp_path.iterdir()} == before | {"latest"}
-    assert fs.is_link(link)
+    assert is_link(link)
     assert link.resolve() == target.resolve()
     assert (link / "report.json").read_text(encoding="utf-8") == "a"
 
@@ -193,21 +194,12 @@ def test_make_link_refuses_anything_already_there(
     assert snapshot(fs, tmp_path) == before
 
 
-def test_is_link_is_false_for_a_directory_a_file_and_a_missing_path(
-    fs: FileSystem, tmp_path: Path
-) -> None:
-    (tmp_path / "directory").mkdir()
-    (tmp_path / "file").write_text("x", encoding="utf-8", newline="\n")
-    for name in ("directory", "file", "missing"):
-        assert not fs.is_link(tmp_path / name), name
-
-
 def test_remove_link_leaves_its_target_untouched(fs: FileSystem, tmp_path: Path) -> None:
     target = make_target(tmp_path)
     link = tmp_path / "latest"
     fs.make_link(link, "history/a")
     fs.remove_link(link)
-    assert not fs.is_link(link)
+    assert not is_link(link)
     assert not link.exists(follow_symlinks=False)
     assert {path.name: path.read_text(encoding="utf-8") for path in target.iterdir()} == {
         "report.json": "a"

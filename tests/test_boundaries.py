@@ -34,6 +34,7 @@ PLUGIN_LOADERS = {"poser/adapters/pedalboard/worker.py"}
 FCNTL_USERS = {"poser/adapters/filesystem_posix.py"}
 CTYPES_USERS = {"poser/adapters/filesystem_posix.py", "poser/adapters/isolation_windows.py"}
 WINDOWS_API_USERS = {"poser/adapters/filesystem_windows.py"}
+LINK_PREDICATE = {"poser/core/paths.py"}
 LIBRARY_HOMES = {
     "pyloudnorm": {"poser/adapters/measuring.py"},
     "scipy": {"poser/adapters/measuring.py"},
@@ -434,6 +435,30 @@ def test_only_the_platform_backends_import_ctypes() -> None:
 def test_only_the_windows_file_system_imports_windows_apis() -> None:
     found = files_importing(lambda name: name.split(".", 1)[0] in {"msvcrt", "_winapi"})
     assert found == WINDOWS_API_USERS
+
+
+def calls_to(names: set[str], root: Path = POSER) -> set[str]:
+    """Return the files under `root`, relative to its parent, that call a method or function
+    named one of `names`."""
+    found: set[str] = set()
+    for path in source_files(root):
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"), filename=str(path))):
+            if isinstance(node, ast.Call):
+                func = node.func
+                name = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", None)
+                if name in names:
+                    found.add(path.relative_to(root.parent).as_posix())
+    return found
+
+
+def test_only_the_link_predicate_asks_about_symlinks_or_junctions() -> None:
+    """`is_symlink` alone misses a junction, so every link check goes through `is_link`."""
+    assert calls_to({"is_symlink", "is_junction", "islink", "isjunction"}) == LINK_PREDICATE
+
+
+def test_the_call_check_can_fail(tmp_path: Path) -> None:
+    (tmp_path / "bad.py").write_text("p.is_symlink()\n", encoding="utf-8", newline="\n")
+    assert calls_to({"is_symlink"}, tmp_path) == {f"{tmp_path.name}/bad.py"}
 
 
 def test_only_the_wav_adapter_reads_audio_files() -> None:

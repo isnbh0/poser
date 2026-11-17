@@ -45,9 +45,6 @@ class PosixFileSystem:
         """Create a symbolic link, which raises FileExistsError if anything is at `link`."""
         link.symlink_to(target, target_is_directory=True)
 
-    def is_link(self, path: Path) -> bool:
-        return path.is_symlink()
-
     def remove_link(self, path: Path) -> None:
         path.unlink()
 

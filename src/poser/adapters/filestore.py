@@ -14,13 +14,14 @@ A unit or record is written in a `.tmp-<random>` directory beside its final plac
 into place when complete, so a reader sees each complete or not at all. `latest` is removed
 before a record is published and linked to it afterward, so whenever it exists it leads to the
 newest record. `sweep` deletes the drafts an interrupted run left. Node names never appear in a
-path. Locking, syncing, and links go through the `FileSystem` facility the store is built with.
+path. Locking, syncing, and links go through the `FileSystem` facility the store is built with,
+and every walk of the store enters no link.
 
 Every run takes the lock, so every song directory that holds anything holds `.lock`, and
 `song` refuses an id whose directory would be inside another song's, or hold one. `lock` checks
 again before it creates a song's `.lock`, holding `.songs.lock` in the renders directory while
-it does, so two handles taken before either locked cannot nest. Symlinks under the renders
-directory are followed as the filesystem follows them.
+it does, so two handles taken before either locked cannot nest. Links under the renders directory
+are followed as the filesystem follows them, and `protected_roots` names where they lead.
 """
 
 import errno
@@ -37,6 +38,7 @@ from poser.adapters.filesystem import FileSystem, native
 from poser.adapters.loading import refuse_options
 from poser.core.jsonvalue import JsonValue, json_object
 from poser.core.names import Identifier, SongId, Suffix, is_inner_relative
+from poser.core.paths import is_link, walk
 from poser.core.ports import AdapterContext, SongBusyError, StemMeta
 from poser.core.song import is_number
 from poser.core.statuses import StemStatus
@@ -60,7 +62,9 @@ Each song's results are under `renders/<song path>/`, such as `renders/songs/dem
 `songs/demo.yaml`:
 
 - `latest`: a link to the newest record, present only when every node of that analysis
-  analyzed. The mix is `latest/audio/mix{stem}`, and the images are in `latest/images/`.
+  analyzed. The mix is `latest/audio/mix{stem}`, and the images are in `latest/images/`. On
+  Windows, `latest` is a directory junction, which holds an absolute path: after the studio
+  moves, a song's `latest` leads to the old location until the song renders or analyzes again.
 - `history/<n>/`: one record per analysis, numbered from 1: the song as it was analyzed (`song`
   with the record's suffix, such as `song.yaml`) and that run's `report.json`, and, when every
   node analyzed, the mix in `audio/` and an image per node and one for the mix in `images/`.
@@ -93,8 +97,8 @@ def _write_atomic(path: Path, text: str) -> None:
 def _sync_tree(fs: FileSystem, directory: Path) -> None:
     """Flush every file and directory under `directory`, and `directory` itself, to disk, so a
     rename publishes complete contents."""
-    for path in directory.rglob("*"):
-        if not fs.is_link(path) and (path.is_file() or path.is_dir()):
+    for path in walk(directory):
+        if not is_link(path) and (path.is_file() or path.is_dir()):
             fs.sync(path)
     fs.sync(directory)
 
@@ -277,7 +281,7 @@ class FileSongStore:
             raise ValueError(problem)
         if (self._directory / LOCK_NAME).exists() or not self._directory.is_dir():
             return
-        if any(self._directory.rglob(LOCK_NAME)):
+        if any(path.name == LOCK_NAME for path in walk(self._directory)):
             raise ValueError(_holding_another_song(self._song_id))
 
     def sweep(self) -> None:
@@ -289,7 +293,7 @@ class FileSongStore:
         if self._directory.is_dir():
             # Earlier versions built `latest` at a draft name; an interruption could leave one.
             for entry in self._directory.glob(f"{LATEST_NAME}{DRAFT_PREFIX}*"):
-                if self._fs.is_link(entry):
+                if is_link(entry):
                     self._fs.remove_link(entry)
 
     def find(self, key: str) -> FileStoredUnit | None:
@@ -388,7 +392,7 @@ class FileSongStore:
 
     def clear_latest(self) -> None:
         link = self._directory / LATEST_NAME
-        if self._fs.is_link(link):
+        if is_link(link):
             self._fs.remove_link(link)
         elif link.is_file():
             link.unlink()
@@ -413,13 +417,25 @@ class FileRenderStore:
         return GUIDE.format(stem=self._stem_suffix)
 
     def protected_roots(self) -> tuple[Path, ...]:
-        """Declare confinement, refusing existing links that escape the store."""
-        root = self._renders_dir.resolve()
-        if root.exists():
-            for path in root.rglob("*"):
-                if self._fs.is_link(path) and not path.resolve().is_relative_to(root):
-                    raise ValueError(f"render store symlink escapes its protected root: {path}")
-        return (root,)
+        """The resolved renders directory, then the resolved target of each link the store can
+        reach that leads outside every root found so far.
+
+        The store writes through a link a user puts under the renders directory, so its target
+        is protected too, and so are the targets of links under that target. A `latest` junction
+        from before the studio moved leads to the old location, which is protected as well. The
+        walk enters no link, so it reads each place once.
+        """
+        roots = [self._renders_dir.resolve()]
+        pending = [roots[0]]
+        while pending:
+            for path in walk(pending.pop()):
+                if not is_link(path):
+                    continue
+                target = path.resolve()
+                if not any(target.is_relative_to(root) for root in roots):
+                    roots.append(target)
+                    pending.append(target)
+        return tuple(roots)
 
     def song(self, song_id: SongId) -> FileSongStore:
         parts = SongId(song_id).split("/")

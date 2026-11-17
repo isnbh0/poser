@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 from helpers import set_instrument_guide
+from links import LINK_KINDS, make_dangling_link
 
 from poser.adapters.song_formats import SONG_FORMATS
 from poser.cli import guide, init_workspace, sounds
@@ -260,7 +261,7 @@ def test_existing_owned_output_refuses_without_changes(
     assert snapshot(target) == before
 
 
-@pytest.mark.parametrize("kind", ["parent-file", "ignore-directory", "dangling", "ignore-symlink"])
+@pytest.mark.parametrize("kind", ["parent-file", "ignore-directory", "ignore-symlink"])
 def test_incompatible_targets_refuse_without_changes(
     tmp_path: Path, plugin: Path, kind: str
 ) -> None:
@@ -272,14 +273,25 @@ def test_incompatible_targets_refuse_without_changes(
         (target / "songs").write_text("mine", encoding="utf-8", newline="\n")
     elif kind == "ignore-directory":
         (target / ".gitignore").mkdir()
-    elif kind == "dangling":
-        (target / "songs").symlink_to(target / "missing")
     else:
         (target / ".gitignore").symlink_to(external)
     before = snapshot(target)
     assert init_workspace.main(args(target, plugin)) == 2
     assert snapshot(target) == before
     assert external.read_text(encoding="utf-8") == "untouched"
+
+
+@pytest.mark.parametrize("kind", LINK_KINDS)
+def test_a_dangling_linked_parent_refuses_without_changes(
+    tmp_path: Path, plugin: Path, kind: str, capsys: pytest.CaptureFixture[str]
+) -> None:
+    target = tmp_path / "project"
+    target.mkdir()
+    make_dangling_link(kind, target / "songs")
+    before = snapshot(target)
+    assert init_workspace.main(args(target, plugin)) == 2
+    assert "songs is a dangling link" in capsys.readouterr().err
+    assert snapshot(target) == before
 
 
 def test_composition_failure_does_not_write(

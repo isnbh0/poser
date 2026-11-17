@@ -50,12 +50,9 @@ class FileSystem(Protocol):
         """
         ...
 
-    def is_link(self, path: Path) -> bool:
-        """Whether `path` is a link of any kind the platform has, without following it."""
-        ...
-
     def remove_link(self, path: Path) -> None:
-        """Remove the link at `path`, leaving what it leads to untouched."""
+        """Remove the link at `path`, leaving what it leads to untouched. `poser.core.paths.is_link`
+        tells whether a path is a link, on every platform."""
         ...
 
     def publish_directory(self, source: Path, destination: Path) -> None:
