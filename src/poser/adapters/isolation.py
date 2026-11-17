@@ -15,6 +15,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import time
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import TypeGuard
@@ -25,6 +26,7 @@ from poser.core.ports import UnsupportedPlatformError
 
 CHILD_CODE = "from poser.adapters.isolation import child_main; child_main()"
 CREATE_SUSPENDED = 0x00000004
+WAIT_SLICE_S = 0.1
 
 
 class MalformedJobError(ValueError):
@@ -99,11 +101,12 @@ def run_isolated(
     virtual environment's `python.exe` is a launcher that starts the real interpreter at once.
     However poser ends, the system closes poser's handle to the job, and the job kills its
     processes. When poser times the worker out or is interrupted or raises while waiting, it
-    kills the job before raising. The worker starts in a new process group, so Ctrl+C reaches
-    poser, not plugin code; Ctrl+Break and closing the console end both. A worker that exits 0
-    after writing its result releases the job, so helper processes it left running survive, and
-    the temporary files they still hold stay behind until they exit; after any other exit, poser
-    kills the job. The job controls lifetime and does not sandbox plugin code.
+    kills the job and waits for its processes to end before raising. The worker starts in a new
+    process group, whose processes ignore Ctrl+C, so Ctrl+C interrupts only poser; Ctrl+Break and
+    closing the console end both. A worker that exits 0 after writing its result releases the
+    job, so helper processes it left running survive, and the temporary files they hold stay
+    behind; after any other exit, poser kills the job. The job controls lifetime and does not
+    sandbox plugin code.
     """
     module = getattr(target, "__module__", None)
     qualname = getattr(target, "__qualname__", None)
@@ -192,30 +195,32 @@ def _run_in_job(
     from poser.adapters.isolation_windows import WorkerJob
 
     job = WorkerJob()
+    process: subprocess.Popen[bytes] | None = None
     try:
-        with stderr_path.open("wb") as stderr:
-            process = subprocess.Popen(
-                command,
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.DEVNULL,
-                stderr=stderr,
-                creationflags=CREATE_SUSPENDED | subprocess.CREATE_NEW_PROCESS_GROUP,
-            )
+        # One handler covers the worker from the moment `Popen` returns it, so an interrupt kills
+        # it whether or not it has joined the job: the job's processes first, and then the
+        # worker, which the job may not hold. An interrupt inside `Popen`, after the system
+        # created the worker, leaves it suspended outside the job.
         try:
+            with stderr_path.open("wb") as stderr:
+                process = subprocess.Popen(
+                    command,
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL,
+                    stderr=stderr,
+                    creationflags=CREATE_SUSPENDED | subprocess.CREATE_NEW_PROCESS_GROUP,
+                )
             job.start(process.pid)
-        except BaseException:
-            process.kill()
-            process.wait()
-            raise
-        try:
-            returncode = process.wait(timeout=timeout_s)
-        except subprocess.TimeoutExpired as error:
-            job.kill()
-            process.wait()
-            raise _timed_out(timeout_s) from error
-        except BaseException:
-            job.kill()
-            process.wait()
+            returncode = _wait_in_slices(process, timeout_s)
+        except BaseException as error:
+            if process is not None:
+                try:
+                    job.kill()
+                finally:
+                    process.kill()
+                    process.wait()
+            if isinstance(error, subprocess.TimeoutExpired):
+                raise _timed_out(timeout_s) from error
             raise
         if returncode == 0 and result_path.exists():
             job.release()
@@ -224,6 +229,24 @@ def _run_in_job(
         return returncode
     finally:
         job.close()
+
+
+def _wait_in_slices(process: subprocess.Popen[bytes], timeout_s: float | None) -> int:
+    """Wait for `process` as `Popen.wait` does, in slices of at most `WAIT_SLICE_S` seconds.
+
+    On Windows, `Popen.wait` makes one `WaitForSingleObject` call, and Python raises
+    KeyboardInterrupt only once that call returns, so a single long wait would hold Ctrl+C back.
+    """
+    deadline = None if timeout_s is None else time.monotonic() + timeout_s
+    while True:
+        slice_s = WAIT_SLICE_S
+        if deadline is not None:
+            slice_s = max(0.0, min(slice_s, deadline - time.monotonic()))
+        try:
+            return process.wait(timeout=slice_s)
+        except subprocess.TimeoutExpired:
+            if deadline is not None and time.monotonic() >= deadline:
+                raise
 
 
 def _end_worker(process: subprocess.Popen[bytes]) -> None:

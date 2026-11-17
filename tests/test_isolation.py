@@ -5,12 +5,15 @@ interpreter as its child. A PID a test must kill is therefore one a script repor
 `os.getpid()`, not `Popen.pid`.
 """
 
+import _thread
 import contextlib
 import importlib
 import os
 import signal
 import subprocess
 import sys
+import tempfile
+import threading
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -70,12 +73,29 @@ def silent_exit(job):
     sys.exit(3)
 
 
+GRANDCHILD = '''
+import os
+import sys
+import time
+from pathlib import Path
+
+worker, pid_file = sys.argv[1:]
+partial = Path(pid_file + ".partial")
+partial.write_text(f"{worker} {os.getpid()}")
+partial.rename(pid_file)
+time.sleep(60)
+'''
+
+
+# Start a grandchild that writes the worker's PID and its own, and wait until it has.
 def start_grandchild(job):
-    grandchild = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
     pid_file = Path(job["pid_file"])
-    partial = pid_file.with_suffix(".partial")
-    partial.write_text(f"{os.getpid()} {grandchild.pid}")
-    partial.rename(pid_file)
+    subprocess.Popen([sys.executable, "-c", GRANDCHILD, str(os.getpid()), str(pid_file)])
+    deadline = time.monotonic() + 30
+    while not pid_file.exists():
+        if time.monotonic() > deadline:
+            raise RuntimeError("the grandchild wrote no PIDs")
+        time.sleep(0.01)
 
 
 def spawn_and_sleep(job):
@@ -97,6 +117,16 @@ def spawn_and_hold_the_gil(job):
 def spawn_and_return(job):
     start_grandchild(job)
     return {"done": True}
+
+
+def spawn_and_fail(job):
+    start_grandchild(job)
+    raise RuntimeError("the target broke")
+
+
+def spawn_and_exit_without_a_result(job):
+    start_grandchild(job)
+    os._exit(0)
 """
 
 Target = Callable[[JsonValue], JsonValue]
@@ -184,17 +214,18 @@ def test_the_child_ignores_modules_in_the_working_directory(
 
 
 def read_pids(pid_file: Path) -> tuple[int, int]:
-    """Wait for the worker to write its own and its grandchild's PIDs, and return them."""
+    """Wait for the worker's grandchild to write the worker's PID and its own, and return them."""
     deadline = time.monotonic() + 30
     while not pid_file.exists():
-        assert time.monotonic() < deadline, "the worker wrote no PIDs"
+        assert time.monotonic() < deadline, "the grandchild wrote no PIDs"
         time.sleep(0.05)
     worker, grandchild = pid_file.read_text().split()
     return int(worker), int(grandchild)
 
 
 def exists(pid: int) -> bool:
-    """Whether `pid` is a running process. On Windows, `os.kill(pid, 0)` would terminate it."""
+    """Whether `pid` is a running process. On Windows, `os.kill(pid, 0)` would send Ctrl+C to
+    process group `pid` instead."""
     if sys.platform == "win32":
         import _winapi
 
@@ -220,26 +251,84 @@ def kill(pid: int) -> None:
         os.kill(pid, signal.SIGTERM if sys.platform == "win32" else signal.SIGKILL)
 
 
-def wait_until_gone(pid: int) -> None:
-    """Poll until `pid` no longer exists. A killed orphan exists until init reaps it."""
+def ended(pid: int) -> bool:
+    """Poll for up to 30 seconds until `pid` no longer exists, and return whether it ended. A
+    killed orphan exists until init reaps it."""
     deadline = time.monotonic() + 30
     while exists(pid):
-        assert time.monotonic() < deadline, f"process {pid} is still running"
+        if time.monotonic() >= deadline:
+            return False
         time.sleep(0.05)
+    return True
 
 
-def test_a_timeout_kills_the_processes_the_worker_started(
-    workers: ModuleType, tmp_path: Path
+def wait_until_gone(pid: int) -> None:
+    assert ended(pid), f"process {pid} is still running"
+
+
+@pytest.fixture
+def temp(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Make the folder where `run_isolated` puts its temporary files."""
+    folder = tmp_path / "temp"
+    folder.mkdir()
+    monkeypatch.setattr(tempfile, "tempdir", str(folder))
+    return folder
+
+
+def assert_left_nothing(pid_file: Path, temp: Path) -> None:
+    """Check that the worker and its grandchild have ended and that no temporary file remains.
+    On Windows, a file a process still holds cannot be removed."""
+    worker, grandchild = read_pids(pid_file)
+    assert not exists(worker)
+    wait_until_gone(grandchild)
+    assert list(temp.iterdir()) == []
+
+
+@pytest.mark.parametrize(
+    ("name", "timeout_s", "error"),
+    [
+        ("spawn_and_sleep", 5, WorkerTimedOutError),
+        ("spawn_and_fail", 30, WorkerCrashedError),
+        ("spawn_and_exit_without_a_result", 30, WorkerCrashedError),
+    ],
+)
+def test_a_worker_that_does_not_return_takes_its_processes_and_files_with_it(
+    workers: ModuleType,
+    tmp_path: Path,
+    temp: Path,
+    name: str,
+    timeout_s: float,
+    error: type[Exception],
 ) -> None:
     pid_file = tmp_path / "pids"
     job: JsonValue = {"pid_file": str(pid_file), "seconds": 60}
-    with pytest.raises(WorkerTimedOutError):
-        run_isolated(target(workers, "spawn_and_sleep"), job, 1)
-    worker, grandchild = read_pids(pid_file)
-    # On Windows, the worker's interpreter is a child of the launcher `run_isolated` started, so,
-    # like the grandchild, it ends shortly after the kill rather than before the call returns.
-    wait_until_gone(grandchild)
-    wait_until_gone(worker)
+    with pytest.raises(error):
+        run_isolated(target(workers, name), job, timeout_s)
+    assert_left_nothing(pid_file, temp)
+
+
+def test_an_interrupt_while_waiting_takes_the_worker_s_processes_and_files_with_it(
+    workers: ModuleType, tmp_path: Path, temp: Path
+) -> None:
+    pid_file = tmp_path / "pids"
+    interrupted: list[float] = []
+
+    def interrupt_once_the_grandchild_runs() -> None:
+        read_pids(pid_file)
+        interrupted.append(time.monotonic())
+        _thread.interrupt_main()
+
+    interrupter = threading.Thread(target=interrupt_once_the_grandchild_runs)
+    interrupter.start()
+    try:
+        job: JsonValue = {"pid_file": str(pid_file), "seconds": 60}
+        with pytest.raises(KeyboardInterrupt):
+            run_isolated(target(workers, "spawn_and_sleep"), job, 30)
+        (interrupted_at,) = interrupted
+        assert time.monotonic() - interrupted_at < 10
+    finally:
+        interrupter.join()
+    assert_left_nothing(pid_file, temp)
 
 
 def test_a_normal_exit_leaves_the_processes_the_worker_started(
@@ -249,11 +338,9 @@ def test_a_normal_exit_leaves_the_processes_the_worker_started(
     job: JsonValue = {"pid_file": str(pid_file), "seconds": 0}
     assert run_isolated(target(workers, "spawn_and_return"), job, 30) == {"done": True}
     _, grandchild = read_pids(pid_file)
-    try:
-        time.sleep(0.5)
-        assert exists(grandchild)
-    finally:
-        kill(grandchild)
+    time.sleep(0.5)
+    assert exists(grandchild)
+    kill(grandchild)
 
 
 @pytest.mark.parametrize("worker", ["spawn_and_sleep", "spawn_and_hold_the_gil"])
@@ -280,12 +367,10 @@ def test_the_worker_dies_with_the_process_that_started_it(
         except (OSError, ValueError):
             parent.kill()
         parent.wait()
-    try:
-        wait_until_gone(worker_pid)
-        wait_until_gone(grandchild)
-    finally:
-        for pid in (worker_pid, grandchild):
-            kill(pid)
+    survivors = [pid for pid in (worker_pid, grandchild) if not ended(pid)]
+    for pid in survivors:
+        kill(pid)  # Still running, so its PID still names it.
+    assert not survivors
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="Job Objects are Windows")
@@ -297,6 +382,7 @@ def test_a_worker_the_job_cannot_hold_is_killed_before_it_runs(
 
     def refuse(job: object, pid: int) -> NoReturn:
         started.append(pid)
+        time.sleep(5)  # A worker that was not suspended would write the marker meanwhile.
         raise OSError("the job refused the worker")
 
     monkeypatch.setattr(isolation_windows.WorkerJob, "start", refuse)

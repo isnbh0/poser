@@ -4,7 +4,7 @@
 Object API, so this module calls kernel32 through `ctypes`. It declares every function's argument
 and result types, so 64-bit handles are not truncated. The structures follow their Microsoft Learn
 definitions: JOBOBJECT_BASIC_LIMIT_INFORMATION, JOBOBJECT_EXTENDED_LIMIT_INFORMATION, IO_COUNTERS,
-JOBOBJECT_BASIC_ACCOUNTING_INFORMATION, and THREADENTRY32.
+JOBOBJECT_BASIC_PROCESS_ID_LIST, and THREADENTRY32.
 """
 
 import ctypes
@@ -14,20 +14,24 @@ from ctypes import wintypes
 
 assert sys.platform == "win32"  # noqa: S101 - narrows the platform for type checkers.
 
-JOB_OBJECT_BASIC_ACCOUNTING_INFORMATION = 1
+JOB_OBJECT_BASIC_PROCESS_ID_LIST = 3
 JOB_OBJECT_EXTENDED_LIMIT_INFORMATION = 9
 JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000
 PROCESS_TERMINATE = 0x0001
 PROCESS_SET_QUOTA = 0x0100
+PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+SYNCHRONIZE = 0x00100000
 THREAD_SUSPEND_RESUME = 0x0002
 TH32CS_SNAPTHREAD = 0x00000004
 ERROR_NO_MORE_FILES = 18
+ERROR_MORE_DATA = 234
 RESUME_FAILED = 0xFFFFFFFF
+WAIT_FAILED = 0xFFFFFFFF
 NOT_INHERITED = False
 INVALID_HANDLE_VALUE = ctypes.c_void_p(-1).value
 KILLED_EXIT_CODE = 1
-KILL_POLL_S = 0.01
 KILL_WAIT_S = 10.0
+FIRST_ID_CAPACITY = 16
 
 
 class _BasicLimitInformation(ctypes.Structure):
@@ -66,16 +70,14 @@ class _ExtendedLimitInformation(ctypes.Structure):
     )
 
 
-class _BasicAccountingInformation(ctypes.Structure):
+class _ProcessIdListHeader(ctypes.Structure):
+    """JOBOBJECT_BASIC_PROCESS_ID_LIST up to its variable-length ProcessIdList, which follows
+    it. The empty array makes the size include the padding before the list."""
+
     _fields_ = (
-        ("TotalUserTime", wintypes.LARGE_INTEGER),
-        ("TotalKernelTime", wintypes.LARGE_INTEGER),
-        ("ThisPeriodTotalUserTime", wintypes.LARGE_INTEGER),
-        ("ThisPeriodTotalKernelTime", wintypes.LARGE_INTEGER),
-        ("TotalPageFaultCount", wintypes.DWORD),
-        ("TotalProcesses", wintypes.DWORD),
-        ("ActiveProcesses", wintypes.DWORD),
-        ("TotalTerminatedProcesses", wintypes.DWORD),
+        ("NumberOfAssignedProcesses", wintypes.DWORD),
+        ("NumberOfProcessIdsInList", wintypes.DWORD),
+        ("ProcessIdList", ctypes.c_size_t * 0),
     )
 
 
@@ -102,10 +104,12 @@ SIGNATURES = {
         (wintypes.HANDLE, ctypes.c_int, wintypes.LPVOID, wintypes.DWORD, wintypes.LPDWORD),
     ),
     "AssignProcessToJobObject": (wintypes.BOOL, (wintypes.HANDLE, wintypes.HANDLE)),
+    "IsProcessInJob": (wintypes.BOOL, (wintypes.HANDLE, wintypes.HANDLE, wintypes.PBOOL)),
     "TerminateJobObject": (wintypes.BOOL, (wintypes.HANDLE, wintypes.UINT)),
     "OpenProcess": (wintypes.HANDLE, (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)),
     "OpenThread": (wintypes.HANDLE, (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)),
     "ResumeThread": (wintypes.DWORD, (wintypes.HANDLE,)),
+    "WaitForSingleObject": (wintypes.DWORD, (wintypes.HANDLE, wintypes.DWORD)),
     "CreateToolhelp32Snapshot": (wintypes.HANDLE, (wintypes.DWORD, wintypes.DWORD)),
     "Thread32First": (wintypes.BOOL, (wintypes.HANDLE, ctypes.POINTER(_ThreadEntry32))),
     "Thread32Next": (wintypes.BOOL, (wintypes.HANDLE, ctypes.POINTER(_ThreadEntry32))),
@@ -165,8 +169,10 @@ class WorkerJob:
     The processes a member starts join the job, and a process that breaks away from a job nested
     inside this one stays in this one, because this job permits no breakaway.
 
-    The job controls lifetime and is no sandbox: a process running as the same user could
-    duplicate poser's handle to it.
+    A process that a member has another process start for it, such as a COM server or a
+    scheduled task, is not the member's descendant and is not in the job. The job controls
+    lifetime and is no sandbox: a process running as the same user could duplicate poser's handle
+    to it.
     """
 
     def __init__(self) -> None:
@@ -206,14 +212,25 @@ class WorkerJob:
                 _kernel32.CloseHandle(thread)
 
     def kill(self) -> None:
-        """Terminate every process in the job, and wait up to `KILL_WAIT_S` seconds until none
-        remains in it. A process leaves the job as it exits, which can be shortly before its
-        handles are closed."""
-        if not _kernel32.TerminateJobObject(self._handle, KILLED_EXIT_CODE):
-            raise _last_error()
-        deadline = time.monotonic() + KILL_WAIT_S
-        while self._active_processes() and time.monotonic() < deadline:
-            time.sleep(KILL_POLL_S)
+        """Terminate every process in the job, and wait up to `KILL_WAIT_S` seconds for each to
+        end.
+
+        A process leaves the job as it begins to exit, before its handles close, so this waits on
+        the processes themselves, which are signaled only after their handles close. It opens
+        them before terminating them, so their IDs cannot name other processes meanwhile.
+        """
+        members = self._open_members()
+        try:
+            if not _kernel32.TerminateJobObject(self._handle, KILLED_EXIT_CODE):
+                raise _last_error()
+            deadline = time.monotonic() + KILL_WAIT_S
+            for member in members:
+                remaining_ms = max(0, round((deadline - time.monotonic()) * 1000))
+                if _kernel32.WaitForSingleObject(member, remaining_ms) == WAIT_FAILED:
+                    raise _last_error()
+        finally:
+            for member in members:
+                _kernel32.CloseHandle(member)
 
     def release(self) -> None:
         """Let the job's processes outlive it: closing the job no longer kills them."""
@@ -236,14 +253,52 @@ class WorkerJob:
         ):
             raise _last_error()
 
-    def _active_processes(self) -> int:
-        information = _BasicAccountingInformation()
-        if not _kernel32.QueryInformationJobObject(
-            self._handle,
-            JOB_OBJECT_BASIC_ACCOUNTING_INFORMATION,
-            ctypes.byref(information),
-            ctypes.sizeof(information),
-            None,
-        ):
+    def _open_members(self) -> list[int]:
+        """Open a handle to wait on each process in the job. A process that ended since the list
+        was read is skipped, and so is a process that has since taken its ID."""
+        members: list[int] = []
+        try:
+            for pid in self._member_ids():
+                member = _kernel32.OpenProcess(
+                    SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, NOT_INHERITED, pid
+                )
+                if not member:
+                    continue
+                members.append(member)
+                if not self._holds(member):
+                    members.pop()
+                    _kernel32.CloseHandle(member)
+        except BaseException:
+            for member in members:
+                _kernel32.CloseHandle(member)
+            raise
+        return members
+
+    def _holds(self, process: int) -> bool:
+        in_job = wintypes.BOOL()
+        if not _kernel32.IsProcessInJob(process, self._handle, ctypes.byref(in_job)):
             raise _last_error()
-        return information.ActiveProcesses
+        return bool(in_job.value)
+
+    def _member_ids(self) -> list[int]:
+        """Return the IDs of the processes in the job, enlarging the buffer until they fit."""
+        header_size = ctypes.sizeof(_ProcessIdListHeader)
+        capacity = FIRST_ID_CAPACITY
+        while True:
+            buffer = ctypes.create_string_buffer(
+                header_size + capacity * ctypes.sizeof(ctypes.c_size_t)
+            )
+            listed = _kernel32.QueryInformationJobObject(
+                self._handle,
+                JOB_OBJECT_BASIC_PROCESS_ID_LIST,
+                ctypes.byref(buffer),
+                ctypes.sizeof(buffer),
+                None,
+            )
+            if not listed and ctypes.get_last_error() != ERROR_MORE_DATA:
+                raise _last_error()
+            header = _ProcessIdListHeader.from_buffer(buffer)
+            count = header.NumberOfProcessIdsInList
+            if listed and count >= header.NumberOfAssignedProcesses:
+                return list((ctypes.c_size_t * count).from_buffer(buffer, header_size))
+            capacity = max(2 * capacity, header.NumberOfAssignedProcesses)
