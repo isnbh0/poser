@@ -136,7 +136,8 @@ def test_suffix() -> None:
 def test_song_id() -> None:
     assert SongId("songs/demo.yaml") == "songs/demo.yaml"
     assert SongId("demo.py") == "demo.py"
-    for value in ("", "/a", "a/../b", "a//b", "a\\b", "./a", "a/", "..", True):
+    assert SongId("a/C:b") == "a/C:b"  # A colon is a filename character on POSIX.
+    for value in ("", "/a", "a/../b", "a//b", "a\\b", "./a", "a/", "..", "C:a", "c:", True):
         _bad(SongId, value)
 
 

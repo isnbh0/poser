@@ -1,7 +1,7 @@
 """Names: text values whose constructors check their form."""
 
 import re
-from pathlib import PurePath
+from pathlib import PurePath, PureWindowsPath
 from typing import ClassVar, Self
 
 
@@ -65,7 +65,8 @@ class Suffix(str):
 
 
 class SongId(str):
-    """A song's relative POSIX path, such as `songs/demo.yaml`."""
+    """A song's relative POSIX path, such as `songs/demo.yaml`. It names a path inside the
+    workspace under both POSIX and Windows rules, so the same id is valid on every platform."""
 
     __slots__ = ()
 
@@ -80,4 +81,7 @@ class SongId(str):
             raise ValueError(
                 f"{cls.__name__} must not have an empty, '.', or '..' part, got {value!r}"
             )
+        # What remains is a drive, such as `C:x`, which Windows reads as outside the workspace.
+        if not is_inner_relative(PureWindowsPath(value)):
+            raise ValueError(f"{cls.__name__} must not start with a drive, got {value!r}")
         return super().__new__(cls, value)

@@ -862,8 +862,9 @@ class RecordDraft(Protocol):
         ...
 
     def path(self, relative: str) -> Path:
-        """Where the record's file at the POSIX path `relative` goes, inside the draft. Parent
-        exists on return. Raises ValueError for a path that leaves the record."""
+        """Where the record's file at the relative path `relative` goes, inside the draft. `/`
+        separates on every platform, and `\\` on Windows. Parent exists on return. Raises
+        ValueError for a path that leaves the record."""
         ...
 
     def relative(self, path: Path) -> str:
