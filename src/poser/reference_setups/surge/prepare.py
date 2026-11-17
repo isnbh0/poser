@@ -19,8 +19,9 @@ MAC_PRESET_PATHS = (
     Path("/Library/Application Support/Surge XT/patches_factory"),
     Path.home() / "Library/Application Support/Surge XT/patches_factory",
 )
-# The system and per-user VST3 folders, each as (environment variable, folder under it).
-WINDOWS_VST3_FOLDERS = (("CommonProgramFiles", "VST3"), ("LOCALAPPDATA", "Programs/Common/VST3"))
+# Steinberg's per-user and system-wide VST3 folders, in its priority order, each as
+# (environment variable, folder under it).
+WINDOWS_VST3_FOLDERS = (("LOCALAPPDATA", "Programs/Common/VST3"), ("CommonProgramFiles", "VST3"))
 WINDOWS_BUNDLE = "Surge Synth Team/Surge XT.vst3"
 
 
@@ -30,11 +31,12 @@ def _environment_path(name: str) -> Path | None:
 
 
 def plugin_paths() -> tuple[Path, ...]:
-    """Return where Surge XT's installers put its VST3 bundle on this platform, in search order.
+    """Return where Surge XT's VST3 bundle is installed on this platform, in search order.
 
-    On Windows, the installer's system-wide folder comes first, then the same layout in the
-    per-user VST3 folder; a folder whose environment variable is unset or empty is left out.
-    Elsewhere, the macOS locations.
+    On Windows, Surge's layout in the per-user VST3 folder, then in the system-wide one where the
+    installer puts it: Steinberg's priority, so the search finds the bundle a VST3 host loads. A
+    folder whose environment variable is unset or empty is left out. Elsewhere, the macOS
+    locations.
     """
     if sys.platform != "win32":
         return MAC_PLUGIN_PATHS
@@ -59,8 +61,10 @@ def windows_data(plugin: Path) -> Path | None:
 
     Follows Surge XT's own lookup (`SurgeStorage.cpp`): a nonempty `SURGE_DATA_HOME`; else the
     first `SurgeXTData` folder from the binary's folder, `plugin/Contents/x86_64-win`, up to but
-    excluding the drive root, as the portable zip lays it out; else `%ProgramData%\\Surge XT`
-    when it is a directory; else `%LOCALAPPDATA%\\Surge XT`, or None when `LOCALAPPDATA` is unset.
+    excluding the drive root; else `%ProgramData%\\Surge XT` when it is a directory; else
+    `%LOCALAPPDATA%\\Surge XT`, or None when `LOCALAPPDATA` is unset. The installer links a
+    `SurgeXTData` beside its `Surge XT.vst3` to `%ProgramData%\\Surge XT`, and the portable zip
+    keeps the real folder there.
     """
     override = _environment_path("SURGE_DATA_HOME")
     if override is not None:
@@ -105,7 +109,8 @@ def prepare(plugin: Path | None, presets: Path | None) -> Setup:
                 checked = ", ".join(str(p) for p in candidates)
                 missing = f"Surge XT not found in checked locations: {checked}"
             else:
-                missing = "Surge XT not found: this platform has no standard Surge XT location"
+                unset = " and ".join(name for name, _ in WINDOWS_VST3_FOLDERS)
+                missing = f"Surge XT not found: {unset}, which name the VST3 folders, are unset"
             raise ConfigError(
                 f"{missing}. "
                 f"Retry: uv run init-workspace --setup surge --plugin-path PATH. See {DOC_URL}"

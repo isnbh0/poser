@@ -74,71 +74,90 @@ def simulate_windows(monkeypatch: pytest.MonkeyPatch, **variables: Path) -> None
         monkeypatch.setenv(name, str(value))
 
 
-def test_windows_searches_the_installer_and_per_user_folders(
+def test_windows_searches_the_per_user_then_the_installer_folder(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     common, local = tmp_path / "Common Files", tmp_path / "Local"
     bundle = Path("Surge Synth Team", "Surge XT.vst3")
     simulate_windows(monkeypatch, CommonProgramFiles=common, LOCALAPPDATA=local)
     assert surge.plugin_paths() == (
-        common / "VST3" / bundle,
         local / "Programs" / "Common" / "VST3" / bundle,
+        common / "VST3" / bundle,
     )
-    monkeypatch.delenv("CommonProgramFiles")
-    assert surge.plugin_paths() == (local / "Programs" / "Common" / "VST3" / bundle,)
+    monkeypatch.delenv("LOCALAPPDATA")
+    assert surge.plugin_paths() == (common / "VST3" / bundle,)
     monkeypatch.setattr(sys, "platform", "darwin")
     assert surge.plugin_paths() == surge.MAC_PLUGIN_PATHS
     assert surge.preset_paths(tmp_path / "Surge XT.vst3") == surge.MAC_PRESET_PATHS
 
 
-# Each case: the data folders to create, the variables to set, and which folder's patches win.
-# Folders are relative to the test's directory; the bundle is `VST3/Team/Surge XT.vst3`.
-DATA_LOOKUPS: dict[str, tuple[tuple[str, ...], tuple[str, ...], str | None]] = {
+# Each case: the data folders to create with factory patches, those to create without them,
+# whether `SURGE_DATA_HOME` names `Override`, and whose patches win. Folders are relative to the
+# test's directory, which holds the bundle `VST3/Team/Surge XT.vst3`, `%ProgramData%` as
+# `ProgramData`, and `%LOCALAPPDATA%` as `Local`.
+BINARY_FOLDER = "VST3/Team/Surge XT.vst3/Contents/x86_64-win"
+DATA_LOOKUPS: dict[str, tuple[tuple[str, ...], tuple[str, ...], bool, str | None]] = {
     "surge-data-home-first": (
         ("Override", "VST3/Team/SurgeXTData", "ProgramData/Surge XT"),
-        ("SURGE_DATA_HOME",),
+        (),
+        True,
         "Override",
+    ),
+    "in-the-binary-s-folder": (
+        (f"{BINARY_FOLDER}/SurgeXTData", "VST3/Team/SurgeXTData"),
+        (),
+        False,
+        f"{BINARY_FOLDER}/SurgeXTData",
     ),
     "beside-the-bundle-before-program-data": (
         ("VST3/Team/SurgeXTData", "ProgramData/Surge XT"),
         (),
+        False,
         "VST3/Team/SurgeXTData",
     ),
-    "two-folders-above-the-bundle": (("VST3/SurgeXTData",), (), "VST3/SurgeXTData"),
+    "two-folders-above-the-bundle": (("VST3/SurgeXTData",), (), False, "VST3/SurgeXTData"),
     "portable-data-without-patches-hides-program-data": (
         ("ProgramData/Surge XT",),
-        ("bare VST3/Team/SurgeXTData",),
+        ("VST3/Team/SurgeXTData",),
+        False,
         None,
     ),
     "program-data-before-local-app-data": (
         ("ProgramData/Surge XT", "Local/Surge XT"),
         (),
+        False,
         "ProgramData/Surge XT",
     ),
-    "local-app-data-without-program-data": (("Local/Surge XT",), (), "Local/Surge XT"),
-    "none": ((), (), None),
+    "program-data-without-patches-hides-local-app-data": (
+        ("Local/Surge XT",),
+        ("ProgramData/Surge XT",),
+        False,
+        None,
+    ),
+    "local-app-data-without-program-data": (("Local/Surge XT",), (), False, "Local/Surge XT"),
+    "none": ((), (), False, None),
 }
 
 
 @pytest.mark.parametrize(
-    ("folders", "extra", "winner"), DATA_LOOKUPS.values(), ids=DATA_LOOKUPS.keys()
+    ("patched", "bare", "override", "winner"), DATA_LOOKUPS.values(), ids=DATA_LOOKUPS.keys()
 )
 def test_windows_presets_follow_surge_s_data_lookup(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    folders: tuple[str, ...],
-    extra: tuple[str, ...],
+    patched: tuple[str, ...],
+    bare: tuple[str, ...],
+    override: bool,
     winner: str | None,
 ) -> None:
-    for folder in folders:
+    for folder in patched:
         (tmp_path / folder / "patches_factory").mkdir(parents=True)
-    for item in extra:
-        if item.startswith("bare "):  # A data folder without factory patches.
-            (tmp_path / item.removeprefix("bare ")).mkdir(parents=True)
+    for folder in bare:
+        (tmp_path / folder).mkdir(parents=True)
     bundle = tmp_path / "VST3" / "Team" / "Surge XT.vst3"
-    bundle.mkdir(parents=True)
+    bundle.mkdir(parents=True, exist_ok=True)
     variables = {"ProgramData": tmp_path / "ProgramData", "LOCALAPPDATA": tmp_path / "Local"}
-    if "SURGE_DATA_HOME" in extra:
+    if override:
         variables["SURGE_DATA_HOME"] = tmp_path / "Override"
     simulate_windows(monkeypatch, **variables)
     expected = None if winner is None else (tmp_path / winner / "patches_factory").resolve()
@@ -148,10 +167,14 @@ def test_windows_presets_follow_surge_s_data_lookup(
 def test_windows_discovery_writes_the_installed_paths(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    bundle = tmp_path / "Common Files" / "VST3" / "Surge Synth Team" / "Surge XT.vst3"
+    """The installer's layout: the bundle in the system-wide VST3 folder, the data in
+    `%ProgramData%`, and a link to the data beside the bundle."""
+    team = tmp_path / "Common Files" / "VST3" / "Surge Synth Team"
+    bundle = team / "Surge XT.vst3"
     (bundle / "Contents" / "x86_64-win").mkdir(parents=True)
     patches = tmp_path / "ProgramData" / "Surge XT" / "patches_factory"
     patches.mkdir(parents=True)
+    (team / "SurgeXTData").symlink_to(patches.parent, target_is_directory=True)
     simulate_windows(
         monkeypatch,
         CommonProgramFiles=tmp_path / "Common Files",
@@ -166,9 +189,12 @@ def test_windows_discovery_writes_the_installed_paths(
     assert options["sources"] == {"presets": str(patches.resolve())}
 
 
-def test_no_standard_location_names_the_retry(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_windows_without_vst3_folder_variables_names_the_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     simulate_windows(monkeypatch)
-    with pytest.raises(ConfigError, match="no standard Surge XT location") as caught:
+    message = "LOCALAPPDATA and CommonProgramFiles, which name the VST3 folders, are unset"
+    with pytest.raises(ConfigError, match=message) as caught:
         surge.prepare(None, None)
     assert "--plugin-path" in str(caught.value)
 

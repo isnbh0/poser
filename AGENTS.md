@@ -51,7 +51,8 @@ advice when `[guidance] advice` is enabled.
 - CI's `windows` job requires the plugin-free suite to pass on Windows, except the test files in
   `WINDOWS_PENDING` in `.github/workflows/check.yml`. It reports their failures and fails when a
   listed file has no failing test, so a change that makes a pending file pass removes it from the
-  list. The job also loads and renders Surge XT from its pinned portable build.
+  list. The job then installs Surge XT from its pinned installer, runs the setup guide's commands
+  in a new studio, and runs real-plugin tests against that studio's `poser.toml`.
 - `make test-real` runs the `real_plugins` tests, which load the instruments in a root
   `poser.toml`, and the `real_scsynth` tests. The test harness finds `scsynth` through
   `SCSYNTH_PATH`, the SuperCollider app bundle, or `PATH`; the adapter itself runs only its

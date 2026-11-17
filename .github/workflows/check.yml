@@ -48,7 +48,7 @@ jobs:
     env:
       UV_LOCKED: "1"
       # The test files that still fail on Windows. Every other plugin-free test must pass there,
-      # and the last step fails when a listed file has no failing test, so this list is exactly
+      # and the pending step fails when a listed file has no failing test, so this list is exactly
       # the files with a Windows failure.
       WINDOWS_PENDING: >-
         tests/test_cli.py tests/test_delivery.py tests/test_guidance_modes.py tests/test_guide.py
@@ -75,6 +75,23 @@ jobs:
           src/poser/adapters/isolation_windows.py src/poser/adapters/isolation.py
           src/poser/adapters/pedalboard/plugin_files.py src/poser/adapters/pedalboard/worker.py
           tests/test_isolation.py
+      # Before Surge XT is installed, like the required step, so no test finds an installed Surge.
+      - name: Pending files, each still failing (inventory, required)
+        if: ${{ !cancelled() }}
+        timeout-minutes: 30
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $false
+          $passing = @()
+          foreach ($file in -split $env:WINDOWS_PENDING) {
+            uv run pytest -q --tb=short -rfE $file
+            switch ($LASTEXITCODE) {
+              0 { $passing += $file }  # Every test passed or skipped.
+              1 { }  # Some test failed: still pending.
+              default { throw "pytest could not run $file (exit code $LASTEXITCODE)" }
+            }
+          }
+          if ($passing) { throw "pending files that pass; remove them from WINDOWS_PENDING: $passing" }
+          exit 0  # The last pytest exited 1, which the runner would otherwise report.
       # The installer from the Surge XT 1.3.4 release, with its default components, as a user
       # runs it. The release publishes no digest; the pin is computed from a download.
       - name: Install Surge XT (required)
@@ -100,7 +117,9 @@ jobs:
           $binary = Join-Path $bundle "Contents\x86_64-win\Surge XT.vst3"
           $patches = Join-Path $env:ProgramData "Surge XT\patches_factory"
           if (-not (Test-Path -PathType Leaf $binary)) { throw "no plugin binary at $binary" }
-          if (-not (Test-Path -PathType Container $patches)) { throw "no factory patches at $patches" }
+          # The Data component installs only the Templates and Tutorials; Patches adds the rest.
+          $patch = Join-Path $patches "Basses\Attacky.fxp"
+          if (-not (Test-Path -PathType Leaf $patch)) { throw "no factory patch at $patch" }
           $code = "import sys; from pathlib import Path; " +
             "from poser.adapters.pedalboard.instrument import plugin_version; " +
             "print(plugin_version(Path(sys.argv[1])))"
@@ -143,19 +162,3 @@ jobs:
             "tests/test_pedalboard_real.py::test_a_render_has_exactly_the_performance_s_frames" `
             "tests/test_pedalboard_real.py::test_a_windows_plugin_loads_from_its_binary_as_from_its_bundle"
           if ($LASTEXITCODE -ne 0) { throw "the real-plugin tests failed" }
-      - name: Pending files, each still failing (inventory, required)
-        if: ${{ !cancelled() }}
-        timeout-minutes: 30
-        run: |
-          $PSNativeCommandUseErrorActionPreference = $false
-          $passing = @()
-          foreach ($file in -split $env:WINDOWS_PENDING) {
-            uv run pytest -q --tb=short -rfE $file
-            switch ($LASTEXITCODE) {
-              0 { $passing += $file }  # Every test passed or skipped.
-              1 { }  # Some test failed: still pending.
-              default { throw "pytest could not run $file (exit code $LASTEXITCODE)" }
-            }
-          }
-          if ($passing) { throw "pending files that pass; remove them from WINDOWS_PENDING: $passing" }
-          exit 0  # The last pytest exited 1, which the runner would otherwise report.

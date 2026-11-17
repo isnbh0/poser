@@ -33,22 +33,24 @@ Download the Windows 64-bit installer and run it. It installs for all users, whi
 administrator approval, with the plugin under `%CommonProgramFiles%` and the factory patches in
 `%ProgramData%\Surge XT`.
 
-The initializer searches for the VST3 bundle in this order:
+The initializer searches for the VST3 bundle in Steinberg's priority order, per-user before
+system-wide, so it finds the bundle a VST3 host loads:
 
-1. `%CommonProgramFiles%\VST3\Surge Synth Team\Surge XT.vst3`
-2. `%LOCALAPPDATA%\Programs\Common\VST3\Surge Synth Team\Surge XT.vst3`
+1. `%LOCALAPPDATA%\Programs\Common\VST3\Surge Synth Team\Surge XT.vst3`
+2. `%CommonProgramFiles%\VST3\Surge Synth Team\Surge XT.vst3`
 
 Factory patches come from the `patches_factory` of the data folder Surge XT itself uses for that
 bundle, which is the first of these that applies:
 
 1. The folder that `SURGE_DATA_HOME` names.
 2. A `SurgeXTData` folder in the folder holding the plugin's binary,
-   `Surge XT.vst3\Contents\x86_64-win`, or in a folder above it.
+   `Surge XT.vst3\Contents\x86_64-win`, or in a folder above it. The installer links
+   `SurgeXTData` beside its `Surge XT.vst3` to `%ProgramData%\Surge XT`.
 3. `%ProgramData%\Surge XT`, when it exists.
 4. `%LOCALAPPDATA%\Surge XT`.
 
-The portable zip keeps `Surge XT.vst3` beside `SurgeXTData`. Extract it anywhere and pass the
-bundle with `--plugin-path`; the initializer finds the patches beside it.
+The portable zip keeps `Surge XT.vst3` beside its `SurgeXTData` folder. Extract it anywhere and
+pass the bundle with `--plugin-path`; the initializer finds the patches beside it.
 
 ### Other locations
 
