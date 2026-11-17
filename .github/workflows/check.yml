@@ -60,6 +60,7 @@ jobs:
       - name: Type-check the Windows backend (required)
         run: uv run ty check src/poser/adapters/filesystem_windows.py
       - name: Plugin-free suite (inventory, not yet required on Windows)
+        if: ${{ !cancelled() }}
         continue-on-error: true
         timeout-minutes: 30
-        run: uv run pytest -q --tb=no -rfE
+        run: uv run pytest -q --tb=short -rfE
