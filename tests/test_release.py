@@ -4,6 +4,7 @@ import json
 import re
 import shlex
 import subprocess
+import sys
 import tomllib
 from importlib import metadata
 from importlib.resources import files
@@ -90,6 +91,27 @@ def setup_chain() -> str:
     return block
 
 
+@pytest.mark.parametrize(
+    ("document", "text"),
+    [
+        ("setup", section(REPO_DIR / "docs/setup.md", "Create and verify")),
+        ("upgrade", (REPO_DIR / "docs/upgrading.md").read_text(encoding="utf-8").split("\n## ")[0]),
+    ],
+)
+def test_powershell_blocks_mirror_the_bash_chains(document: str, text: str) -> None:
+    """Each `&&` chain a user runs has a PowerShell block of the same commands, one per line,
+    since Windows PowerShell 5.1 has no `&&`. CI runs the PowerShell blocks on Windows."""
+    bash = re.findall(r"```bash\n(.*?)```", text, re.DOTALL)[0]
+    powershell = re.findall(r"```powershell\n(.*?)```", text, re.DOTALL)[0]
+    assert powershell.splitlines() == [line.removesuffix(" &&") for line in bash.splitlines()], (
+        document
+    )
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="runs the bash block with /bin/sh; CI runs the PowerShell block on Windows",
+)
 @pytest.mark.parametrize(
     "failure",
     [

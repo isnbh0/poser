@@ -11,6 +11,15 @@ uv run update-guide --check &&
 uv run check-instruments
 ```
 
+In PowerShell, run these lines in order and stop at the first that fails:
+
+```powershell
+uv lock --upgrade-package poser
+uv run update-guide
+uv run update-guide --check
+uv run check-instruments
+```
+
 Then load every song, which needs no plugins; each song that fails prints its error:
 
 ```bash
@@ -18,10 +27,18 @@ find songs \( -name '*.yaml' -o -name '*.yml' -o -name '*.py' \) -exec uv run re
   > /dev/null
 ```
 
+In PowerShell:
+
+```powershell
+Get-ChildItem songs -Recurse -File -Include *.yaml, *.yml, *.py | ForEach-Object { uv run read-song $_.FullName > $null }
+```
+
 `update-guide` rewrites `POSER.md` for the new poser; until then, `update-guide --check` reports
 `POSER.md is out of date`. `AGENTS.md`, `poser.toml`, and songs are yours and are never rewritten.
 If a command fails after the upgrade, find its message below, newest change first, and apply the
-fix. A change listed here applies to every studio that last ran a poser from before it.
+fix. A change listed here applies to every studio that last ran a poser from before it. Where a
+note searches with `grep -rn <pattern> <path>`, PowerShell's
+`Get-ChildItem <path> -Recurse -File | Select-String <pattern>` does the same.
 
 ## Song meter
 

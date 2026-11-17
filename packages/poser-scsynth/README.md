@@ -26,8 +26,6 @@ string, in single quotes, so its backslashes stay as they are:
 scsynth = 'C:\Program Files\SuperCollider-3.14.1\scsynth.exe'
 ```
 
-poser itself does not support native Windows yet; see the platforms in `docs/setup.md`.
-
 Use an absolute path; poser does not search `PATH`.
 
 ## Install the adapter package

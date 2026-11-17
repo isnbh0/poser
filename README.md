@@ -2,9 +2,9 @@
 
 [![check](https://github.com/isnbh0/poser/actions/workflows/check.yml/badge.svg)](https://github.com/isnbh0/poser/actions/workflows/check.yml)
 
-Write a song as code in Python or YAML. poser renders its tracks through instrument backends,
-mixes the stems, and produces reports and spectrograms for a person or agent to use in revisions.
-Backends include VST3 and Audio Unit instruments through
+Write a song as code in Python or YAML. poser renders its tracks through instrument backends, mixes
+the stems, and produces reports and spectrograms for a person or agent to use in revisions. Backends
+include VST3 and, on macOS, Audio Unit instruments through
 [pedalboard](https://github.com/spotify/pedalboard) and [scsynth](packages/poser-scsynth/README.md).
 
 ## Create your studio
@@ -17,10 +17,10 @@ to have it help:
 Set up poser for me by following https://raw.githubusercontent.com/isnbh0/poser/main/docs/bootstrap.md
 ```
 
-Both use the free Surge XT reference setup on macOS and can continue to your first song. poser is
-developed and tested on macOS; Linux has the file-system support poser needs but is untested, and
-native Windows is not supported yet (see [Prerequisites](docs/setup.md#prerequisites)). To move an
-existing studio to a newer poser, follow [upgrading](docs/upgrading.md).
+Both use the free Surge XT reference setup on macOS or Windows and can continue to your first song.
+poser is tested on macOS and Windows x64; Windows on Arm is not supported, and Linux has the
+file-system support poser needs but is untested (see [Prerequisites](docs/setup.md#prerequisites)).
+To move an existing studio to a newer poser, follow [upgrading](docs/upgrading.md).
 
 Hear an example and get its source in the [showcase](docs/showcase.md).
 

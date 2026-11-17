@@ -1,8 +1,9 @@
 # Create a studio
 
-A studio is your own project for songs, configuration, sounds, and renders. A reference setup
-is a curated starting configuration and demo copied into that project; an adapter connects poser
-to a backend that plays instruments. This guide uses the free Surge XT reference setup on macOS.
+A studio is your own project for songs, configuration, sounds, and renders. A reference setup is a
+curated starting configuration and demo copied into that project; an adapter connects poser to a
+backend that plays instruments. This guide uses the free Surge XT reference setup on macOS or
+Windows.
 
 To have an agent help, paste the one-line prompt from the
 [README](../README.md#create-your-studio), which points the agent at the
@@ -10,15 +11,17 @@ To have an agent help, paste the one-line prompt from the
 
 ## Prerequisites
 
-You need Git, [uv](https://docs.astral.sh/uv/), and Python 3.13 or later available to uv.
+You need Git, [uv](https://docs.astral.sh/uv/), and Python 3.13 or later available to uv. On
+Windows, `winget install --id Git.Git -e --source winget` and `winget install --id=astral-sh.uv -e`
+install Git and uv; open a new PowerShell window afterwards so it finds them.
 Install or locate Surge XT before initializing; the
 [Surge guide](../src/poser/reference_setups/surge/README.md) covers installation, searched
 locations, and custom paths.
 
-poser is developed and tested on macOS. Linux has the file-system support poser needs but is
-untested, and the Surge reference setup searches only macOS and Windows locations, so on Linux
-pass `--plugin-path` and `--presets-path` to `init-workspace`. Native Windows is not supported
-yet.
+poser is tested on macOS and on Windows x64. Windows on Arm is not supported: Pedalboard, which
+plays VST3 instruments, publishes no build for it. Linux has the file-system support poser needs
+but is untested, and the Surge reference setup searches only macOS and Windows locations, so on
+Linux pass `--plugin-path` and `--presets-path` to `init-workspace`.
 
 ## Create and verify
 
@@ -36,8 +39,27 @@ uv run render-song songs/demo.yaml &&
 uv run analyze-song songs/demo.yaml
 ```
 
+In PowerShell, run these lines in order and stop at the first that fails, since Windows
+PowerShell 5.1 has no `&&`:
+
+```powershell
+uv init --bare --no-workspace --python 3.13 my-studio
+cd my-studio
+uv add git+https://github.com/isnbh0/poser
+uv run init-workspace --setup surge
+uv run check-instruments
+uv run render-song songs/demo.yaml
+uv run analyze-song songs/demo.yaml
+```
+
 If `uv init` or `cd` fails, you remain in the parent directory; resolve that error before
 continuing.
+
+On Windows, run the other chained commands in this guide the same way, one per line. Write a
+Windows path in `poser.toml` as a TOML literal string, in single quotes, because a backslash in
+double quotes starts an escape: `path = 'D:\Plugins\Surge XT.vst3'`. poser writes its output as
+UTF-8; before piping it into another PowerShell command, run
+`[Console]::OutputEncoding = [Text.UTF8Encoding]::new()` so PowerShell reads it as UTF-8.
 
 Use the Git dependency shown here, not the unrelated PyPI package named `poser`. To add poser to
 an existing project instead, inspect its files and dependencies first, then start from `uv add`.
@@ -110,18 +132,17 @@ See the [export contract](#export-contract) for exit codes, manifest fields, and
 If a command reports that poser's file-system support or plugin worker isolation does not cover
 your platform, it cannot run there yet; see [Prerequisites](#prerequisites).
 
-If initialization reports a missing plugin or invalid path, locate or install Surge, or specify
-its existing location as described in the
-[Surge guide](../src/poser/reference_setups/surge/README.md), and retry
-`uv run init-workspace --setup surge` with any needed overrides. Retry only `init-workspace`: a
-failed prerequisite check writes no studio files and leaves the Python project and poser
-dependency in place. An interrupted initialization removes the files it wrote, so retry the same
-command. If the process was killed before it could clean up (for example, by SIGKILL), a retry
-names the files the interrupted run left and suggests `--remove-leftovers`, which deletes exactly
-those files and initializes. The initializer refuses to run if `AGENTS.md`, `POSER.md`,
-`CLAUDE.md`, `poser.toml`, or `songs/demo.yaml` already exists with other content, and merges its
-required entries into an existing `.gitignore`; if it refuses, follow the diagnostic, which names
-the conflicting path.
+If initialization reports a missing plugin or invalid path, locate or install Surge, or specify its
+existing location as described in the [Surge guide](../src/poser/reference_setups/surge/README.md),
+and retry `uv run init-workspace --setup surge` with any needed overrides. Retry only
+`init-workspace`: a failed prerequisite check writes no studio files and leaves the Python project
+and poser dependency in place. An interrupted initialization removes the files it wrote, so retry
+the same command. If the process was killed before it could clean up (for example, by SIGKILL or by
+ending it in Task Manager), a retry names the files the interrupted run left and suggests
+`--remove-leftovers`, which deletes exactly those files and initializes. The initializer refuses to
+run if `AGENTS.md`, `POSER.md`, `CLAUDE.md`, `poser.toml`, or `songs/demo.yaml` already exists with
+other content, and merges its required entries into an existing `.gitignore`; if it refuses, follow
+the diagnostic, which names the conflicting path.
 
 If initialization succeeds but `check-instruments` fails, read the diagnostic.
 Failures include load errors, crashes, timeouts, non-finite output, silence, and missing notes.

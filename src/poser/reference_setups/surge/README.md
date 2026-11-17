@@ -1,10 +1,10 @@
 # Surge XT reference setup
 
 This reference setup uses the free Surge XT synthesizer and finds it where its installers put it
-on macOS and Windows; native Windows itself is not supported yet (see the setup guide's
-[Prerequisites](../../../../docs/setup.md#prerequisites)). To create a studio and verify it,
-follow the [shared setup guide](../../../../docs/setup.md); this page covers Surge-specific
-prerequisites and choices.
+on macOS and Windows. To create a studio and verify it, follow the
+[shared setup guide](../../../../docs/setup.md), whose
+[Prerequisites](../../../../docs/setup.md#prerequisites) state the supported platforms; this page
+covers Surge-specific prerequisites and choices.
 
 ## Install or locate Surge XT
 
