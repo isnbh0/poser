@@ -56,8 +56,10 @@ jobs:
       - name: Imports, file system, and platform gate (required)
         run: >-
           uv run pytest -q -rs tests/test_imports.py tests/test_unsupported_platform.py
-          tests/test_filesystem.py tests/test_filesystem_selection.py tests/test_filestore.py
+          tests/test_filesystem.py tests/test_filesystem_selection.py
+          tests/test_filesystem_windows.py tests/test_filestore.py
       - name: Type-check the Windows backend (required)
+        if: ${{ !cancelled() }}
         run: uv run ty check src/poser/adapters/filesystem_windows.py
       - name: Plugin-free suite (inventory, not yet required on Windows)
         if: ${{ !cancelled() }}

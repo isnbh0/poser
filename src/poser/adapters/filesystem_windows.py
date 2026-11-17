@@ -12,19 +12,13 @@ import stat
 import sys
 import time
 from collections.abc import Generator
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from pathlib import Path
 
 assert sys.platform == "win32"  # noqa: S101 - narrows the platform for type checkers.
 
 LOCK_POLL_S = 0.05
 LOCK_BUSY = frozenset({errno.EACCES, errno.EDEADLOCK})
-
-
-def _exists_error(path: Path, cause: OSError) -> FileExistsError:
-    error = FileExistsError(errno.EEXIST, os.strerror(errno.EEXIST), str(path))
-    error.__cause__ = cause
-    return error
 
 
 class WindowsFileSystem:
@@ -37,8 +31,9 @@ class WindowsFileSystem:
       entries.
     - Waiting for a lock polls, because the C runtime's blocking lock gives up after ten tries.
     - Links are directory junctions, which need no privilege but hold absolute targets. After a
-      studio moves, `latest` leads to the old location until the next render repoints it, and in
-      the meantime `FileRenderStore.protected_roots` refuses it as a link that escapes the store.
+      studio moves or is copied, each song's `latest` leads to the old location until that song
+      renders again. Until then, `FileRenderStore.protected_roots` refuses the junction as a link
+      that escapes the store, so `export-song` refuses every song in the studio.
     - A process killed while creating a junction can leave an empty directory at the link's path.
     """
 
@@ -84,12 +79,23 @@ class WindowsFileSystem:
 
     def make_link(self, link: Path, target: str) -> None:
         """Create a directory junction holding `target` resolved to an absolute path. Raises
-        FileExistsError if anything is at `link`."""
+        FileExistsError if anything is at `link`.
+
+        `CreateJunction` creates an empty directory and then makes it a junction, and leaves the
+        directory behind when that second step fails, as on a volume without reparse points. A
+        failure other than FileExistsError therefore removes an empty directory at `link`, which
+        the check before the call shows was not there before.
+        """
+        if link.exists(follow_symlinks=False):
+            raise FileExistsError(errno.EEXIST, os.strerror(errno.EEXIST), str(link))
         try:
             _winapi.CreateJunction(str((link.parent / target).resolve()), str(link))
-        except OSError as error:
-            if link.exists(follow_symlinks=False):
-                raise _exists_error(link, error) from error
+        except FileExistsError:
+            raise
+        except OSError:
+            if link.is_dir() and not self.is_link(link):
+                with suppress(OSError):
+                    link.rmdir()
             raise
 
     def is_link(self, path: Path) -> bool:
@@ -113,5 +119,7 @@ class WindowsFileSystem:
             source.rename(destination)
         except OSError as error:
             if destination.exists(follow_symlinks=False):
-                raise _exists_error(destination, error) from error
+                raise FileExistsError(
+                    errno.EEXIST, os.strerror(errno.EEXIST), str(destination)
+                ) from error
             raise
