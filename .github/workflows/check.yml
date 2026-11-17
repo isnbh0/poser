@@ -161,6 +161,7 @@ jobs:
           Write-Output "read-song ran $global:runs times, $global:failures failed"
           if ($global:runs -lt 3) { throw "expected the demo and two broken songs to be read" }
           if ($global:failures -ne 2) { throw "expected two failing songs" }
+          $global:LASTEXITCODE = 0  # The step exits with the last broken song's code otherwise.
           Remove-Item -Recurse songs\broken.yaml, songs\nested
       - name: Export the demo and check the studio's configuration (required)
         if: ${{ !cancelled() }}
