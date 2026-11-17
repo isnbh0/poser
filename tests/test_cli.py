@@ -1,5 +1,6 @@
 """The commands, run through `main` in workspaces whose `poser.toml` selects test adapters."""
 
+import hashlib
 import json
 import math
 import sys
@@ -292,7 +293,10 @@ def test_analyze_prints_the_report_and_keeps_a_record(
     (node,) = report["nodes"]
     assert node["status"] == "analyzed"
     assert report["mix"] is not None
-    assert (workspace.renders / SONG / "history" / "1").is_dir()
+    record = workspace.renders / SONG / "history" / "1"
+    song_bytes = (record / "song.yaml").read_bytes()
+    assert b"\r" not in song_bytes
+    assert hashlib.sha256(song_bytes).hexdigest() == report["song_sha256"]
 
 
 def test_analyze_table_has_a_mix_row(

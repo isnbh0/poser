@@ -118,8 +118,8 @@ def test_failed_write_leaves_no_temp_file(tmp_path: Path, monkeypatch: pytest.Mo
     real_fdopen = song_formats.os.fdopen
 
     class FailingFile:
-        def __init__(self, fd: int, mode: str) -> None:
-            self.handle = real_fdopen(fd, mode)
+        def __init__(self, fd: int, mode: str, *, encoding: str, newline: str) -> None:
+            self.handle = real_fdopen(fd, mode, encoding=encoding, newline=newline)
 
         def __enter__(self) -> Self:
             return self
@@ -795,3 +795,23 @@ def build():
     )
     song = load_song(path, SONG_FORMATS).graph
     assert song.meter == Meter([MeterSpan(0, 7)])
+
+
+# Text bytes: songs are UTF-8 with LF whatever the platform's code page and line separator.
+
+
+def test_a_yaml_song_reads_as_utf_8(tmp_path: Path) -> None:
+    path = tmp_path / "song.yaml"
+    path.write_bytes(MARKED_SONG.replace("text: intro}", "text: café 한글}").encode("utf-8"))
+
+    assert loaded(path).marks == Marks({"parts": [Mark(0, 4, "café 한글")]})
+
+
+def test_a_written_song_ends_its_lines_with_lf(tmp_path: Path) -> None:
+    path = tmp_path / "song.yaml"
+    write_yaml_song(two_layer_song(), path)
+
+    data = path.read_bytes()
+    assert data.count(b"\n") > 1
+    assert b"\r" not in data
+    assert data.decode("utf-8") == YamlSongFormat().dump(two_layer_song())

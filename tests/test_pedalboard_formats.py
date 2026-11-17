@@ -225,3 +225,20 @@ def test_preset_format_contract_can_fail(tmp_path: Path) -> None:
     sample = write_file(tmp_path / "sample" / "a.loose", b"LOOSE state")
     with pytest.raises(AssertionError, match=r"garbage\.loose raised ValueError"):
         check_preset_format_contract(LooseFormat(), sample, tmp_path)
+
+
+def test_saved_format_reads_utf_8(tmp_path: Path) -> None:
+    path = tmp_path / "warm.json"
+    text = json.dumps({"description": "café 한글", "state": encode_state(b"s")}, ensure_ascii=False)
+    path.write_bytes(text.encode("utf-8"))
+
+    assert SavedFormat().read_sound(path) == SavedSound("café 한글", b"s")
+
+
+def test_saved_format_writes_lf(tmp_path: Path) -> None:
+    path = tmp_path / "warm.json"
+    SavedFormat().write_sound(path, SavedSound("café 한글", b"s"))
+
+    data = path.read_bytes()
+    assert data.endswith(b"}\n")
+    assert b"\r" not in data

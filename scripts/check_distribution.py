@@ -26,6 +26,8 @@ def run(name: str, *args: str, cwd: Path) -> str:
         cwd=cwd,
         check=False,
         text=True,
+        # The console script is a Python child, which writes the pipe in the locale's encoding.
+        encoding="locale",
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
     )

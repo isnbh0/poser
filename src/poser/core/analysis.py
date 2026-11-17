@@ -230,7 +230,7 @@ def _analyze(
             report = CompleteReport(song_name, record.run, song_sha256, spans, tuple(analyzed), mix)
         else:
             report = IncompleteReport(song_name, record.run, song_sha256, spans, tuple(incomplete))
-        record.path(REPORT_NAME).write_text(report_json(report), encoding="utf-8")
+        record.path(REPORT_NAME).write_text(report_json(report), encoding="utf-8", newline="\n")
     return report
 
 

@@ -122,7 +122,7 @@ def run_isolated(
         job_path = Path(directory) / "job.json"
         result_path = Path(directory) / "result.json"
         stderr_path = Path(directory) / "stderr.txt"
-        job_path.write_text(json.dumps(job, allow_nan=False))
+        job_path.write_text(json.dumps(job, allow_nan=False), encoding="utf-8", newline="\n")
         command = [
             sys.executable,
             "-P",
@@ -139,12 +139,14 @@ def run_isolated(
             returncode = _run_in_group(command, stderr_path, timeout_s)
 
         if returncode != 0:
-            lines = stderr_path.read_text(errors="replace").strip().splitlines()
+            # The worker is a Python child, which writes its stderr in the locale's encoding.
+            stderr = stderr_path.read_text(encoding="locale", errors="replace")
+            lines = stderr.strip().splitlines()
             last_line = lines[-1] if lines else "no error output"
             raise WorkerCrashedError(f"exit code {returncode}: {last_line}")
 
         try:
-            result: object = json.loads(result_path.read_text())
+            result: object = json.loads(result_path.read_text(encoding="utf-8"))
         except (OSError, ValueError) as error:
             raise WorkerCrashedError("worker wrote no readable result") from error
         if not is_json_value(result):
@@ -300,7 +302,9 @@ def child_main() -> None:
         module_name, qualname, job_path, result_path, lifeline = sys.argv[1:]
         watcher = _start_watcher(int(lifeline))
     target = getattr(importlib.import_module(module_name), qualname)
-    result = target(json.loads(Path(job_path).read_text()))
-    Path(result_path).write_text(json.dumps(result, allow_nan=False))
+    result = target(json.loads(Path(job_path).read_text(encoding="utf-8")))
+    Path(result_path).write_text(
+        json.dumps(result, allow_nan=False), encoding="utf-8", newline="\n"
+    )
     if watcher is not None:
         _end_watcher(watcher)

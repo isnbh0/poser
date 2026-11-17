@@ -511,3 +511,17 @@ def test_guide_names_each_kept_directory(tmp_path: Path) -> None:
     for directory in ("objects/", "`latest`", "history/"):
         assert directory in guide
     assert "latest/audio/mix.wav" in guide
+
+
+def test_records_and_unit_metadata_are_utf_8_with_lf(tmp_path: Path) -> None:
+    song = renders(tmp_path).song(SongId("songs/a.yaml"))
+    text = "bpm: 120\nmarks:\n  parts:\n    - {beat: 0, end: 4, text: café 한글}\n"
+    with song.write_record(text, YAML, latest=False):
+        pass
+    publish(song, KEY_A, b"stem")
+
+    # The analysis digests the song text as UTF-8, so the record's bytes must be exactly that.
+    assert (song.record_path(1) / "song.yaml").read_bytes() == text.encode("utf-8")
+    (meta,) = (tmp_path / "renders").rglob("meta.json")
+    assert meta.read_bytes().endswith(b"}\n")
+    assert b"\r" not in meta.read_bytes()

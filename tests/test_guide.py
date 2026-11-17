@@ -28,7 +28,7 @@ from poser.core.sounds import parse_sound_ref
 from poser.core.statuses import RENDER_STATUSES
 
 GUIDE_PATH = SCAFFOLD_DIR / "guide.md"
-GUIDE = GUIDE_PATH.read_text()
+GUIDE = GUIDE_PATH.read_text(encoding="utf-8")
 LINES = GUIDE.splitlines()
 FENCE = re.compile(r"^```([a-z]+)\n(.*?)^```$", re.MULTILINE | re.DOTALL)
 BACKTICKED = re.compile(r"`([^`\n]+)`")
@@ -153,7 +153,9 @@ def test_yaml_examples_parse() -> None:
 
 
 def test_commands_are_project_scripts() -> None:
-    scripts = tomllib.loads((REPO_DIR / "pyproject.toml").read_text())["project"]["scripts"]
+    scripts = tomllib.loads((REPO_DIR / "pyproject.toml").read_text(encoding="utf-8"))["project"][
+        "scripts"
+    ]
     commands = re.findall(r"uv run ([\w-]+)", GUIDE)
     assert set(commands) <= set(scripts)
 

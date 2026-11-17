@@ -108,7 +108,7 @@ class SavedFormat:
 
     def read_sound(self, path: Path) -> SavedSound:
         try:
-            data = json.loads(path.read_text())
+            data = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, UnicodeDecodeError, ValueError) as error:
             raise PresetError(f"cannot read {path.name}: {error}") from error
         fields = json_object(data)
@@ -129,7 +129,7 @@ class SavedFormat:
         fd, name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.stem}.", suffix=".json")
         temp = Path(name)
         try:
-            with os.fdopen(fd, "w") as output:
+            with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as output:
                 output.write(text + "\n")
             # mkstemp creates the file owner-only; give it the usual umask-based mode.
             umask = os.umask(0)

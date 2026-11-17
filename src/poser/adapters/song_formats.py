@@ -79,7 +79,7 @@ class YamlSongFormat:
 
     def load(self, path: Path) -> Song:
         try:
-            data = yaml.load(path.read_text(), Loader=_UniqueKeyLoader)  # noqa: S506
+            data = yaml.load(path.read_text(encoding="utf-8"), Loader=_UniqueKeyLoader)  # noqa: S506
         except (OSError, UnicodeDecodeError, yaml.YAMLError) as error:
             raise SongError([f"cannot read {path}: {error}"]) from error
         return parse_song(data)
@@ -160,7 +160,7 @@ def write_yaml_song(song: Song, path: Path) -> None:
         raise SongError([f"cannot write {path}: {error}"]) from error
     temp = Path(name)
     try:
-        with os.fdopen(fd, "w") as handle:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
             handle.write(text)
         temp.chmod(mode)
         temp.replace(target)

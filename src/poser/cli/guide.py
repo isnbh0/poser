@@ -74,7 +74,7 @@ def write_guide(path: Path, text: str) -> None:
         mode = 0o666 & ~umask
     descriptor, temporary = tempfile.mkstemp(dir=target.parent, prefix=f".{target.name}.")
     try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as file:
+        with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as file:
             file.write(text)
         Path(temporary).chmod(mode)
         Path(temporary).replace(target)

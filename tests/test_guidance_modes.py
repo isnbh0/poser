@@ -89,7 +89,10 @@ def test_modes_keep_reference_and_adapter_options_identical(tmp_path: Path) -> N
     assert observed_advice(guided) is True
     # All required content remains byte-identical aside from the visible mode marker.
     stripped = guided.replace("Advice: on", "Advice: off")
-    for block in [GuideBlock((SCAFFOLD_DIR / "advice.md").read_text(), True), *on.guide_blocks()]:
+    for block in [
+        GuideBlock((SCAFFOLD_DIR / "advice.md").read_text(encoding="utf-8"), True),
+        *on.guide_blocks(),
+    ]:
         if block.advice:
             stripped = stripped.replace("\n\n" + block.text.strip(), "")
     assert stripped == required
@@ -103,7 +106,9 @@ def test_on_off_on_regeneration_and_check(tmp_path: Path) -> None:
         assert main(["--config", str(path), "--check"]) == 1
         assert main(["--config", str(path)]) == 0
         assert main(["--config", str(path), "--check"]) == 0
-        text = (tmp_path / "POSER.md").read_text()
+        data = (tmp_path / "POSER.md").read_bytes()
+        assert b"\r" not in data
+        text = data.decode("utf-8")
         assert observed_advice(text) is enabled
         if original is None:
             original = text
@@ -266,7 +271,7 @@ def test_regeneration_preserves_owner_files_and_operational_notes(tmp_path: Path
         assert main(["--config", str(config_path)]) == 0
         assert main(["--config", str(config_path), "--check"]) == 0
         assert config_path.read_bytes() == config_bytes
-        assert note in (tmp_path / "POSER.md").read_text()
+        assert note in (tmp_path / "POSER.md").read_text(encoding="utf-8")
         assert {name: (tmp_path / name).read_bytes() for name in owner_files} == owner_files
 
 
@@ -300,7 +305,7 @@ def test_fresh_off_initialization_complete_context_inventory(
         == 0
     )
     inventory = {
-        path.relative_to(target).as_posix(): path.read_text()
+        path.relative_to(target).as_posix(): path.read_text(encoding="utf-8")
         for path in target.rglob("*")
         if path.is_file()
     }
@@ -319,7 +324,7 @@ def test_fresh_off_initialization_complete_context_inventory(
     for note in configured.instrument_notes():
         assert note.guide
         assert note.guide in inventory["POSER.md"]
-    assert inventory["AGENTS.md"] == (SCAFFOLD_DIR / "agents.md").read_text()
+    assert inventory["AGENTS.md"] == (SCAFFOLD_DIR / "agents.md").read_text(encoding="utf-8")
     assert inventory["CLAUDE.md"] == "@AGENTS.md\n"
-    assert inventory["songs/demo.yaml"] == (SURGE_DIR / "demo.yaml").read_text()
+    assert inventory["songs/demo.yaml"] == (SURGE_DIR / "demo.yaml").read_text(encoding="utf-8")
     assert main(["--config", str(target / "poser.toml"), "--check"]) == 0
