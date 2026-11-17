@@ -28,8 +28,9 @@ COMMANDS: set[Callable[..., int]] = set()
 def command[**P](function: Callable[P, int]) -> Callable[P, int]:
     """Make `function` a console script's entry: it writes stdout and stderr as UTF-8, whatever
     the platform's code page, so printed text such as a song's marks cannot fail to encode. A
-    stream already in UTF-8, such as a Windows console, or one that is not a `TextIOWrapper`, such
-    as a test's capture, stays as it is."""
+    stream already in UTF-8, such as a Windows console or a test's capture, stays as it is, as does
+    one that is not a `TextIOWrapper`. A legacy Windows console (`PYTHONLEGACYWINDOWSSTDIO`) shows
+    the UTF-8 bytes in its own code page."""
 
     @functools.wraps(function)
     def run(*args: P.args, **kwargs: P.kwargs) -> int:
