@@ -30,7 +30,7 @@ find songs \( -name '*.yaml' -o -name '*.yml' -o -name '*.py' \) -exec uv run re
 In PowerShell:
 
 ```powershell
-Get-ChildItem songs -Recurse -File | Where-Object Extension -in .yaml, .yml, .py | ForEach-Object { uv run read-song $_.FullName > $null }
+Get-ChildItem songs -Recurse -File | Where-Object { $_.Extension -in '.yaml', '.yml', '.py' } | ForEach-Object { uv run read-song $_.FullName > $null }
 ```
 
 `update-guide` rewrites `POSER.md` for the new poser; until then, `update-guide --check` reports

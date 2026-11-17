@@ -146,11 +146,21 @@ jobs:
           New-Item -ItemType Directory songs\nested | Out-Null
           Set-Content -Path songs\broken.yaml -Value "bpm: 120`ntracks: 3" -Encoding Ascii
           Copy-Item songs\broken.yaml songs\nested\broken.yml
+          Get-ChildItem songs -Recurse -File | ForEach-Object { Write-Output "song: $($_.FullName)" }
+          # A function named uv runs before uv.exe, so it counts the loop's runs and failures.
+          $global:runs = 0
+          $global:failures = 0
+          function uv {
+            $global:runs++
+            & uv.exe @args
+            if ($LASTEXITCODE -ne 0) { $global:failures++ }
+          }
           Write-Output "PS> $($loop[0])"
-          $out = @(Invoke-Expression $loop[0] 2>&1 | ForEach-Object { "$_" })
-          $out | Write-Output
-          $errors = @($out | Where-Object { $_ -match "read-song: " })
-          if ($errors.Count -ne 2) { throw "expected two read-song errors, found $($errors.Count)" }
+          Invoke-Expression $loop[0]
+          Remove-Item Function:uv
+          Write-Output "read-song ran $global:runs times, $global:failures failed"
+          if ($global:runs -lt 3) { throw "expected the demo and two broken songs to be read" }
+          if ($global:failures -ne 2) { throw "expected two failing songs" }
           Remove-Item -Recurse songs\broken.yaml, songs\nested
       - name: Export the demo and check the studio's configuration (required)
         if: ${{ !cancelled() }}
