@@ -52,8 +52,8 @@ jobs:
       # the files with a Windows failure.
       WINDOWS_PENDING: >-
         tests/test_cli.py tests/test_delivery.py tests/test_guidance_modes.py tests/test_guide.py
-        tests/test_release.py tests/test_render_dirs.py tests/test_scsynth.py
-        tests/test_song_formats.py tests/test_wav.py tests/test_workspace.py
+        tests/test_init_workspace.py tests/test_release.py tests/test_render_dirs.py
+        tests/test_scsynth.py tests/test_song_formats.py tests/test_wav.py tests/test_workspace.py
         tests/test_workspace_init_transaction.py
     steps:
       - uses: actions/checkout@v7
