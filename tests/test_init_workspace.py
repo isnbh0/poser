@@ -23,7 +23,7 @@ from poser.reference_setups.surge import prepare as surge
 
 @pytest.fixture
 def plugin(tmp_path: Path) -> Path:
-    path = tmp_path / 'custom "Surge XT".vst3'
+    path = tmp_path / "custom 'Surge XT'.vst3"
     path.mkdir()
     return path
 
@@ -173,7 +173,7 @@ def test_help_links_to_current_documents(capsys: pytest.CaptureFixture[str]) -> 
 def test_missing_plugin_diagnostic_links_to_recovery(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    monkeypatch.setattr(surge, "PLUGIN_PATHS", ())
+    monkeypatch.setattr(surge, "plugin_paths", lambda: ())
     target = tmp_path / "studio"
     assert init_workspace.main([str(target), "--setup", "surge"]) == 2
     diagnostic = capsys.readouterr().err

@@ -16,8 +16,9 @@ Install or locate Surge XT before initializing; the
 locations, and custom paths.
 
 poser is developed and tested on macOS. Linux has the file-system support poser needs but is
-untested, and the Surge reference setup searches only macOS locations, so on Linux pass
-`--plugin-path` and `--presets-path` to `init-workspace`. Native Windows is not supported yet.
+untested, and the Surge reference setup searches only macOS and Windows locations, so on Linux
+pass `--plugin-path` and `--presets-path` to `init-workspace`. Native Windows is not supported
+yet.
 
 ## Create and verify
 

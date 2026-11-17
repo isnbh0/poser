@@ -1,5 +1,6 @@
 """Reference setup preparation does not require a real plugin."""
 
+import sys
 import tomllib
 from importlib.resources import files
 from pathlib import Path
@@ -19,9 +20,9 @@ from poser.reference_setups.surge.showcase import build
 def test_explicit_paths_and_optional_presets(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    plugin = tmp_path / 'plugin "quoted"\x7f🎹.vst3'
+    plugin = tmp_path / "plugin\x7f🎹 'quoted'.vst3"
     plugin.mkdir()
-    monkeypatch.setattr(surge, "PRESET_PATHS", ())
+    monkeypatch.setattr(surge, "preset_paths", lambda _: ())
     setup = surge.prepare(plugin, None)
     config = parse_config(setup.config, tmp_path / "future" / "poser.toml")
     assert config.instruments[0].spec.options["path"] == str(plugin)
@@ -43,8 +44,8 @@ def test_explicit_paths_and_optional_presets(
 def test_discovery_and_invalid_override(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     first, second = tmp_path / "first.vst3", tmp_path / "second.vst3"
     second.mkdir()
-    monkeypatch.setattr(surge, "PLUGIN_PATHS", (first, second))
-    monkeypatch.setattr(surge, "PRESET_PATHS", ())
+    monkeypatch.setattr(surge, "plugin_paths", lambda: (first, second))
+    monkeypatch.setattr(surge, "preset_paths", lambda _: ())
     assert surge.prepare(None, None).plugin == second
     first.mkdir()
     assert surge.prepare(None, None).plugin == first
@@ -54,8 +55,126 @@ def test_discovery_and_invalid_override(tmp_path: Path, monkeypatch: pytest.Monk
         surge.prepare(first, tmp_path / "bad")
 
 
+@pytest.mark.parametrize(
+    "value", ['"', "\\", "'", "\x7f", "\t", "🎹", "C:\\Users\\Ann\\Surge XT.vst3"]
+)
+def test_toml_string_round_trips_what_windows_paths_hold(value: str) -> None:
+    assert tomllib.loads(f"v = {surge._toml_string(value)}")["v"] == value
+
+
+WINDOWS_VARIABLES = ("CommonProgramFiles", "LOCALAPPDATA", "ProgramData", "SURGE_DATA_HOME")
+
+
+def simulate_windows(monkeypatch: pytest.MonkeyPatch, **variables: Path) -> None:
+    """Simulate Windows with exactly the given Surge-related environment variables set."""
+    monkeypatch.setattr(sys, "platform", "win32")
+    for name in WINDOWS_VARIABLES:
+        monkeypatch.delenv(name, raising=False)
+    for name, value in variables.items():
+        monkeypatch.setenv(name, str(value))
+
+
+def test_windows_searches_the_installer_and_per_user_folders(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    common, local = tmp_path / "Common Files", tmp_path / "Local"
+    bundle = Path("Surge Synth Team", "Surge XT.vst3")
+    simulate_windows(monkeypatch, CommonProgramFiles=common, LOCALAPPDATA=local)
+    assert surge.plugin_paths() == (
+        common / "VST3" / bundle,
+        local / "Programs" / "Common" / "VST3" / bundle,
+    )
+    monkeypatch.delenv("CommonProgramFiles")
+    assert surge.plugin_paths() == (local / "Programs" / "Common" / "VST3" / bundle,)
+    monkeypatch.setattr(sys, "platform", "darwin")
+    assert surge.plugin_paths() == surge.MAC_PLUGIN_PATHS
+    assert surge.preset_paths(tmp_path / "Surge XT.vst3") == surge.MAC_PRESET_PATHS
+
+
+# Each case: the data folders to create, the variables to set, and which folder's patches win.
+# Folders are relative to the test's directory; the bundle is `VST3/Team/Surge XT.vst3`.
+DATA_LOOKUPS: dict[str, tuple[tuple[str, ...], tuple[str, ...], str | None]] = {
+    "surge-data-home-first": (
+        ("Override", "VST3/Team/SurgeXTData", "ProgramData/Surge XT"),
+        ("SURGE_DATA_HOME",),
+        "Override",
+    ),
+    "beside-the-bundle-before-program-data": (
+        ("VST3/Team/SurgeXTData", "ProgramData/Surge XT"),
+        (),
+        "VST3/Team/SurgeXTData",
+    ),
+    "two-folders-above-the-bundle": (("VST3/SurgeXTData",), (), "VST3/SurgeXTData"),
+    "portable-data-without-patches-hides-program-data": (
+        ("ProgramData/Surge XT",),
+        ("bare VST3/Team/SurgeXTData",),
+        None,
+    ),
+    "program-data-before-local-app-data": (
+        ("ProgramData/Surge XT", "Local/Surge XT"),
+        (),
+        "ProgramData/Surge XT",
+    ),
+    "local-app-data-without-program-data": (("Local/Surge XT",), (), "Local/Surge XT"),
+    "none": ((), (), None),
+}
+
+
+@pytest.mark.parametrize(
+    ("folders", "extra", "winner"), DATA_LOOKUPS.values(), ids=DATA_LOOKUPS.keys()
+)
+def test_windows_presets_follow_surge_s_data_lookup(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    folders: tuple[str, ...],
+    extra: tuple[str, ...],
+    winner: str | None,
+) -> None:
+    for folder in folders:
+        (tmp_path / folder / "patches_factory").mkdir(parents=True)
+    for item in extra:
+        if item.startswith("bare "):  # A data folder without factory patches.
+            (tmp_path / item.removeprefix("bare ")).mkdir(parents=True)
+    bundle = tmp_path / "VST3" / "Team" / "Surge XT.vst3"
+    bundle.mkdir(parents=True)
+    variables = {"ProgramData": tmp_path / "ProgramData", "LOCALAPPDATA": tmp_path / "Local"}
+    if "SURGE_DATA_HOME" in extra:
+        variables["SURGE_DATA_HOME"] = tmp_path / "Override"
+    simulate_windows(monkeypatch, **variables)
+    expected = None if winner is None else (tmp_path / winner / "patches_factory").resolve()
+    assert surge.prepare(bundle, None).presets == expected
+
+
+def test_windows_discovery_writes_the_installed_paths(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bundle = tmp_path / "Common Files" / "VST3" / "Surge Synth Team" / "Surge XT.vst3"
+    (bundle / "Contents" / "x86_64-win").mkdir(parents=True)
+    patches = tmp_path / "ProgramData" / "Surge XT" / "patches_factory"
+    patches.mkdir(parents=True)
+    simulate_windows(
+        monkeypatch,
+        CommonProgramFiles=tmp_path / "Common Files",
+        LOCALAPPDATA=tmp_path / "Local",
+        ProgramData=tmp_path / "ProgramData",
+    )
+    setup = surge.prepare(None, None)
+    assert (setup.plugin, setup.presets) == (bundle.resolve(), patches.resolve())
+    config = parse_config(setup.config, tmp_path / "poser.toml")
+    options = config.instruments[0].spec.options
+    assert options["path"] == str(bundle.resolve())
+    assert options["sources"] == {"presets": str(patches.resolve())}
+
+
+def test_no_standard_location_names_the_retry(monkeypatch: pytest.MonkeyPatch) -> None:
+    simulate_windows(monkeypatch)
+    with pytest.raises(ConfigError, match="no standard Surge XT location") as caught:
+        surge.prepare(None, None)
+    assert "--plugin-path" in str(caught.value)
+
+
 def test_failures_do_not_mutate_project(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(surge, "PLUGIN_PATHS", ())
+    monkeypatch.setattr(surge, "plugin_paths", lambda: ())
     ignore = tmp_path / ".gitignore"
     ignore.write_text("existing\n")
     assert main([str(tmp_path), "--setup", "surge"]) == 2
