@@ -15,6 +15,7 @@ from poser.cli.common import (
     EXIT_SOME_FAILED,
     RENDER_TIMEOUT_S,
     align_rows,
+    command,
     fail,
     load_composition,
 )
@@ -79,6 +80,7 @@ def format_table(results: list[CheckResult]) -> str:
     return "\n".join([*align_rows(rows), *details])
 
 
+@command
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog=PROG, description=__doc__)
     parser.add_argument("--config", type=Path, help="workspace config (default: poser.toml)")

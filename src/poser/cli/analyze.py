@@ -14,6 +14,7 @@ from poser.cli.common import (
     EXIT_SOME_FAILED,
     EXIT_SONG_BUSY,
     align_rows,
+    command,
     fail,
     load_composition,
 )
@@ -78,6 +79,7 @@ def format_table(report: Report, record: Path) -> str:
     return "\n".join([*align_rows(rows), *details, f"record: {record}"])
 
 
+@command
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog=PROG, description=__doc__)
     parser.add_argument("song", type=Path, help="song file (YAML, or a script defining build())")

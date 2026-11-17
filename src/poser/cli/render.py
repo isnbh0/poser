@@ -14,6 +14,7 @@ from poser.cli.common import (
     EXIT_SONG_BUSY,
     RENDER_TIMEOUT_S,
     align_rows,
+    command,
     fail,
     load_composition,
     progress,
@@ -74,6 +75,7 @@ def format_table(results: list[TrackResult]) -> str:
     return "\n".join([*align_rows(rows), *details])
 
 
+@command
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog=PROG, description=__doc__)
     parser.add_argument("song", type=Path, help="song file (YAML, or a script defining build())")

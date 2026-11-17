@@ -11,6 +11,7 @@ from poser.cli.common import (
     EXIT_ALL_PASS,
     EXIT_BAD_CONFIG,
     EXIT_SOME_FAILED,
+    command,
     fail,
     load_composition,
 )
@@ -83,6 +84,7 @@ def write_guide(path: Path, text: str) -> None:
         raise
 
 
+@command
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog=PROG, description=__doc__)
     parser.add_argument("--config", type=Path, help="workspace config (default: poser.toml)")

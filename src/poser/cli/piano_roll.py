@@ -7,7 +7,7 @@ import tempfile
 from collections.abc import Callable
 from pathlib import Path
 
-from poser.cli.common import EXIT_ALL_PASS, EXIT_BAD_CONFIG, fail, load_composition
+from poser.cli.common import EXIT_ALL_PASS, EXIT_BAD_CONFIG, command, fail, load_composition
 from poser.cli.workspace import fill_path_options
 from poser.core.loading import load_song
 from poser.core.piano_roll import project_piano_roll
@@ -68,6 +68,7 @@ def _publish(song: Path, output: Path, draw: Callable[[Path], None], *, replace:
     return destination
 
 
+@command
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog=PROG, description=__doc__)
     parser.add_argument("song", type=Path, help="trusted song file (Python build() is executed)")

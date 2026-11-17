@@ -14,6 +14,7 @@ from poser.cli.common import (
     EXIT_BAD_CONFIG,
     EXIT_SOME_FAILED,
     align_rows,
+    command,
     fail,
     load_composition,
 )
@@ -43,6 +44,7 @@ def old_layout_problems(sounds_dir: Path) -> list[str]:
     ]
 
 
+@command
 def list_main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog=LIST_PROG, description="List the sounds a song can use.")
     parser.add_argument("--config", type=Path, help="workspace config (default: poser.toml)")
@@ -109,6 +111,7 @@ def argument[T](label: str, parse: Callable[[str], T], text: str) -> T:
         raise ValueError(f"{label}: {error}") from error
 
 
+@command
 def save_main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog=SAVE_PROG,

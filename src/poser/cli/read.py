@@ -12,6 +12,7 @@ from poser.cli.common import (
     EXIT_ALL_PASS,
     EXIT_BAD_CONFIG,
     EXIT_SOME_FAILED,
+    command,
     fail,
     load_composition,
 )
@@ -181,6 +182,7 @@ def _selected(configured: tuple[Framework, ...], names: list[str]) -> tuple[Fram
     return tuple(framework for framework in configured if framework.name in names)
 
 
+@command
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog=PROG, description=__doc__)
     parser.add_argument("song", type=Path, help="trusted song file (Python build() is executed)")

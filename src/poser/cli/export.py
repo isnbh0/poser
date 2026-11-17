@@ -5,7 +5,7 @@ import json
 from importlib.metadata import version
 from pathlib import Path
 
-from poser.cli.common import RENDER_TIMEOUT_S, fail, progress
+from poser.cli.common import RENDER_TIMEOUT_S, command, fail, progress
 from poser.cli.workspace import WorkspaceError, fill_path_options, song_id
 from poser.compose import Composition, delivery_writer, parse_config
 from poser.core.delivery import (
@@ -77,6 +77,7 @@ def _run(args: argparse.Namespace) -> DeliveryResult:
     )
 
 
+@command
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog=PROG, description=__doc__)
     parser.add_argument("song", type=Path)

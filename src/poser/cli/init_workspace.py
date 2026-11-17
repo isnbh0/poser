@@ -7,6 +7,7 @@ from importlib.resources import files
 from pathlib import Path
 from typing import Never, override
 
+from poser.cli.common import command
 from poser.cli.guide import GUIDE_NAME, workspace_guide
 from poser.cli.workspace import CONFIG_NAME, Workspace
 from poser.compose import Composition, parse_config, workspace_initializer
@@ -74,6 +75,7 @@ class _Parser(argparse.ArgumentParser):
         super().error(f"{message}\nExample: uv run init-workspace --setup surge")
 
 
+@command
 def main(argv: list[str] | None = None) -> int:
     parser = _Parser(
         prog="init-workspace",
