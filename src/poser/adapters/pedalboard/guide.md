@@ -4,8 +4,10 @@ A Pedalboard instrument plays a VST3 or Audio Unit plugin. A track names one of 
 `<instrument>:<source>/<path>`, exactly as `uv run list-sounds` prints it, such as
 `synth:presets/Bass/Growl`.
 
-Audio Unit plugins load only on macOS. On Windows, `path` names the `.vst3` bundle or the binary
-inside it, `Contents\x86_64-win\<name>.vst3`. Write a Windows path in TOML as a literal string,
+Audio Unit plugins load only on macOS. Elsewhere, `.component` instrument and file-backed effect
+paths are refused when their configuration is built, before a worker starts. On Windows, `path`
+names the `.vst3` bundle or the binary inside it, `Contents\x86_64-win\<name>.vst3`.
+Write a Windows path in TOML as a literal string,
 in single quotes, such as `path = 'C:\Program Files\Common Files\VST3\Synth.vst3'`.
 
 - A bare instrument name, such as `synth`, is the plugin's default patch.

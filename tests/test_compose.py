@@ -2,14 +2,16 @@
 
 import argparse
 import importlib
+import os
 import re
 import subprocess
 import sys
 import textwrap
 import uuid
 from pathlib import Path
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
 from typing import TYPE_CHECKING, NoReturn
+from unittest.mock import Mock
 
 import pytest
 from helpers import SURGE_DIR
@@ -19,6 +21,9 @@ from poser.adapters.chords import ChordsVocabulary
 from poser.adapters.filestore import FileRenderStore
 from poser.adapters.measuring import StandardMeasurer
 from poser.adapters.mixing import GainMixer
+from poser.adapters.pedalboard import config as config_module
+from poser.adapters.pedalboard import instrument as instrument_module
+from poser.adapters.pedalboard import worker as worker_module
 from poser.adapters.pedalboard.instrument import PedalboardInstrument
 from poser.adapters.song_formats import ScriptSongFormat, YamlSongFormat
 from poser.adapters.spectrogram import SpectrogramVisualizer
@@ -455,6 +460,67 @@ def test_building_every_built_in_adapter_starts_no_process_and_writes_no_file(
     assert required_guide(composition)
 
     assert files_under(tmp_path) == before
+
+
+@pytest.mark.parametrize("suffix", [".component", ".COMPONENT", ".CoMpOnEnT"])
+@pytest.mark.parametrize(
+    ("method", "namespace"),
+    [("instruments", "instruments.synth"), ("effects", "effects.drive")],
+)
+def test_composition_refuses_audio_units_before_worker_start(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    suffix: str,
+    method: str,
+    namespace: str,
+) -> None:
+    plugin_path = tmp_path / f"Missing{suffix}"
+    text = f'[{namespace}]\nadapter = "pedalboard"\npath = "{plugin_path.name}"\n'
+    path = write_config(tmp_path, (SERUM if method == "effects" else "") + text)
+
+    # Only the configuration predicate uses a stand-in on macOS. Backend preflights and
+    # filesystem operations keep the real host; Windows exercises its actual platform.
+    platform = sys.platform
+    if platform == "darwin":
+        platform = "win32"
+        monkeypatch.setattr(config_module, "sys", SimpleNamespace(platform=platform), raising=False)
+
+    no_plugin_work = Mock(side_effect=refuse)
+    for module, name in [
+        (instrument_module, "run_isolated"),
+        (worker_module, "load_external"),
+        (subprocess, "Popen"),
+        (subprocess, "run"),
+    ]:
+        monkeypatch.setattr(module, name, no_plugin_work)
+
+    plugin_stat = Mock(side_effect=AssertionError("configuration inspected the plugin path"))
+    real_stat = Path.stat
+
+    def stat(target: Path, *, follow_symlinks: bool = True) -> os.stat_result:
+        if target == plugin_path:
+            plugin_stat()
+        return real_stat(target, follow_symlinks=follow_symlinks)
+
+    monkeypatch.setattr(Path, "stat", stat)
+    try:
+        # Reading the actual TOML remains allowed and lazy; only building rejects the recipe.
+        composition = load(path, tmp_path / "sounds", tmp_path / "renders")
+        with pytest.raises(ConfigError) as error:
+            getattr(composition, method)()
+
+        message = str(error.value)
+        assert message.startswith(f"{path}: {namespace}: ")
+        assert message.count(str(path)) == 1
+        assert message.count(namespace) == 1
+        assert "instrument 'synth'" not in message
+        assert "effect 'drive'" not in message
+        assert "audio unit" in message.lower()
+        assert platform in message
+        assert "macOS" in message
+    finally:
+        no_plugin_work.assert_not_called()
+        plugin_stat.assert_not_called()
 
 
 def context_seen(module: ModuleType) -> AdapterContext:

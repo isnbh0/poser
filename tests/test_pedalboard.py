@@ -26,6 +26,7 @@ from test_performance import cc_track, performed
 
 from poser.adapters.filesystem import native
 from poser.adapters.isolation import WorkerCrashedError, WorkerTimedOutError
+from poser.adapters.pedalboard import config as config_module
 from poser.adapters.pedalboard import instrument as instrument_module
 from poser.adapters.pedalboard import worker as worker_module
 from poser.adapters.pedalboard.config import (
@@ -1781,6 +1782,117 @@ def test_effect_from_options_resolves_the_path_against_base(tmp_path: Path) -> N
         "drive", {"builtin": "Gain", "parameters": {"gain_db": 6}}, tmp_path
     )
     assert (builtin.builtin, builtin.parameters) == ("Gain", {"gain_db": 6})
+
+
+def file_plugin_config(
+    kind: str, route: str, base: Path, leaf: str
+) -> PedalboardConfig | EffectConfig:
+    path = base / leaf
+    if route == "direct":
+        if kind == "instrument":
+            fields = config_fields(base) | {"path": path}
+            return PedalboardConfig(**fields)  # ty: ignore[invalid-argument-type]
+        fields = effect_config_fields(base) | {"path": path, "builtin": None, "parameters": {}}
+        return EffectConfig(**fields)  # ty: ignore[invalid-argument-type]
+    options: dict[str, JsonValue] = {"path": leaf if route == "relative-options" else str(path)}
+    if kind == "instrument":
+        return from_options("serum", options, base)
+    return effect_from_options("drive", options, base)
+
+
+@pytest.mark.parametrize("kind", ["instrument", "effect"])
+@pytest.mark.parametrize("platform", ["win32", "linux", "freebsd14"], ids=lambda p: f"standin-{p}")
+@pytest.mark.parametrize("suffix", [".component", ".COMPONENT", ".CoMpOnEnT"])
+def test_audio_unit_configs_are_refused_off_macos(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kind: str, platform: str, suffix: str
+) -> None:
+    """Constructor-platform stand-ins do not claim native execution on those hosts."""
+    monkeypatch.setattr(config_module, "sys", SimpleNamespace(platform=platform), raising=False)
+    with pytest.raises(ConfigError) as error:
+        file_plugin_config(kind, "direct", tmp_path, f"Missing{suffix}")
+    detail = str(error.value)
+    name = "serum" if kind == "instrument" else "drive"
+    assert detail.startswith(f"{kind} {name!r}:")
+    assert "audio unit" in detail.lower()
+    assert platform in detail
+    assert "macos" in detail.lower()
+
+
+@pytest.mark.parametrize("kind", ["instrument", "effect"])
+@pytest.mark.parametrize("route", ["absolute-options", "relative-options"])
+@pytest.mark.parametrize("platform", ["win32", "linux", "freebsd14"], ids=lambda p: f"standin-{p}")
+@pytest.mark.parametrize("suffix", [".component", ".COMPONENT", ".CoMpOnEnT"])
+def test_audio_unit_options_are_refused_off_macos(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    kind: str,
+    route: str,
+    platform: str,
+    suffix: str,
+) -> None:
+    """Exercise the real builders, not backend platform preflights or native Linux loading."""
+    monkeypatch.setattr(config_module, "sys", SimpleNamespace(platform=platform), raising=False)
+    with pytest.raises(ConfigError) as error:
+        file_plugin_config(kind, route, tmp_path, f"plugins/Missing{suffix}")
+    detail = str(error.value)
+    name = "serum" if kind == "instrument" else "drive"
+    assert detail.startswith(f"{kind} {name!r}:")
+    assert "audio unit" in detail.lower()
+    assert platform in detail
+    assert "macos" in detail.lower()
+
+
+@pytest.mark.parametrize("kind", ["instrument", "effect"])
+@pytest.mark.parametrize("route", ["direct", "absolute-options", "relative-options"])
+@pytest.mark.parametrize("suffix", [".component", ".COMPONENT", ".CoMpOnEnT"])
+def test_audio_unit_configs_are_allowed_on_macos(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kind: str, route: str, suffix: str
+) -> None:
+    """A darwin stand-in proves config acceptance, not real Audio Unit loading."""
+    monkeypatch.setattr(config_module, "sys", SimpleNamespace(platform="darwin"), raising=False)
+    leaf = f"plugins/Missing{suffix}"
+    assert file_plugin_config(kind, route, tmp_path, leaf).path == tmp_path / leaf
+
+
+@pytest.mark.parametrize("kind", ["instrument", "effect"])
+@pytest.mark.parametrize("route", ["direct", "absolute-options", "relative-options"])
+def test_audio_unit_configs_follow_the_native_platform(
+    tmp_path: Path, kind: str, route: str
+) -> None:
+    """Unmocked on every host: Windows CI must prove real Windows refusal, without skips."""
+    leaf = "plugins/Missing.CoMpOnEnT"
+    if sys.platform == "darwin":
+        assert file_plugin_config(kind, route, tmp_path, leaf).path == tmp_path / leaf
+    else:
+        with pytest.raises(ConfigError) as error:
+            file_plugin_config(kind, route, tmp_path, leaf)
+        detail = str(error.value)
+        name = "serum" if kind == "instrument" else "drive"
+        assert detail.startswith(f"{kind} {name!r}:")
+        assert "audio unit" in detail.lower()
+        assert sys.platform in detail
+        assert "macos" in detail.lower()
+
+
+@pytest.mark.parametrize(
+    "platform", ["win32", "linux", "freebsd14", "darwin"], ids=lambda p: f"standin-{p}"
+)
+@pytest.mark.parametrize(
+    "leaf", ["Missing.vst3", "Missing.unknownsuffix", "Parent.component/Missing.vst3"]
+)
+def test_non_audio_unit_configs_keep_their_existing_behavior(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, platform: str, leaf: str
+) -> None:
+    monkeypatch.setattr(config_module, "sys", SimpleNamespace(platform=platform), raising=False)
+    for kind in ("instrument", "effect"):
+        for route in ("direct", "absolute-options", "relative-options"):
+            assert file_plugin_config(kind, route, tmp_path, leaf).path == tmp_path / leaf
+    builtin = EffectConfig(**effect_config_fields(tmp_path))  # ty: ignore[invalid-argument-type]
+    options = effect_from_options(
+        "drive", {"builtin": "Gain", "parameters": {"gain_db": -6}}, tmp_path
+    )
+    assert builtin == options
+    assert (builtin.path, builtin.builtin) == (None, "Gain")
 
 
 def write_effect_input(tmp_path: Path, frames: int = 480, fill: float = 0.5) -> Path:

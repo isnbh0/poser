@@ -1,6 +1,7 @@
 """A Pedalboard instrument's or effect's options: its plugin, its preset sources, and its preset
 formats."""
 
+import sys
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -22,6 +23,14 @@ SAVED_SOURCE = "saved"
 DEFAULT_FORMATS = ("fxp", "saved")
 OPTION_KEYS = frozenset({"path", "plugin_name", "sources", "formats"})
 EFFECT_OPTION_KEYS = frozenset({"path", "builtin", "parameters"})
+
+
+def _check_plugin_platform(owner: str, path: Path) -> None:
+    if path.suffix.lower() == ".component" and sys.platform != "darwin":
+        raise ConfigError(
+            f"{owner}: Audio Unit (.component) plugins require macOS; "
+            f"current platform is {sys.platform!r}"
+        )
 
 
 @dataclass(frozen=True)
@@ -63,6 +72,7 @@ class PedalboardConfig:
             raise ConfigError(f"{owner}: formats must name at least one preset format")
         if len(set(self.formats)) != len(self.formats):
             raise ConfigError(f"{owner}: formats has a duplicate in {list(self.formats)}")
+        _check_plugin_platform(owner, self.path)
 
 
 def _text(value: object) -> str | None:
@@ -149,6 +159,8 @@ class EffectConfig:
         if not isinstance(self.parameters, Mapping):
             raise ConfigError(f"{owner}: parameters must be a table, got {self.parameters!r}")
         object.__setattr__(self, "parameters", MappingProxyType(dict(self.parameters)))
+        if self.path is not None:
+            _check_plugin_platform(owner, self.path)
 
 
 def effect_from_options(name: str, options: Mapping[str, JsonValue], base: Path) -> EffectConfig:
