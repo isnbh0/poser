@@ -48,11 +48,13 @@ note searches with `grep -rn <pattern> <path>`, PowerShell's
   **Cause:** poser uses these names as file and folder names: tracks, instruments, preset
   sources, saved sounds, effect recipes, and each part of a song's or an include's path. Each must
   name the same file on every platform, so poser refuses a name Windows cannot hold: a device
-  name, which is `con`, `prn`, `aux`, `nul`, `conin$`, `conout$`, `com1` to `com9`, or `lpt1` to
-  `lpt9` in any case, alone or before a dot, as in `aux.txt`; a name that ends in a dot or a
-  space; or one holding `<`, `>`, `:`, `"`, `/`, `\`, `|`, `?`, `*`, or a control character.
+  name, which is `con`, `prn`, `aux`, `nul`, `conin$`, `conout$`, `com1` to `com9`, `lpt1` to
+  `lpt9`, or `com` or `lpt` with `¹`, `²`, or `³`, in any case, alone or before a dot, as in
+  `aux.txt`; a name that ends in a dot or a space; or one holding `<`, `>`, `:`, `"`, `/`, `\`,
+  `|`, `?`, `*`, or a control character.
   **Fix:** rename it, such as the track `aux` to `aux-bus`, and rename what refers to it.
-  `grep -rniwE 'con|prn|aux|nul|com[1-9]|lpt[1-9]' songs poser.toml` finds the device names.
+  `grep -rniwE 'con|prn|aux|nul|conin\$|conout\$|com[1-9]|lpt[1-9]' songs poser.toml` finds the
+  device names with ASCII digits.
 
 ## Song meter
 

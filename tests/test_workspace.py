@@ -11,6 +11,7 @@ from workspaces import make_workspace, stored_stems, write_song
 from poser.cli import analyze, check, guide, render, sounds
 from poser.cli.common import EXIT_ALL_PASS, EXIT_BAD_CONFIG
 from poser.cli.workspace import (
+    InvalidSongPathError,
     SongOutsideWorkspaceError,
     Workspace,
     WorkspaceError,
@@ -174,10 +175,21 @@ def test_song_outside_the_base_is_refused(tmp_path: Path) -> None:
     assert str(error.value) == f"{song.resolve()} is outside the workspace at {base.resolve()}"
 
 
-def test_path_that_is_no_song_id_is_refused(tmp_path: Path) -> None:
-    paths = [tmp_path]
-    if sys.platform != "win32":  # On Windows a backslash separates, so `a\\b.yaml` is `a/b.yaml`.
-        paths.append(tmp_path / "a\\b.yaml")
-    for path in paths:
-        with pytest.raises(SongOutsideWorkspaceError):
-            song_id(tmp_path, path)
+def test_the_base_itself_is_outside_the_workspace(tmp_path: Path) -> None:
+    with pytest.raises(SongOutsideWorkspaceError):
+        song_id(tmp_path, tmp_path)
+
+
+def test_a_path_below_the_base_that_is_no_song_id_says_why(tmp_path: Path) -> None:
+    names = {"a?b.yaml": "Windows forbids '?' in a name"}
+    if sys.platform != "win32":
+        # On Windows a backslash separates, so `a\\b.yaml` is `a/b.yaml`, and `aux.yaml` is the
+        # AUX device, which resolving may open.
+        names |= {"a\\b.yaml": "Windows forbids", "aux.yaml": "Windows reserves it as a device"}
+    for name, reason in names.items():
+        song = tmp_path / "songs" / name
+        with pytest.raises(InvalidSongPathError) as error:
+            song_id(tmp_path, song)
+        assert isinstance(error.value, WorkspaceError)
+        assert str(error.value).startswith(f"{song.resolve()} cannot be a song: SongId "), error
+        assert reason in str(error.value)

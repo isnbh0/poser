@@ -19,11 +19,16 @@ PATH_OPTIONS = {"config": "config", "sounds_dir": "sounds_dir", "output_dir": "r
 
 
 class WorkspaceError(Exception):
-    """No workspace was found."""
+    """A command cannot place its work: no workspace was found, or a song has no id in it."""
 
 
 class SongOutsideWorkspaceError(WorkspaceError):
     """A song's path is not below the directory song ids are relative to."""
+
+
+class InvalidSongPathError(WorkspaceError):
+    """A song's path below the directory song ids are relative to is no SongId, such as one
+    naming a file Windows cannot hold."""
 
 
 @dataclass(frozen=True)
@@ -77,13 +82,13 @@ def song_id(base: Path, song_path: Path) -> SongId:
     """Return a song's id: its resolved path below `base`, such as `songs/demo.yaml`.
 
     The song path is resolved, so a symlinked song is placed by its target. Raises
-    SongOutsideWorkspaceError when the song is not below `base`.
+    SongOutsideWorkspaceError when the song is not below `base`, and InvalidSongPathError, with
+    SongId's reason, when its path below `base` is no SongId.
     """
     base, song = base.resolve(), song_path.resolve()
-    outside = SongOutsideWorkspaceError(f"{song} is outside the workspace at {base}")
-    if not song.is_relative_to(base):
-        raise outside
+    if song == base or not song.is_relative_to(base):
+        raise SongOutsideWorkspaceError(f"{song} is outside the workspace at {base}")
     try:
         return SongId(song.relative_to(base).as_posix())
     except ValueError as error:
-        raise outside from error
+        raise InvalidSongPathError(f"{song} cannot be a song: {error}") from error

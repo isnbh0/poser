@@ -1,6 +1,7 @@
 """Tests that each song file renders into its own directory, named by its path in the workspace."""
 
 import json
+import sys
 from collections.abc import Callable
 from pathlib import Path
 
@@ -89,6 +90,42 @@ def test_song_outside_the_workspace_exits_2(
 
     assert capsys.readouterr().err == (
         f"{prog}: {song.resolve()} is outside the workspace at {workspace.root}\n"
+    )
+    assert not workspace.renders.exists()
+
+
+@pytest.mark.parametrize(
+    ("prog", "main"), [("render-song", render.main), ("analyze-song", analyze.main)]
+)
+@pytest.mark.parametrize(
+    ("name", "reason"),
+    [
+        ("a?b.yaml", "Windows forbids '?' in a name"),
+        pytest.param(
+            "aux.yaml",
+            "Windows reserves it as a device name",
+            # On Windows `aux.yaml` is the AUX device, which resolving the path may open.
+            marks=pytest.mark.skipif(sys.platform == "win32", reason="aux.yaml is a device"),
+        ),
+    ],
+)
+def test_song_whose_name_windows_cannot_hold_exits_2_saying_why(
+    workspace: CommandWorkspace,
+    capsys: pytest.CaptureFixture[str],
+    prog: str,
+    main: Callable[[list[str]], int],
+    name: str,
+    reason: str,
+) -> None:
+    """The song is refused before it is read, so the file need not exist, as on Windows it
+    cannot."""
+    song = workspace.root / "songs" / name
+
+    assert main([str(song)]) == EXIT_BAD_CONFIG
+
+    assert capsys.readouterr().err == (
+        f"{prog}: {song.resolve()} cannot be a song: SongId 'songs/{name}' names '{name}': "
+        f"{reason}\n"
     )
     assert not workspace.renders.exists()
 
