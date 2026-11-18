@@ -18,8 +18,8 @@ from contextlib import AbstractContextManager
 from pathlib import Path
 from typing import Protocol
 
-from poser.core.paths import PathLimit
-from poser.core.ports import PREREQUISITES_URL, UnsupportedPlatformError
+from poser.core.paths import PathLimit, is_link
+from poser.core.ports import PREREQUISITES_URL, ConfigError, UnsupportedPlatformError
 
 
 class FileSystem(Protocol):
@@ -129,6 +129,111 @@ def native() -> FileSystem:
         f"poser's file-system support does not cover this platform ({platform}); it covers "
         f"macOS, Linux, and Windows. See {PREREQUISITES_URL}"
     )
+
+
+LINK_PROBE_PREFIX = ".poser-link-probe-"
+_LINK_SENTINEL = b"poser workspace link probe\n"
+
+
+def _probe_directory_links(fs: FileSystem, probe: Path) -> None:
+    target = probe / "target"
+    target.mkdir()
+    (target / "sentinel").write_bytes(_LINK_SENTINEL)
+    original = target.stat()
+    link = probe / "directory-link"
+    fs.make_link(link, target.name)
+    if not is_link(link) or not os.path.samestat(link.stat(), original):
+        raise OSError("directory-link creation did not link the intended target")
+    if (link / "sentinel").read_bytes() != _LINK_SENTINEL:
+        raise OSError("the directory link did not expose the target's contents")
+    fs.remove_link(link)
+    if link.exists(follow_symlinks=False):
+        raise OSError("directory-link removal left the link behind")
+    if not os.path.samestat(target.stat(), original):
+        raise OSError("directory-link removal changed the target")
+    if (target / "sentinel").read_bytes() != _LINK_SENTINEL:
+        raise OSError("directory-link removal changed the target's contents")
+
+
+def _probe_hard_links(probe: Path) -> None:
+    source = probe / "file"
+    source.write_bytes(_LINK_SENTINEL)
+    link = probe / "hard-link"
+    os.link(source, link)
+    first, second = source.lstat(), link.lstat()
+    if not (
+        stat.S_ISREG(first.st_mode)
+        and stat.S_ISREG(second.st_mode)
+        and os.path.samestat(first, second)
+        and first.st_nlink >= 2
+    ):
+        raise OSError("hard-link creation did not produce two names for the same regular file")
+    if link.read_bytes() != _LINK_SENTINEL:
+        raise OSError("the hard link did not preserve the file's contents")
+
+
+def _remove_link_probe(fs: FileSystem, probe: Path, owned: os.stat_result) -> None:
+    try:
+        current = probe.lstat()
+    except FileNotFoundError:
+        return
+    if is_link(probe) or not stat.S_ISDIR(current.st_mode) or not os.path.samestat(current, owned):
+        raise OSError("probe directory changed; refusing to remove its replacement")
+    # This checks ownership at cleanup entry, not against hostile concurrent substitution.
+    fs.remove_tree(probe)
+    if probe.exists(follow_symlinks=False):
+        raise OSError("probe cleanup returned without removing the directory")
+
+
+def require_workspace_links(fs: FileSystem, directory: Path) -> None:
+    """Verify working directory links and hard links on the destination volume before publishing.
+
+    Use only an exclusively allocated private namespace, not similarly named owner entries.
+    Cleanup precedes success. A forcibly killed process may leave the namespace for inspection;
+    neither initialization nor its recognized-file recovery sweeps these directories.
+    """
+    try:
+        probe = Path(tempfile.mkdtemp(prefix=LINK_PROBE_PREFIX, dir=directory))
+    except OSError as error:
+        raise ConfigError(f"{directory}: cannot check required links: {error}") from error
+    try:
+        owned = probe.lstat()
+        changed = is_link(probe) or not stat.S_ISDIR(owned.st_mode)
+    except OSError as error:
+        raise ConfigError(
+            f"{directory}: cannot inspect link probe {probe}: {error}; "
+            "probe not removed; inspect it before manual cleanup"
+        ) from error
+    except BaseException as error:
+        error.add_note(f"link probe {probe} was not removed; inspect it before manual cleanup")
+        raise
+    if changed:
+        raise ConfigError(f"{directory}: link probe {probe} changed; refusing to use or remove it")
+
+    failure: BaseException | None = None
+    try:
+        capability = "directory links"
+        try:
+            _probe_directory_links(fs, probe)
+            capability = "hard links"
+            _probe_hard_links(probe)
+        except OSError as error:
+            raise ConfigError(f"{directory}: cannot use required {capability}: {error}") from error
+    except BaseException as error:
+        failure = error
+        raise
+    finally:
+        try:
+            _remove_link_probe(fs, probe, owned)
+        except OSError as cleanup:
+            detail = f"cannot remove link probe {probe}: {cleanup}"
+            if failure is not None and not isinstance(failure, Exception):
+                failure.add_note(detail)
+            else:
+                message = (
+                    f"{failure}; {detail}" if failure is not None else f"{directory}: {detail}"
+                )
+                raise ConfigError(message) from (failure if failure is not None else cleanup)
 
 
 def umask_mode() -> int:

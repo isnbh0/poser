@@ -1,5 +1,6 @@
 """Workspace initialization consumes an explicitly selected reference setup."""
 
+import errno
 import os
 import subprocess
 import sys
@@ -12,6 +13,7 @@ from helpers import set_instrument_guide
 from hosts import isolated_host
 from links import LINK_KINDS, make_dangling_link
 
+from poser.adapters import filesystem, workspace_init
 from poser.adapters.song_formats import SONG_FORMATS
 from poser.cli import guide, init_workspace, sounds
 from poser.cli.workspace import Workspace, find_workspace
@@ -89,6 +91,61 @@ def test_success_writes_current_guide_and_loadable_demo(
     assert str(plugin) in output
     assert not (target / "sounds").exists()
     assert not (target / "renders").exists()
+
+
+@pytest.mark.parametrize("capability", ["directory links", "hard links"])
+@pytest.mark.parametrize("existing", [False, True], ids=["new-root", "owner-root"])
+def test_init_refuses_missing_workspace_link_capability(
+    tmp_path: Path,
+    plugin: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    capability: str,
+    existing: bool,
+) -> None:
+    target = tmp_path / "new" / "studio"
+    if existing:
+        target.mkdir(parents=True)
+        (target / "pyproject.toml").write_text(
+            "[project]\nname = 'owner'\n", encoding="utf-8", newline="\n"
+        )
+        (target / ".gitignore").write_text("owner/\n", encoding="utf-8", newline="\n")
+    before = snapshot(target)
+    fs = filesystem.native()
+    # Keep the real composition factory and initializer, but supply this backend to every
+    # factory call rather than patching one otherwise-unused native() instance.
+    monkeypatch.setattr(workspace_init, "native", lambda: fs)
+    reason = "this destination volume refuses the required link primitive"
+    attempted: list[Path] = []
+
+    def refuse_directory_link(link: Path, destination: str) -> None:
+        attempted.append(link)
+        raise OSError(errno.ENOTSUP, reason)
+
+    link = os.link
+
+    def refuse_probe_hard_link(source: Path, destination: Path) -> None:
+        if source.parent.name.startswith(filesystem.LINK_PROBE_PREFIX):
+            attempted.append(destination)
+            raise OSError(errno.ENOTSUP, reason)
+        # Ordinary scaffold publication must remain possible, exposing the old ungated path.
+        link(source, destination)
+
+    if capability == "directory links":
+        monkeypatch.setattr(fs, "make_link", refuse_directory_link)
+    else:
+        monkeypatch.setattr(os, "link", refuse_probe_hard_link)
+
+    assert init_workspace.main(args(target, plugin)) == 2
+    diagnostic = capsys.readouterr().err
+    assert diagnostic.startswith("init-workspace: ")
+    assert str(target) in diagnostic
+    assert capability in diagnostic
+    assert reason in diagnostic
+    assert attempted
+    assert snapshot(target) == before
+    if not existing:
+        assert not target.parent.exists()
 
 
 def test_complete_read_only_gitignore_is_not_rewritten(
@@ -435,6 +492,34 @@ def test_remove_leftovers_initializes_like_a_clean_run(
     assert "removed songs/demo.yaml\n" in out
     assert not list(target.rglob(".poser-tmp-*"))
     assert snapshot(target) == clean
+
+
+@pytest.mark.parametrize("remove_leftovers", [False, True], ids=["ordinary", "recovery"])
+def test_abandoned_probe_directories_are_not_swept(
+    tmp_path: Path, plugin: Path, remove_leftovers: bool
+) -> None:
+    if remove_leftovers:
+        target, _clean = interrupted(tmp_path, plugin)
+    else:
+        target = tmp_path / "studio"
+        target.mkdir()
+    namespaces = [
+        target / f"{filesystem.LINK_PROBE_PREFIX}owner",
+        target / f"{filesystem.LINK_PROBE_PREFIX}abandoned",
+    ]
+    for namespace in namespaces:
+        (namespace / "target").mkdir(parents=True)
+        (namespace / "target" / "sentinel").write_text(
+            "keep this namespace\n", encoding="utf-8", newline="\n"
+        )
+    before = {namespace: snapshot(namespace) for namespace in namespaces}
+    flags = ["--remove-leftovers"] if remove_leftovers else []
+    assert init_workspace.main([*args(target, plugin), *flags]) == 0
+    assert {namespace: snapshot(namespace) for namespace in namespaces} == before
+    assert set(target.glob(filesystem.LINK_PROBE_PREFIX + "*")) == set(namespaces)
+    assert not list(target.rglob(".poser-tmp-*"))
+    assert (target / "poser.toml").is_file()
+    assert guide.main(["--config", str(target / "poser.toml"), "--check"]) == 0
 
 
 def test_a_lone_temp_file_is_a_leftover(

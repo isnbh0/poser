@@ -23,6 +23,10 @@ supported: Pedalboard, which plays VST3 instruments, publishes no build for it. 
 file-system support poser needs but is untested, and the Surge reference setup searches only macOS
 and Windows locations, so on Linux pass `--plugin-path` and `--presets-path` to `init-workspace`.
 
+The studio's filesystem must support directory links and hard links. `init-workspace` checks both
+in the destination before publishing scaffold files. Windows NTFS supports these features;
+exFAT and FAT32 do not. A failure names the required operation and the underlying reason.
+
 Windows limits a program's paths to 259 characters, and a folder's to 247, unless long paths are
 on. A song's results fit while the studio folder's path and the song's path together hold at most
 165 characters, such as `C:\Users\me\my-studio` and `songs/demo.yaml`; poser refuses a song
@@ -162,7 +166,7 @@ your platform, it cannot run there yet; see [Prerequisites](#prerequisites).
 If initialization reports a missing plugin or invalid path, locate or install Surge, or specify its
 existing location as described in the [Surge guide](../src/poser/reference_setups/surge/README.md),
 and retry `uv run init-workspace --setup surge` with any needed overrides. Retry only
-`init-workspace`: a failed prerequisite check writes no studio files and leaves the Python project
+`init-workspace`: a failed prerequisite check publishes no scaffold files and leaves the Python project
 and poser dependency in place. An interrupted initialization removes the files it wrote, so retry
 the same command. If the process was killed before it could clean up (for example, by SIGKILL or by
 ending it in Task Manager), a retry names the files the interrupted run left and suggests
@@ -170,6 +174,12 @@ ending it in Task Manager), a retry names the files the interrupted run left and
 run if `AGENTS.md`, `POSER.md`, `CLAUDE.md`, `poser.toml`, or `songs/demo.yaml` already exists with
 other content, and merges its required entries into an existing `.gitignore`; if it refuses, follow
 the diagnostic, which names the conflicting path.
+
+A link-capability probe that cannot clean up reports its remaining scratch directory and refuses
+to publish scaffold files. A forcibly killed probe can leave a `.poser-link-probe-*` directory;
+ordinary retries and `--remove-leftovers` do not sweep these directories. Inspect a leftover and
+confirm it belongs to the interrupted probe before removing it manually. Remove directory links
+themselves, never the external directories they lead to, and do not delete entries by prefix alone.
 
 On Windows, a program holding a studio file open, such as a media player playing a render,
 Explorer's preview pane, or a virus scanner, stops poser from replacing or removing that file.

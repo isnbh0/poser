@@ -15,6 +15,8 @@ from typing import NoReturn
 import pytest
 
 from poser.adapters.filesystem import native
+from poser.adapters.workspace_init import WorkspaceInitializer
+from poser.core.ports import ConfigError
 
 pytestmark = pytest.mark.skipif(sys.platform != "win32", reason="the backend runs on Windows")
 
@@ -49,6 +51,41 @@ def test_a_junction_that_fails_half_made_leaves_nothing_at_the_link(
         native().make_link(tmp_path / "latest", "history/1")
     assert not isinstance(raised.value, FileExistsError)
     assert not (tmp_path / "latest").exists()
+
+
+def test_initialization_refuses_a_half_made_junction(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = tmp_path / "studio"
+    (target / "target").mkdir(parents=True)
+    owner = write(target / "target" / "sentinel", "owner target\n")
+    external = tmp_path / "external"
+    external.mkdir()
+    outside = write(external / "sentinel", "external target\n")
+    ignore = write(target / ".gitignore", "owner/\n")
+    before = {path: path.read_bytes() for path in (owner, outside, ignore)}
+    failed_links: list[Path] = []
+    fail = half_made_junction(OSError(errno.EIO, "the volume holds no reparse points"))
+
+    def create(destination: str, link: str) -> NoReturn:
+        failed_links.append(Path(link))
+        fail(destination, link)
+
+    monkeypatch.setattr(CREATE_JUNCTION, create)
+    outputs = {
+        "AGENTS.md": b"agents\n",
+        "poser.toml": b"config\n",
+        "songs/demo.yaml": b"demo\n",
+        ".gitignore": b"owner/\nrenders/\n",
+    }
+    with pytest.raises(ConfigError, match=r"directory links.*reparse points") as raised:
+        WorkspaceInitializer(target, native()).publish(outputs, expected_ignore=b"owner/\n")
+    assert str(target) in str(raised.value)
+    assert failed_links
+    assert all(not link.exists(follow_symlinks=False) for link in failed_links)
+    assert {path: path.read_bytes() for path in before} == before
+    assert set(target.rglob("*")) == {target / "target", owner, ignore}
+    assert set(external.iterdir()) == {outside}
 
 
 def test_an_existing_directory_at_the_link_is_refused_and_kept(

@@ -13,7 +13,7 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from poser.adapters.filesystem import FileSystem, native, write_file
+from poser.adapters.filesystem import FileSystem, native, require_workspace_links, write_file
 from poser.core.names import is_inner_relative
 from poser.core.paths import is_link
 from poser.core.ports import ConfigError
@@ -212,6 +212,7 @@ class WorkspaceInitializer:
         publication = _Publication(self.directory, self.fs)
         try:
             publication.ensure_directory(self.directory)
+            require_workspace_links(self.fs, self.directory)
             for name, data in outputs.items():
                 if name == IGNORE:
                     continue

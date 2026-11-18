@@ -8,8 +8,8 @@ import pytest
 from helpers import assert_mode
 from links import LINK_KINDS, make_link
 
-from poser.adapters.filesystem import native
-from poser.adapters.workspace_init import TEMP_PREFIX, WorkspaceInitializer
+from poser.adapters.filesystem import LINK_PROBE_PREFIX, native
+from poser.adapters.workspace_init import TEMP_PREFIX, WorkspaceInitializer, _Publication
 from poser.core.ports import ConfigError
 
 OUTPUTS = {
@@ -37,12 +37,92 @@ def failing_link(calls_before_failure: int, error: BaseException) -> Callable[[P
 
     def fail(source: Path, target: Path) -> None:
         nonlocal calls
-        calls += 1
-        if calls > calls_before_failure:
-            raise error
+        if not source.parent.name.startswith(LINK_PROBE_PREFIX):
+            calls += 1
+            if calls > calls_before_failure:
+                raise error
         link(source, target)
 
     return fail
+
+
+@pytest.mark.parametrize("existing_root", [True, False], ids=["existing-root", "missing-ancestors"])
+@pytest.mark.parametrize("capability", ["directory links", "hard links"])
+def test_publish_checks_links_before_creating_outputs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capability: str, existing_root: bool
+) -> None:
+    """Primitive failures stand in for unavailable links, not a particular filesystem format."""
+    root = tmp_path / "studio" if existing_root else tmp_path / "new" / "nested" / "studio"
+    before: dict[str, bytes | None] = {}
+    metadata: dict[Path, os.stat_result] = {}
+    expected_ignore = None
+    if existing_root:
+        root.mkdir()
+        for name, data in {".gitignore": b"owner\n", "owner.bin": b"owner data\x00\xff"}.items():
+            path = root / name
+            path.write_bytes(data)
+            path.chmod(0o640)
+            os.utime(path, ns=(1_000_000_000, 2_000_000_000))
+            metadata[path] = path.stat()
+        before = tree(root)
+        expected_ignore = b"owner\n"
+
+    fs = native()
+    make_directory_link = fs.make_link
+    link = os.link
+    failed_probes: list[Path] = []
+    reason = f"injected {capability} restriction"
+
+    def restrict_directory_link(path: Path, target: str) -> None:
+        if capability == "directory links" and path.parent.name.startswith(LINK_PROBE_PREFIX):
+            failed_probes.append(path.parent)
+            raise OSError(5, reason)
+        make_directory_link(path, target)
+
+    def restrict_hard_link(source: Path, target: Path) -> None:
+        if capability == "hard links" and source.parent.name.startswith(LINK_PROBE_PREFIX):
+            failed_probes.append(source.parent)
+            raise OSError(5, reason)
+        link(source, target)
+
+    publications: list[Path] = []
+    create = _Publication.create
+    replace_ignore = _Publication.replace_ignore
+
+    def record_create(publication: _Publication, path: Path, data: bytes) -> None:
+        publications.append(path)
+        create(publication, path, data)
+
+    def record_replace(publication: _Publication, path: Path, data: bytes, expected: bytes) -> None:
+        publications.append(path)
+        replace_ignore(publication, path, data, expected)
+
+    monkeypatch.setattr(fs, "make_link", restrict_directory_link)
+    monkeypatch.setattr(os, "link", restrict_hard_link)
+    monkeypatch.setattr(_Publication, "create", record_create)
+    monkeypatch.setattr(_Publication, "replace_ignore", record_replace)
+    with pytest.raises(ConfigError) as caught:
+        WorkspaceInitializer(root, fs).publish(
+            {".gitignore": b"owner\nrenders/\n", **OUTPUTS}, expected_ignore=expected_ignore
+        )
+
+    assert str(root) in str(caught.value)
+    assert capability in str(caught.value)
+    assert reason in str(caught.value)
+    assert publications == []
+    assert len(failed_probes) == 1
+    assert failed_probes[0].parent == root
+    assert not failed_probes[0].exists()
+    if existing_root:
+        assert tree(root) == before
+        for path, original in metadata.items():
+            current = path.stat()
+            assert current.st_mode == original.st_mode
+            assert current.st_mtime_ns == original.st_mtime_ns
+            assert os.path.samestat(current, original)
+    else:
+        assert tree(tmp_path) == {}
+        assert not (tmp_path / "new").exists()
 
 
 def test_publish_creates_targets_with_bytes_and_mode(tmp_path: Path) -> None:
