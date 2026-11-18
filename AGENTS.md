@@ -48,12 +48,14 @@ advice when `[guidance] advice` is enabled.
 ## Checking
 
 - `make check` runs format, lint, types, and the tests that need no plugins.
-- CI's `windows` job requires the plugin-free suite to pass on Windows. It then installs Surge XT
-  from its pinned installer, and runs the PowerShell blocks of `docs/setup.md` and
-  `docs/upgrading.md`, extracted from the docs, in a new studio in Windows PowerShell 5.1. It runs
-  the real-plugin tests against that studio's `poser.toml`, and the real-scsynth tests against
-  SuperCollider from its pinned installer. A change to those blocks keeps them runnable there, and
-  `tests/test_release.py` keeps each one the same commands as its bash chain.
+- CI's `windows` job requires whole-project format, lint, and type checks before installing Surge
+  XT from its pinned installer. The plugin-free suite then runs with Surge installed to catch tests
+  that search the machine instead of their isolated host. The job runs the PowerShell blocks of
+  `docs/setup.md` and `docs/upgrading.md`, extracted from the docs, in a new studio in Windows
+  PowerShell 5.1. It runs the real-plugin tests against that studio's `poser.toml`, the real-scsynth
+  tests against SuperCollider from its pinned installer, and the documented long-paths registry
+  command verbatim before testing long paths. A change to documented blocks keeps them runnable
+  there; `tests/test_release.py` guards their bash mirrors and the registry command's CI mirror.
 - `make test-real` runs the `real_plugins` tests, which load the instruments in a root
   `poser.toml`, and the `real_scsynth` tests. The test harness finds `scsynth` through
   `SCSYNTH_PATH`, the SuperCollider app bundle, or `PATH`; the adapter itself runs only its

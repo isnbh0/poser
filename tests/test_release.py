@@ -12,6 +12,7 @@ from pathlib import Path, PureWindowsPath
 from urllib.parse import unquote, urlsplit
 
 import pytest
+import yaml
 from helpers import REPO_DIR
 
 from poser.core.report import (
@@ -106,6 +107,50 @@ def test_powershell_blocks_mirror_the_bash_chains(document: str, text: str) -> N
     assert powershell.splitlines() == [line.removesuffix(" &&") for line in bash.splitlines()], (
         document
     )
+
+
+def test_windows_checks_precede_the_installed_plugin_isolation_suite() -> None:
+    workflow = yaml.safe_load(
+        (REPO_DIR / ".github/workflows/check.yml").read_text(encoding="utf-8")
+    )
+    steps = workflow["jobs"]["windows"]["steps"]
+    names = [step.get("name") for step in steps]
+    checks = names.index("Format, lint, and types (required)")
+    assert (
+        checks
+        < names.index("Install Surge XT (required)")
+        < names.index("Plugin-free suite (required)")
+    )
+    assert "Type-check the Windows backends (required)" not in names
+    assert steps[checks]["run"].splitlines() == [
+        "$PSNativeCommandUseErrorActionPreference = $true",
+        "uv run ruff format --check .",
+        "uv run ruff check .",
+        "uv run ty check",
+    ]
+
+
+def test_windows_long_paths_command_matches_the_documented_command() -> None:
+    """The enable branch executes the documented command, not a CI-only paraphrase."""
+    prerequisites = section(REPO_DIR / "docs/setup.md", "Prerequisites")
+    (documented,) = re.findall(r"```powershell\n(.*?)```", prerequisites, re.DOTALL)
+    workflow = yaml.safe_load(
+        (REPO_DIR / ".github/workflows/check.yml").read_text(encoding="utf-8")
+    )
+    (step,) = [
+        step
+        for step in workflow["jobs"]["windows"]["steps"]
+        if step.get("name") == "Long paths off and on (required)"
+    ]
+    (enable,) = re.findall(
+        r"(?m)^ *if \(\$Value -eq 1\) \{\n(.*?)^ *\} else \{", step["run"], re.DOTALL
+    )
+    commands = [
+        line.strip()
+        for line in enable.splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    ]
+    assert commands == documented.strip().splitlines()
 
 
 @pytest.mark.skipif(

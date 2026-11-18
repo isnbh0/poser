@@ -65,6 +65,13 @@ jobs:
       - run: uv sync --locked
       - name: Show which interpreter the tests start
         run: uv run python -c "import sys; print(sys.executable); print(sys._base_executable)"
+      - name: Format, lint, and types (required)
+        if: ${{ !cancelled() }}
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          uv run ruff format --check .
+          uv run ruff check .
+          uv run ty check
       # The installer from the Surge XT 1.3.4 release, with its default components, as a user
       # runs it. The release publishes no digest; the pin is computed from a download.
       - name: Install Surge XT (required)
@@ -105,13 +112,6 @@ jobs:
         if: ${{ !cancelled() }}
         timeout-minutes: 30
         run: uv run pytest -q -rs
-      - name: Type-check the Windows backends (required)
-        if: ${{ !cancelled() }}
-        run: >-
-          uv run ty check src/poser/adapters/filesystem_windows.py
-          src/poser/adapters/isolation_windows.py src/poser/adapters/isolation.py
-          src/poser/adapters/pedalboard/plugin_files.py src/poser/adapters/pedalboard/worker.py
-          tests/test_isolation.py
       # The PowerShell blocks of the setup guide and the upgrade guide, as written, in Windows
       # PowerShell 5.1, which ships with Windows. The one change: the studio adds the checkout as
       # its poser in place of the Git URL.
@@ -266,7 +266,13 @@ jobs:
           $song = "songs/" + ("d" * $name) + "/demo.yaml"
           $deep = Join-Path $env:RUNNER_TEMP ("s" * 230)
           function Set-LongPaths([int]$Value) {
-            Set-ItemProperty -Path $key -Name LongPathsEnabled -Value $Value -Type DWord
+            if ($Value -eq 1) {
+              # Verbatim from docs/setup.md, Prerequisites; test_release.py guards the mirror.
+              New-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem' -Name LongPathsEnabled -Value 1 -PropertyType DWORD -Force
+            } else {
+              # CI-internal measurement toggle, not a documented user step.
+              Set-ItemProperty -Path $key -Name LongPathsEnabled -Value 0 -Type DWord
+            }
             $env:POSER_EXPECT_LONG_PATHS = "$Value"
             $basetemp = Join-Path $env:RUNNER_TEMP "limit-$Value"
             uv run --directory $env:GITHUB_WORKSPACE pytest -q -p no:cacheprovider `
@@ -305,6 +311,7 @@ jobs:
               tests/test_scsynth_real.py
             if ($LASTEXITCODE -ne 0) { throw "an instrument failed to render past MAX_PATH" }
           } finally {
+            # CI-internal, not documented user steps: restore the runner's state.
             if ($null -eq $original) {
               Remove-ItemProperty -Path $key -Name LongPathsEnabled
             } else {
