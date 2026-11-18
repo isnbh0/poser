@@ -29,8 +29,10 @@ from poser.core.audio import SAMPLE_RATE, SILENCE_DBFS, Audio, measure_peak_dbfs
 from poser.core.names import Identifier
 from poser.core.performance import NoteOff, NoteOn, Performance, perform
 from poser.core.ports import EffectRenderRequest, RenderRequest, ResolvedEffect, ResolvedSound
+from poser.core.rendering import late_start_s
 from poser.core.song import Note, Song, Track
 from poser.core.sounds import SoundRef
+from poser.reference_setups.surge.showcase import build as showcase
 
 pytestmark = pytest.mark.real_plugins
 
@@ -97,6 +99,47 @@ def test_a_windows_plugin_loads_from_its_binary_as_from_its_bundle(tmp_path: Pat
             assert audio.frames == performance.samples
             assert measure_peak_dbfs(audio.samples) > SILENCE_DBFS, path
     assert bundles, "no Pedalboard instrument names a bundle directory"
+
+
+@pytest.mark.parametrize(
+    "delay_samples", [0, SAMPLE_RATE // 2], ids=["first-note", "authored-silence"]
+)
+def test_surge_restored_preset_keeps_its_first_note(tmp_path: Path, delay_samples: int) -> None:
+    instrument = real_pedalboard_instruments(tmp_path).get("surge")
+    if instrument is None:
+        pytest.skip("the root poser.toml has no Pedalboard Surge instrument named 'surge'")
+    song = showcase()
+    bass = next(track for track in song.tracks if track.name == "bass")
+    full = perform(song.graph(), bass)
+    prefix = Performance(
+        4 * SAMPLE_RATE, tuple(event for event in full.events if event.sample < 4 * SAMPLE_RATE)
+    )
+    performance = Performance(
+        prefix.samples + delay_samples,
+        tuple(
+            dataclasses.replace(event, sample=event.sample + delay_samples)
+            for event in prefix.events
+        ),
+    )
+    first = next(event for event in performance.events if isinstance(event, NoteOn))
+    off = next(
+        event
+        for event in performance.events
+        if isinstance(event, NoteOff) and event.pitch == first.pitch and event.sample > first.sample
+    )
+    sound = instrument.resolve(bass.sound_ref)
+    assert isinstance(sound, ResolvedSound), sound
+    path = tmp_path / "first-note.npy"
+    # Exercise the actual adapter once: core retries or a diagnostic wrapper must not hide a miss.
+    failure = instrument.render(RenderRequest(sound, performance, path, attempt=1), 120)
+    assert failure is None, failure
+    audio = read_raw_audio(path, performance.samples)
+    assert isinstance(audio, Audio), audio
+    assert audio.frames == performance.samples
+    assert measure_peak_dbfs(audio.samples[:, first.sample : off.sample]) > SILENCE_DBFS
+    assert late_start_s(audio.samples, performance) is None
+    if delay_samples:
+        assert measure_peak_dbfs(audio.samples[:, : first.sample]) < -100
 
 
 def captured_state(instrument_path: Path, tmp_path: Path) -> bytes:

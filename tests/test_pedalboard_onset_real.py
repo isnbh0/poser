@@ -49,11 +49,15 @@ class _Variant:
     after_state_s: float = 0.0
     delay_s: float = 0.0
     default_patch: bool = False
+    record_prime: bool = True
 
 
 VARIANTS = (
     _Variant("production"),
     _Variant("state_then_one_block", after_state_s=BUFFER_SIZE / SAMPLE_RATE),
+    _Variant(
+        "state_then_one_block_no_gap", after_state_s=BUFFER_SIZE / SAMPLE_RATE, record_prime=False
+    ),
     _Variant("state_then_silence_0.1s", after_state_s=0.1),
     _Variant("state_then_silence_1.0s", after_state_s=1.0),
     _Variant("silence_0.1s_then_state", before_state_s=0.1),
@@ -69,6 +73,8 @@ def showcase_onset_worker(job: JsonValue) -> JsonValue:
     assert isinstance(job, dict)
     render_job = job["render_job"]
     before_s, after_s = job["before_state_s"], job["after_state_s"]
+    record_prime = job.get("record_prime", True)
+    assert isinstance(record_prime, bool)
     assert isinstance(render_job, dict)
     assert isinstance(before_s, int | float)
     assert not isinstance(before_s, bool)
@@ -102,14 +108,15 @@ def showcase_onset_worker(job: JsonValue) -> JsonValue:
             buffer_size=BUFFER_SIZE,
             reset=False,
         )
-        assert isinstance(prime_path, str)
-        # Persist before another plugin call can reuse its output buffer.
-        write_raw_audio(Path(prime_path), primed)
-        prime_metadata = dict[str, JsonValue](
-            audio_path=prime_path,
-            frames=int(primed.shape[1]),
-            peak_dbfs=measure_peak_dbfs(primed),
-        )
+        if record_prime:
+            assert isinstance(prime_path, str)
+            # Recorded controls capture output; the no-gap control omits all intervening I/O.
+            write_raw_audio(Path(prime_path), primed)
+            prime_metadata = dict[str, JsonValue](
+                audio_path=prime_path,
+                frames=int(primed.shape[1]),
+                peak_dbfs=measure_peak_dbfs(primed),
+            )
         if before_s:
             assert state is not None
             plugin.raw_state = state
@@ -124,7 +131,7 @@ def showcase_onset_worker(job: JsonValue) -> JsonValue:
 
 
 def test_surge_showcase_onset_probe(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Save seven controls times three workers, asserting audio validity but never onset timing."""
+    """Save eight controls times three workers, asserting audio validity but never onset timing."""
     from helpers import real_composition
 
     # run_isolated imports this module by name; the child's -P ignores pytest's sys.path edits.
@@ -225,7 +232,10 @@ def test_surge_showcase_onset_probe(tmp_path: Path, monkeypatch: pytest.MonkeyPa
                     "render_job": render_job,
                     "before_state_s": variant.before_state_s,
                     "after_state_s": variant.after_state_s,
-                    "prime_audio_path": str(prime_path) if prime_frames else None,
+                    "prime_audio_path": (
+                        str(prime_path) if prime_frames and variant.record_prime else None
+                    ),
+                    "record_prime": variant.record_prime,
                 },
                 120,
             )
@@ -235,7 +245,7 @@ def test_surge_showcase_onset_probe(tmp_path: Path, monkeypatch: pytest.MonkeyPa
             assert isinstance(pid, int), result
             assert not isinstance(pid, bool), result
             prime_metadata = result.get("priming")
-            if prime_frames:
+            if prime_frames and variant.record_prime:
                 assert isinstance(prime_metadata, dict), (stem, result)
                 assert prime_metadata["audio_path"] == str(prime_path)
                 assert prime_metadata["frames"] == prime_frames
@@ -281,6 +291,7 @@ def test_surge_showcase_onset_probe(tmp_path: Path, monkeypatch: pytest.MonkeyPa
                 "after_state_s": variant.after_state_s,
                 "event_delay_samples": delay,
                 "priming": prime_metadata,
+                "priming_recorded": bool(prime_frames and variant.record_prime),
                 "raw_pre_first_note_peak_dbfs": pre_first_note_peak,
                 "sent_performance": performance_to_data(sent),
                 "raw_audio_path": str(raw_path),
@@ -309,5 +320,5 @@ def test_surge_showcase_onset_probe(tmp_path: Path, monkeypatch: pytest.MonkeyPa
                 ),
                 flush=True,
             )
-    assert len(runs) == 21
+    assert len(runs) == 24
     print(f"Surge onset summary: {summary_path}", flush=True)
