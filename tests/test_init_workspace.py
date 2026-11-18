@@ -17,6 +17,7 @@ from poser.cli.workspace import Workspace, find_workspace
 from poser.compose import load
 from poser.core.guide import GENERATED
 from poser.core.loading import load_song
+from poser.core.paths import is_link, walk
 from poser.core.ports import ConfigError
 from poser.core.song import Song, SongError
 from poser.reference_setups.surge import prepare as surge
@@ -36,14 +37,14 @@ def args(target: Path, plugin: Path) -> list[str]:
 def snapshot(root: Path) -> dict[str, tuple[str, bytes]]:
     return {
         str(path.relative_to(root)): (
-            "link" if path.is_symlink() else "dir" if path.is_dir() else "file",
+            "link" if is_link(path) else "dir" if path.is_dir() else "file",
             str(path.readlink()).encode()
-            if path.is_symlink()
+            if is_link(path)
             else b""
             if path.is_dir()
             else path.read_bytes(),
         )
-        for path in root.rglob("*")
+        for path in walk(root)
     }
 
 
