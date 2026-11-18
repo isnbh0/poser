@@ -25,6 +25,10 @@ non-realtime. A track names one of its sounds as `<instrument>:<source>/<path>`,
 - This adapter provides no effect recipes and no `save-sound` capture.
 - The `scsynth` option names the engine binary, whose path varies by install. Without it, sounds
   still list and resolve, and renders fail with `load_failed`.
+- The engine loads UGens from its own `plugins` folder, the SuperCollider `Extensions` folders,
+  and the folders `SC_PLUGIN_PATH` names, so a synthdef can use extension UGens such as
+  sc3-plugins'. A sound's identity covers its synthdef and sidecar, not the engine or its
+  extensions; after changing either, run `uv run render-song <song> --force`.
 
 ```toml
 [instruments.sc]

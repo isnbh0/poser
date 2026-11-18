@@ -86,6 +86,12 @@ def main(argv: list[str]) -> int:
     load = argv.index("-D") if "-D" in argv else None
     if load is None or argv[load + 1] != "0":
         print("*** ERROR: open directory failed '<account>/synthdefs'")
+    if "-U" in argv:
+        print(
+            "stub: -U replaces the Extensions folders, so extension UGens would not load",
+            file=sys.stderr,
+        )
+        return 1
     if "-N" not in argv:
         print("stub: no -N in argv", file=sys.stderr)
         return 1
