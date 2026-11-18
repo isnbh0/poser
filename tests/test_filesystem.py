@@ -4,6 +4,7 @@ Every backend passes this file unchanged on its own platform, so it uses only po
 mechanisms: threads, interpreter subprocesses from `start_python`, and `Popen.kill()`.
 """
 
+import os
 import threading
 import time
 from pathlib import Path
@@ -12,6 +13,7 @@ import pytest
 from helpers import assert_mode
 from interpreter import start_python
 from links import LINK_KINDS, make_link
+from paths import longest_created, make_directory, make_file
 
 from poser.adapters.filesystem import FileSystem, native
 from poser.core.paths import is_link
@@ -332,3 +334,16 @@ def test_remove_tree_removes_read_only_files_and_enters_no_link(
 def test_remove_tree_of_nothing_raises_file_not_found(fs: FileSystem, tmp_path: Path) -> None:
     with pytest.raises(FileNotFoundError):
         fs.remove_tree(tmp_path / "missing")
+
+
+def test_the_path_limit_is_where_the_system_refuses(fs: FileSystem, tmp_path: Path) -> None:
+    """The longest directory and file paths this process creates are the reported limits. The
+    Windows workflow sets POSER_EXPECT_LONG_PATHS to the long-paths switch it set."""
+    limit = fs.path_limit()
+    if (expected := os.environ.get("POSER_EXPECT_LONG_PATHS")) is not None:
+        assert (limit.lift is None) == (expected == "1"), limit
+    found = (
+        longest_created(tmp_path / "d", make_directory, limit.directory + 100),
+        longest_created(tmp_path / "f", make_file, limit.file + 100),
+    )
+    assert found == (limit.directory, limit.file)

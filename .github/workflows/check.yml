@@ -231,3 +231,69 @@ jobs:
           $output | Write-Output
           if ($status -ne 0) { throw "the real-scsynth tests failed" }
           if ($output -match "skipped") { throw "a real-scsynth test skipped" }
+      # Windows reads its long-paths switch when a program starts. With the switch off, the
+      # file-system contract measures the MAX_PATH limits poser reports, and render-song refuses a
+      # song whose results would pass them, naming the fix. With it on, the contract measures the
+      # long limits, the same song renders, and Surge XT and scsynth render in a directory past
+      # MAX_PATH. The step restores the runner's setting.
+      - name: Long paths off and on (required)
+        if: ${{ !cancelled() }}
+        timeout-minutes: 20
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $false  # Exit codes are checked by hand.
+          Remove-Item Env:UV_LOCKED
+          $key = "HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem"
+          $original = (Get-ItemProperty -Path $key).LongPathsEnabled  # $null when unset.
+          Write-Output "LongPathsEnabled was: $original"
+          $studio = Join-Path $env:RUNNER_TEMP my-studio
+          # A song whose path and the studio's together hold 180 characters, past the 165 the
+          # setup guide states, while the song file itself stays inside MAX_PATH.
+          $name = 180 - $studio.Length - "/songs//demo.yaml".Length
+          if ($name -lt 1 -or $name -gt 200) { throw "the studio path leaves $name for a folder" }
+          $song = "songs/" + ("d" * $name) + "/demo.yaml"
+          $deep = Join-Path $env:RUNNER_TEMP ("s" * 230)
+          function Set-LongPaths([int]$Value) {
+            Set-ItemProperty -Path $key -Name LongPathsEnabled -Value $Value -Type DWord
+            $env:POSER_EXPECT_LONG_PATHS = "$Value"
+            uv run pytest -q -p no:cacheprovider --basetemp (Join-Path $env:RUNNER_TEMP "limit-$Value") `
+              "tests/test_filesystem.py::test_the_path_limit_is_where_the_system_refuses"
+            if ($LASTEXITCODE -ne 0) { throw "the path limit is not where Windows refuses" }
+          }
+          try {
+            Push-Location $studio
+            New-Item -ItemType Directory (Split-Path $song) | Out-Null
+            Copy-Item songs/demo.yaml $song
+
+            Set-LongPaths 0
+            $errors = Join-Path $env:RUNNER_TEMP render-errors.txt
+            uv run render-song $song 2> $errors
+            $status = $LASTEXITCODE
+            $refusal = Get-Content -Raw $errors
+            Write-Output $refusal
+            if ($status -ne 2) { throw "render-song exited $status, not 2, for a song past MAX_PATH" }
+            $fix = "turn on Windows long paths as " +
+              "https://github.com/isnbh0/poser/blob/main/docs/setup.md#prerequisites shows"
+            foreach ($part in "cannot keep its results: its directory", "past the 247", $fix) {
+              if (-not $refusal.Contains($part)) { throw "the refusal does not say: $part" }
+            }
+
+            Set-LongPaths 1
+            uv run render-song $song
+            if ($LASTEXITCODE -ne 0) { throw "render-song failed with long paths on" }
+            $longest = (Get-ChildItem -Recurse -File (Join-Path renders $song) |
+              Measure-Object -Maximum { $_.FullName.Length }).Maximum
+            Write-Output "longest result path: $longest characters"
+            if ($longest -le 260) { throw "no result passed MAX_PATH" }
+            Pop-Location
+
+            uv run pytest -m "real_plugins or real_scsynth" -q -rs -p no:cacheprovider --basetemp $deep `
+              "tests/test_pedalboard_real.py::test_a_render_has_exactly_the_performance_s_frames" `
+              tests/test_scsynth_real.py
+            if ($LASTEXITCODE -ne 0) { throw "an instrument failed to render past MAX_PATH" }
+          } finally {
+            if ($null -eq $original) {
+              Remove-ItemProperty -Path $key -Name LongPathsEnabled
+            } else {
+              Set-ItemProperty -Path $key -Name LongPathsEnabled -Value $original -Type DWord
+            }
+          }

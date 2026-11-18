@@ -18,13 +18,17 @@ from contextlib import AbstractContextManager
 from pathlib import Path
 from typing import Protocol
 
-from poser.core.ports import UnsupportedPlatformError
-
-PREREQUISITES_URL = "https://github.com/isnbh0/poser/blob/main/docs/setup.md#prerequisites"
+from poser.core.paths import PathLimit
+from poser.core.ports import PREREQUISITES_URL, UnsupportedPlatformError
 
 
 class FileSystem(Protocol):
     """The platform-specific file-system operations adapters perform."""
+
+    def path_limit(self) -> PathLimit:
+        """How long a path this process may create. The first call may create and remove a
+        temporary directory to find out."""
+        ...
 
     def lock(self, path: Path, *, wait: bool) -> AbstractContextManager[None]:
         """Hold an exclusive lock on `path`, creating the file if it is missing.

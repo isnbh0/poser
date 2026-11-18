@@ -23,6 +23,17 @@ supported: Pedalboard, which plays VST3 instruments, publishes no build for it. 
 file-system support poser needs but is untested, and the Surge reference setup searches only macOS
 and Windows locations, so on Linux pass `--plugin-path` and `--presets-path` to `init-workspace`.
 
+Windows limits a program's paths to 259 characters, and a folder's to 247, unless long paths are
+on. A song's results fit while the studio folder's path and the song's path together hold at most
+165 characters, such as `C:\Users\me\my-studio` and `songs/demo.yaml`; poser refuses a song
+past that and names the path. To lift the limit, run this once in a PowerShell window opened with
+Run as administrator. Windows applies it to programs started afterwards; restart Windows if poser
+still reports the limit.
+
+```powershell
+New-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem' -Name LongPathsEnabled -Value 1 -PropertyType DWORD -Force
+```
+
 ## Create and verify
 
 Choose a parent directory outside any existing project, because the studio is a project of its

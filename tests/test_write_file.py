@@ -10,6 +10,7 @@ import pytest
 from helpers import assert_mode
 
 from poser.adapters.filesystem import FileSystem, native, write_file
+from poser.core.paths import PathLimit
 from poser.core.ports import UnsupportedPlatformError
 
 try:
@@ -65,6 +66,9 @@ class Recording:
 
     def remove_tree(self, path: Path) -> None:
         self.inner.remove_tree(path)
+
+    def path_limit(self) -> PathLimit:
+        return self.inner.path_limit()
 
 
 def text(contents: str) -> Callable[[Path], None]:

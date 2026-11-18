@@ -166,6 +166,9 @@ class AudioFiles(Protocol):
 UPGRADING_URL = "https://github.com/isnbh0/poser/blob/main/docs/upgrading.md"
 """How to move a studio, and code written against poser, to the current poser."""
 
+PREREQUISITES_URL = "https://github.com/isnbh0/poser/blob/main/docs/setup.md#prerequisites"
+"""Which platforms poser runs on, and what each needs."""
+
 
 class ConfigError(Exception):
     """A workspace config or an adapter's options cannot be used."""

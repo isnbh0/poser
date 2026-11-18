@@ -36,7 +36,7 @@ from poser.adapters.filesystem import FileSystem, native, write_text_file
 from poser.adapters.loading import refuse_options
 from poser.core.jsonvalue import JsonValue, json_object
 from poser.core.names import Identifier, SongId, Suffix, is_inner_relative
-from poser.core.paths import is_link, walk
+from poser.core.paths import PathLimit, is_link, walk
 from poser.core.ports import AdapterContext, SongBusyError, StemMeta
 from poser.core.song import is_number
 from poser.core.statuses import StemStatus
@@ -52,6 +52,12 @@ DRAFT_PREFIX = ".tmp-"
 PREVIEWS_DIR = ".sound-previews"  # The leading dot keeps it apart from every song's directory.
 
 _KEY = re.compile(r"[0-9a-f]{64}")
+SHORTEN_SONG = "move the studio or the song to a shorter path"
+# The deepest directory a song's store makes, relative to the song's directory: a unit's. Every
+# unit holds `meta.json` and stem 0; a unit's draft checks each further stem as it names it. A
+# record's deepest file, `history/<n>/images/node-<position><suffix>`, is shallower while its
+# number, position, and suffix together hold fewer than 62 characters.
+DEEPEST_DIRECTORY = PurePath(OBJECTS_DIR, "0" * 64)
 
 GUIDE = """\
 ## Where results are kept
@@ -169,17 +175,26 @@ class FileStoredUnit:
 
 
 class FileUnitDraft:
-    """A unit being written in its draft directory."""
+    """A unit being written in its draft directory, which publishes as `published`."""
 
-    def __init__(self, directory: Path, stem_suffix: Suffix) -> None:
+    def __init__(
+        self, directory: Path, stem_suffix: Suffix, published: Path, limit: PathLimit
+    ) -> None:
         self.directory = directory
         self._stem_suffix = stem_suffix
+        self._published = published
+        self._limit = limit
         self.described: dict[int, StemMeta] = {}
 
     def stem_path(self, index: int) -> Path:
+        """The draft path of stem `index`. Raises ValueError when the stem's published path
+        would pass the system's path limit."""
         if isinstance(index, bool) or not isinstance(index, int) or index < 0:
             raise ValueError(f"a stem index must be a non-negative integer, got {index!r}")
-        return self.directory / f"{index}{self._stem_suffix}"
+        name = f"{index}{self._stem_suffix}"
+        if problem := self._limit.problem(self._published, name, SHORTEN_SONG):
+            raise ValueError(f"stem {index} cannot be kept: {problem}")
+        return self.directory / name
 
     def describe(self, index: int, status: StemStatus, peak_dbfs: float) -> None:
         self.described[index] = StemMeta(status, peak_dbfs)
@@ -302,7 +317,9 @@ class FileSongStore:
     def write_unit(self, key: str, *, replace: bool = False) -> Generator[FileUnitDraft]:
         _check_key(key)
         objects = self._directory / OBJECTS_DIR
-        draft = FileUnitDraft(_draft_dir(objects), self._stem_suffix)
+        draft = FileUnitDraft(
+            _draft_dir(objects), self._stem_suffix, objects / key, self._fs.path_limit()
+        )
         try:
             yield draft
             write_text_file(self._fs, draft.directory / META_NAME, draft.meta_text())
@@ -429,14 +446,22 @@ class FileRenderStore:
         if problem := _inside_another_song(self._renders_dir, song_id):
             raise ValueError(problem)
         directory = self._renders_dir / song_id
+        limit = self._fs.path_limit()
+        for name in (META_NAME, f"0{self._stem_suffix}"):
+            if problem := limit.problem(directory / DEEPEST_DIRECTORY, name, SHORTEN_SONG):
+                raise ValueError(f"song {song_id!r} cannot keep its results: {problem}")
         if directory.is_dir() and not (directory / LOCK_NAME).exists() and any(directory.iterdir()):
             raise ValueError(_holding_another_song(song_id))
         return FileSongStore(self._renders_dir, song_id, self._stem_suffix, self._fs)
 
     def preview_path(self, instrument: Identifier, name: Identifier) -> Path:
         directory = self._renders_dir / PREVIEWS_DIR / instrument
+        file_name = f"{name}{self._stem_suffix}"
+        shorten = "move the studio to a shorter path"
+        if problem := self._fs.path_limit().problem(directory, file_name, shorten):
+            raise ValueError(f"the preview of {instrument}:{name} cannot be kept: {problem}")
         directory.mkdir(parents=True, exist_ok=True)
-        return directory / f"{name}{self._stem_suffix}"
+        return directory / file_name
 
 
 def create(

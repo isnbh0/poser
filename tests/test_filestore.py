@@ -10,10 +10,16 @@ from contracts import check_render_store_contract
 from interpreter import start_python
 from links import LINK_KINDS, make_link
 
-from poser.adapters.filestore import LOCK_NAME, SONGS_LOCK_NAME, FileRenderStore, FileSongStore
+from poser.adapters.filestore import (
+    DEEPEST_DIRECTORY,
+    LOCK_NAME,
+    SONGS_LOCK_NAME,
+    FileRenderStore,
+    FileSongStore,
+)
 from poser.adapters.filesystem import native
 from poser.core.names import Identifier, SongId, Suffix
-from poser.core.paths import is_link
+from poser.core.paths import PathLimit, is_link
 from poser.core.ports import SongBusyError, StemMeta
 from poser.core.statuses import StemStatus
 
@@ -390,6 +396,109 @@ def test_lock_refuses_a_song_nested_after_its_handle_was_taken(tmp_path: Path) -
     assert not (tmp_path / "reversed" / "renders" / "songs" / "a.yaml" / ".lock").exists()
 
 
+SONG = SongId("songs/a.yaml")
+LIFT = "turn on long paths"
+
+
+def limited(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, limit: PathLimit, suffix: Suffix = WAV
+) -> FileRenderStore:
+    """A store on the native file system that reports `limit` as its path limit."""
+    fs = native()
+    monkeypatch.setattr(fs, "path_limit", lambda: limit)
+    return FileRenderStore(tmp_path / "renders", suffix, fs)
+
+
+def deepest(tmp_path: Path, key: str = "0" * 64) -> Path:
+    return (tmp_path / "renders" / SONG / "objects" / key).absolute()
+
+
+def test_a_song_whose_results_fit_the_path_limit_exactly_is_kept(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    unit = deepest(tmp_path, KEY_A)
+    store = limited(monkeypatch, tmp_path, PathLimit(len(str(unit)), len(str(unit / "meta.json"))))
+    publish(store.song(SONG), KEY_A, b"stem")
+    assert (unit / "meta.json").is_file()
+    assert (unit / "0.wav").is_file()
+
+
+@pytest.mark.parametrize("kind", ["directory", "file"])
+def test_a_song_whose_results_would_pass_the_path_limit_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kind: str
+) -> None:
+    unit = deepest(tmp_path)
+    path = unit if kind == "directory" else unit / "meta.json"
+    limit = (
+        PathLimit(len(str(unit)) - 1, len(str(unit / "meta.json")))
+        if kind == "directory"
+        else PathLimit(len(str(unit)), len(str(unit / "meta.json")) - 1, LIFT)
+    )
+    remedy = "move the studio or the song to a shorter path"
+    with pytest.raises(ValueError, match="cannot keep its results") as refused:
+        limited(monkeypatch, tmp_path, limit).song(SONG)
+    assert str(refused.value) == (
+        f"song 'songs/a.yaml' cannot keep its results: its {kind} {path} would be "
+        f"{len(str(path))} characters, past the {len(str(path)) - 1} this system allows; to fix "
+        f"it, {remedy if kind == 'directory' else f'{LIFT}, or {remedy}'}"
+    )
+    assert not (tmp_path / "renders").exists()
+
+
+def test_a_stem_name_longer_than_meta_json_sets_the_song_s_limit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    unit = deepest(tmp_path)
+    limit = PathLimit(len(str(unit)), len(str(unit / "meta.json")))
+    store = limited(monkeypatch, tmp_path, limit, Suffix(".longsuffix"))
+    with pytest.raises(ValueError, match="cannot keep its results") as refused:
+        store.song(SONG)
+    assert f"its file {unit / '0.longsuffix'} would be" in str(refused.value)
+
+
+def test_a_stem_past_the_path_limit_is_refused_by_its_published_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`meta.json` and `99999.wav` are the same length; `100000.wav` is one more."""
+    unit = deepest(tmp_path, KEY_A)
+    store = limited(monkeypatch, tmp_path, PathLimit(len(str(unit)), len(str(unit / "meta.json"))))
+    with store.song(SONG).write_unit(KEY_A) as draft:
+        assert draft.stem_path(99999).name == "99999.wav"
+        with pytest.raises(ValueError, match="cannot be kept") as refused:
+            draft.stem_path(100000)
+        draft.stem_path(0).write_bytes(b"stem")
+        draft.describe(0, StemStatus.RENDERED, -6.0)
+    assert str(refused.value).startswith(f"stem 100000 cannot be kept: its file {unit}")
+    assert (unit / "0.wav").is_file()
+
+
+def test_a_preview_past_the_path_limit_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    directory = (tmp_path / "renders" / ".sound-previews" / "serum").absolute()
+    file = directory / "pad.wav"
+    tight = limited(monkeypatch, tmp_path, PathLimit(len(str(directory)), len(str(file)) - 1))
+    with pytest.raises(ValueError, match="cannot be kept") as refused:
+        tight.preview_path(Identifier("serum"), Identifier("pad"))
+    assert str(refused.value) == (
+        f"the preview of serum:pad cannot be kept: its file {file} would be {len(str(file))} "
+        f"characters, past the {len(str(file)) - 1} this system allows; to fix it, move the "
+        "studio to a shorter path"
+    )
+    assert not (tmp_path / "renders").exists()
+    exact = limited(monkeypatch, tmp_path, PathLimit(len(str(directory)), len(str(file))))
+    assert exact.preview_path(Identifier("serum"), Identifier("pad")) == file
+    assert directory.is_dir()
+
+
+def test_the_setup_guide_states_the_windows_budget_for_a_song() -> None:
+    """Windows' directory limit without long paths, 247 characters, less the store's path below
+    the studio: `renders/`, the song's path, and the deepest directory under it."""
+    budget = 247 - len("/renders/") - len(f"/{DEEPEST_DIRECTORY.as_posix()}")
+    guide = (Path(__file__).parents[1] / "docs" / "setup.md").read_text(encoding="utf-8")
+    assert f"together hold at most {budget} characters" in " ".join(guide.split())
+
+
 class LockRecorder:
     """The native file system, recording which locks are held whenever one is taken."""
 
@@ -434,6 +543,9 @@ class LockRecorder:
 
     def remove_tree(self, path: Path) -> None:
         self._native.remove_tree(path)
+
+    def path_limit(self) -> PathLimit:
+        return self._native.path_limit()
 
 
 def test_lock_takes_the_song_s_lock_under_the_songs_lock_and_holds_only_it(

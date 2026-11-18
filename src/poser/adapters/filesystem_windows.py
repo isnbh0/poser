@@ -11,12 +11,15 @@ import os
 import shutil
 import stat
 import sys
+import tempfile
 import time
 from collections.abc import Callable, Generator
 from contextlib import contextmanager, suppress
+from functools import cache
 from pathlib import Path
 
-from poser.core.paths import is_link
+from poser.core.paths import PathLimit, is_link
+from poser.core.ports import PREREQUISITES_URL
 
 assert sys.platform == "win32"  # noqa: S101 - narrows the platform for type checkers.
 
@@ -35,6 +38,32 @@ HELD_ADVICE = (
     "another program, such as a media player, Explorer's preview pane, or a virus scanner, may "
     "hold it open; close it and try again"
 )
+# A path holds MAX_PATH (260) characters with its terminating null, and a directory's leaves room
+# for an 8.3 file name, unless long paths are on; then the limit is 32,767 characters:
+# https://learn.microsoft.com/windows/win32/fileio/maximum-file-path-limitation
+MAX_PATH = 260
+SHORT_PATHS = PathLimit(
+    directory=MAX_PATH - 12 - 1,
+    file=MAX_PATH - 1,
+    lift=f"turn on Windows long paths as {PREREQUISITES_URL} shows",
+)
+LONG_PATHS = PathLimit(32_767 - 1, 32_767 - 1)
+
+
+@cache
+def _long_paths() -> bool:
+    """Whether this process may create a directory whose path passes MAX_PATH.
+
+    Windows lifts the limit for a program only when the system turns long paths on and the
+    program's manifest opts in, as Python's does since 3.6, and reads the switch when a process
+    starts. No documented function says whether both hold, so this tries.
+    """
+    try:
+        with tempfile.TemporaryDirectory(prefix="poser-paths-", ignore_cleanup_errors=True) as root:
+            Path(root, *["d" * 100] * 3).mkdir(parents=True)
+    except OSError:
+        return False
+    return True
 
 
 def _retrying[T](attempt: Callable[[], T], path: Path, codes: frozenset[int] = HELD) -> T:
@@ -93,7 +122,11 @@ class WindowsFileSystem:
     - The read-only attribute stops replacing or deleting a file, so replacing and removing
       clear it first, and replacing sets it again on the destination when the replacement fails.
     - Renaming a directory never replaces one, even an empty one.
+    - Unless long paths are on, a file's path holds 259 characters and a directory's 247.
     """
+
+    def path_limit(self) -> PathLimit:
+        return LONG_PATHS if _long_paths() else SHORT_PATHS
 
     @contextmanager
     def lock(self, path: Path, *, wait: bool) -> Generator[None]:

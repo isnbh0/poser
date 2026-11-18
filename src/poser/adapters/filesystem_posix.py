@@ -14,6 +14,8 @@ from collections.abc import Generator
 from contextlib import contextmanager
 from pathlib import Path
 
+from poser.core.paths import PathLimit
+
 
 class PosixFileSystem:
     """Advisory `flock` locks, `fsync` through read-only descriptors, symbolic links, the C
@@ -22,6 +24,11 @@ class PosixFileSystem:
     No program holding a file open stops renaming or removing it, and a file's read-only mode
     does not stop replacing or removing it, so no operation here waits or retries.
     """
+
+    def path_limit(self) -> PathLimit:
+        """`PATH_MAX` less its terminating null, 1023 characters on macOS and 4095 on Linux."""
+        longest = os.pathconf("/", "PC_PATH_MAX") - 1
+        return PathLimit(longest, longest)
 
     @contextmanager
     def lock(self, path: Path, *, wait: bool) -> Generator[None]:

@@ -20,9 +20,8 @@ from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import TypeGuard
 
-from poser.adapters.filesystem import PREREQUISITES_URL
 from poser.core.jsonvalue import JsonValue, is_json_value, json_object
-from poser.core.ports import UnsupportedPlatformError
+from poser.core.ports import PREREQUISITES_URL, UnsupportedPlatformError
 
 # The worker writes its stderr as UTF-8, whatever the locale, UTF-8 mode, or PYTHONIOENCODING.
 CHILD_CODE = (

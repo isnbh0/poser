@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 from links import LINK_KINDS, make_dangling_link, make_link
 
-from poser.core.paths import is_link, walk
+from poser.core.paths import PathLimit, is_link, walk
 
 
 def test_is_link_is_false_for_a_directory_a_file_and_a_missing_path(tmp_path: Path) -> None:
@@ -63,3 +63,25 @@ def test_walk_yields_a_link_but_not_what_it_leads_to(tmp_path: Path, kind: str) 
 
 def test_walk_of_a_missing_directory_yields_nothing(tmp_path: Path) -> None:
     assert list(walk(tmp_path / "missing")) == []
+
+
+def test_a_path_limit_measures_the_absolute_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    directory = Path.cwd() / "dir"
+    file = directory / "name"
+    fits = PathLimit(len(str(directory)), len(str(file)))
+    assert fits.problem(Path("dir"), "name", "shorten it") is None
+    assert PathLimit(len(str(directory)) - 1, len(str(file))).problem(
+        Path("dir"), "name", "shorten it"
+    ) == (
+        f"its directory {directory} would be {len(str(directory))} characters, past the "
+        f"{len(str(directory)) - 1} this system allows; to fix it, shorten it"
+    )
+    assert PathLimit(len(str(directory)), len(str(file)) - 1, "lift it").problem(
+        Path("dir"), "name", "shorten it"
+    ) == (
+        f"its file {file} would be {len(str(file))} characters, past the {len(str(file)) - 1} "
+        "this system allows; to fix it, lift it, or shorten it"
+    )
