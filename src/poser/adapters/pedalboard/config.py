@@ -172,7 +172,7 @@ def effect_from_options(name: str, options: Mapping[str, JsonValue], base: Path)
         raise ConfigError(f"{owner}: path must be non-empty text")
     if path is None and builtin is None:
         raise ConfigError(f"{owner}: builtin must be non-empty text")
-    if builtin is not None and not builtin.isidentifier():
+    if builtin is not None and not (builtin.isascii() and builtin.isidentifier()):
         raise ConfigError(f"{owner}: builtin must name a pedalboard-native class, got {builtin!r}")
 
     raw_parameters = options.get("parameters", {})
