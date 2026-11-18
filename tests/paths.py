@@ -27,8 +27,9 @@ def make_file(path: Path) -> None:
 
 
 def longest_created(base: Path, create: Callable[[Path], None], below: int) -> int:
-    """The length of the longest path under `base`, shorter than `below`, that `create` makes
-    without an OSError, found by bisection; a system that makes one makes every shorter."""
+    """The length of the longest path under `base`, shorter than `below`, that `create` makes,
+    found by bisection; a system that makes one makes every shorter. The system refuses with an
+    OSError, or, on Windows past 32,767 characters, Python refuses with a ValueError."""
     low, high = len(str(base.absolute())) + 2, below
     path = path_of_length(base, low)
     create(path)
@@ -36,7 +37,7 @@ def longest_created(base: Path, create: Callable[[Path], None], below: int) -> i
         middle = (low + high) // 2
         try:
             create(path_of_length(base, middle))
-        except OSError:
+        except (OSError, ValueError):
             high = middle
         else:
             low = middle

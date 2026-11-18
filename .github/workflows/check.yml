@@ -255,8 +255,9 @@ jobs:
           function Set-LongPaths([int]$Value) {
             Set-ItemProperty -Path $key -Name LongPathsEnabled -Value $Value -Type DWord
             $env:POSER_EXPECT_LONG_PATHS = "$Value"
-            uv run pytest -q -p no:cacheprovider --basetemp (Join-Path $env:RUNNER_TEMP "limit-$Value") `
-              "tests/test_filesystem.py::test_the_path_limit_is_where_the_system_refuses"
+            $basetemp = Join-Path $env:RUNNER_TEMP "limit-$Value"
+            uv run --directory $env:GITHUB_WORKSPACE pytest -q -p no:cacheprovider `
+              --basetemp $basetemp "tests/test_filesystem.py::test_the_path_limit_is_where_the_system_refuses"
             if ($LASTEXITCODE -ne 0) { throw "the path limit is not where Windows refuses" }
           }
           try {
