@@ -361,6 +361,16 @@ def test_instrument_plays_continuous_pitch(instrument: ScsynthInstrument) -> Non
 # Identities
 
 
+def test_a_sidecar_with_a_byte_order_mark_resolves(tmp_path: Path) -> None:
+    source = make_source(tmp_path)
+    sidecar = source / f"{SYNTH_NAME}.json"
+    instrument = make_instrument(tmp_path, make_stub(tmp_path), {"demo": source})
+    plain = resolve(instrument)
+    sidecar.write_bytes(b"\xef\xbb\xbf" + sidecar.read_bytes())
+    marked = resolve(instrument)
+    assert marked.identity == plain.identity
+
+
 def test_identity_repeats_and_tracks_bytes(tmp_path: Path) -> None:
     source = make_source(tmp_path)
     instrument = make_instrument(tmp_path, make_stub(tmp_path), {"demo": source})

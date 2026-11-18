@@ -18,6 +18,7 @@ from poser.adapters.filesystem import FileSystem, write_text_file
 from poser.adapters.pedalboard.state import build_state, decode_state, encode_state
 from poser.core.jsonvalue import json_object
 from poser.core.names import Suffix
+from poser.core.text import AUTHORED_ENCODING
 
 FXP_HEADER_SIZE = 60
 SAVED_KEYS = frozenset({"description", "state"})
@@ -107,7 +108,7 @@ class SavedFormat:
 
     def read_sound(self, path: Path) -> SavedSound:
         try:
-            data = json.loads(path.read_text(encoding="utf-8"))
+            data = json.loads(path.read_text(encoding=AUTHORED_ENCODING))
         except (OSError, UnicodeDecodeError, ValueError) as error:
             raise PresetError(f"cannot read {path.name}: {error}") from error
         fields = json_object(data)

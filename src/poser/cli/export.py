@@ -21,6 +21,7 @@ from poser.core.delivery import (
     result_to_data,
 )
 from poser.core.ports import AdapterContext, ConfigError
+from poser.core.text import AUTHORED_ENCODING
 
 PROG = "export-song"
 
@@ -32,7 +33,7 @@ def _run(args: argparse.Namespace) -> DeliveryResult:
         snapshot = InputSnapshot.capture(config_path)
         if snapshot.data is None:
             return InvalidInput(f"missing configuration: {config_path}")
-        config = parse_config(snapshot.data.decode("utf-8"), config_path)
+        config = parse_config(snapshot.data.decode(AUTHORED_ENCODING), config_path)
         context = AdapterContext(
             config_path.parent, args.sounds_dir.resolve(), args.output_dir.resolve()
         )

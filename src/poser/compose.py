@@ -63,6 +63,7 @@ from poser.core.ports import (
     Vocabulary,
     WorkspaceInitializer,
 )
+from poser.core.text import AUTHORED_ENCODING
 
 
 def _poser_part[T](target: str, port: type[T], *args: object) -> T:
@@ -382,7 +383,7 @@ def read_config(path: Path) -> WorkspaceConfig:
     Raises ConfigError naming the file and the key for anything it cannot use.
     """
     try:
-        text = path.read_text(encoding="utf-8")
+        text = path.read_text(encoding=AUTHORED_ENCODING)
     except (OSError, UnicodeDecodeError) as error:
         raise ConfigError(f"{path}: cannot read: {error}") from error
     return parse_config(text, path)

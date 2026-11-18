@@ -57,8 +57,11 @@ continuing.
 
 On Windows, run the other chained commands in this guide the same way, one per line. Write a
 Windows path in `poser.toml` as a TOML literal string, in single quotes, because a backslash in
-double quotes starts an escape: `path = 'D:\Plugins\Surge XT.vst3'`. poser writes its output as
-UTF-8; before piping it into another PowerShell command, run
+double quotes starts an escape: `path = 'D:\Plugins\Surge XT.vst3'`. poser reads the files you
+edit, such as `poser.toml`, songs, and saved sounds, as UTF-8 with or without the byte-order mark
+that Notepad's "UTF-8 with BOM" and Windows PowerShell 5.1's `Set-Content -Encoding utf8` add, and
+writes UTF-8 without one. poser writes its output as UTF-8; before piping it into another
+PowerShell command, run
 `[Console]::OutputEncoding = [Text.UTF8Encoding]::new()` so PowerShell reads it as UTF-8.
 
 Use the Git dependency shown here, not the unrelated PyPI package named `poser`. To add poser to

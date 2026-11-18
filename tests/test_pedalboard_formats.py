@@ -121,6 +121,12 @@ def write_saved(path: Path, fields: object) -> Path:
     return write_file(path, json.dumps(fields).encode())
 
 
+def test_saved_format_reads_a_file_with_a_byte_order_mark(tmp_path: Path) -> None:
+    fields = {"description": "warm", "state": encode_state(b"s")}
+    path = write_file(tmp_path / "pad.json", b"\xef\xbb\xbf" + json.dumps(fields).encode())
+    assert SavedFormat().read_sound(path) == SavedSound("warm", b"s")
+
+
 def test_saved_format_reads_a_description_and_a_state(tmp_path: Path) -> None:
     path = write_saved(tmp_path / "pad.json", {"description": "warm", "state": encode_state(b"s")})
     assert SavedFormat().read_sound(path) == SavedSound("warm", b"s")

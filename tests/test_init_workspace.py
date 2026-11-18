@@ -247,6 +247,30 @@ def test_merges_existing_ignore(tmp_path: Path, plugin: Path) -> None:
     assert "renders/" in text
 
 
+BOM = b"\xef\xbb\xbf"
+
+
+def test_merging_an_ignore_with_a_byte_order_mark_keeps_it_and_adds_only_what_is_missing(
+    tmp_path: Path, plugin: Path
+) -> None:
+    target = tmp_path / "project"
+    target.mkdir()
+    scaffold = files("poser").joinpath("scaffold", "gitignore").read_bytes()
+    first, rest = scaffold.split(b"\n", 1)
+    (target / ".gitignore").write_bytes(BOM + first + b"\nmine\n")
+    assert init_workspace.main(args(target, plugin)) == 0
+    assert (target / ".gitignore").read_bytes() == BOM + first + b"\nmine\n" + rest
+
+
+def test_a_complete_ignore_with_a_byte_order_mark_is_kept(tmp_path: Path, plugin: Path) -> None:
+    target = tmp_path / "project"
+    target.mkdir()
+    original = BOM + files("poser").joinpath("scaffold", "gitignore").read_bytes()
+    (target / ".gitignore").write_bytes(original)
+    assert init_workspace.main(args(target, plugin)) == 0
+    assert (target / ".gitignore").read_bytes() == original
+
+
 @pytest.mark.parametrize(
     "existing", ["AGENTS.md", "POSER.md", "CLAUDE.md", "poser.toml", "songs/demo.yaml"]
 )

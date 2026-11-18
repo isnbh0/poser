@@ -13,6 +13,7 @@ from poser.cli.workspace import CONFIG_NAME, Workspace
 from poser.compose import Composition, parse_config, workspace_initializer
 from poser.core.paths import is_link
 from poser.core.ports import AdapterContext, ConfigError, WorkspaceInitializer
+from poser.core.text import BYTE_ORDER_MARK
 from poser.reference_setups.dispatch import SETUPS, prepare
 
 SETUP_GUIDE = "https://github.com/isnbh0/poser/blob/main/docs/setup.md"
@@ -59,9 +60,11 @@ def _refuse_leftovers(directory: Path, leftovers: tuple[str, ...]) -> Never:
 
 
 def _merged_ignore(original: bytes | None) -> str | None:
+    """The `.gitignore` holding `original`'s lines, and its byte-order mark if it has one, then
+    each scaffold line it lacks, or None when it lacks none."""
     exists = original is not None
     existing = original.decode("utf-8") if original is not None else ""
-    present = set(existing.splitlines())
+    present = set(existing.removeprefix(BYTE_ORDER_MARK).splitlines())
     missing = [line for line in _scaffold("gitignore").splitlines() if line not in present]
     if exists and not missing:
         return None

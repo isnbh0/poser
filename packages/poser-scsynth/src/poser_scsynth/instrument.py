@@ -40,6 +40,7 @@ from poser.core.ports import (
 )
 from poser.core.sounds import SoundEntry, SoundRef
 from poser.core.statuses import RenderFailureStatus, SoundFailureStatus
+from poser.core.text import AUTHORED_ENCODING
 from poser_scsynth.config import BUILTIN_SOURCE, SAVED_SOURCE, ScsynthConfig, from_options
 from poser_scsynth.formats import SoundRecipe
 from poser_scsynth.scores import compile_score
@@ -243,7 +244,7 @@ class ScsynthInstrument:
         except (OSError, ValueError) as error:
             return SoundFailure(SoundFailureStatus.LOAD_FAILED, f"sound {ref}: {error}")
         try:
-            meta = json.loads(path.with_suffix(META_SUFFIX).read_text(encoding="utf-8"))
+            meta = json.loads(path.with_suffix(META_SUFFIX).read_text(encoding=AUTHORED_ENCODING))
         except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
             return SoundFailure(
                 SoundFailureStatus.LOAD_FAILED, f"sound {ref}: its .json sidecar: {error}"

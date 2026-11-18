@@ -125,6 +125,13 @@ def test_failed_write_leaves_no_temp_file(tmp_path: Path, monkeypatch: pytest.Mo
     assert list(tmp_path.iterdir()) == []
 
 
+def test_a_song_with_a_byte_order_mark_loads(tmp_path: Path) -> None:
+    path = tmp_path / "song.yaml"
+    write_yaml_song(helper_song(), path)
+    path.write_bytes(b"\xef\xbb\xbf" + path.read_bytes())
+    assert loaded(path) == helper_song()
+
+
 def test_written_song_keeps_the_existing_file_mode(tmp_path: Path) -> None:
     path = tmp_path / "song.yaml"
     path.write_text("old\n", encoding="utf-8", newline="\n")

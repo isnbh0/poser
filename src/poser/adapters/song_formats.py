@@ -14,6 +14,7 @@ from poser.core.jsonvalue import JsonValue
 from poser.core.names import Suffix
 from poser.core.ports import UPGRADING_URL, AdapterContext, SongFormat
 from poser.core.song import Song, SongError, parse_song, song_to_data
+from poser.core.text import AUTHORED_ENCODING
 
 
 class _DuplicateKeyError(yaml.YAMLError):
@@ -77,7 +78,7 @@ class YamlSongFormat:
 
     def load(self, path: Path) -> Song:
         try:
-            data = yaml.load(path.read_text(encoding="utf-8"), Loader=_UniqueKeyLoader)  # noqa: S506
+            data = yaml.load(path.read_text(encoding=AUTHORED_ENCODING), Loader=_UniqueKeyLoader)  # noqa: S506
         except (OSError, UnicodeDecodeError, yaml.YAMLError) as error:
             raise SongError([f"cannot read {path}: {error}"]) from error
         return parse_song(data)

@@ -492,6 +492,15 @@ def test_cli_prints_a_line_for_each_retry_of_a_late_start(
     )
 
 
+def test_cli_reads_a_configuration_with_a_byte_order_mark(
+    cli_workspace: CommandWorkspace, capsys: pytest.CaptureFixture[str]
+) -> None:
+    song = write_song(cli_workspace.root / "song.yaml", ("lead", "synth"))
+    cli_workspace.config.write_bytes(b"\xef\xbb\xbf" + cli_workspace.config.read_bytes())
+    assert export.main([str(song), "--destination", "bundle", "--json"]) == 0
+    assert json.loads(capsys.readouterr().out)["outcome"] == "published"
+
+
 def test_cli_snapshot_configuration_not_a_later_read(
     cli_workspace: CommandWorkspace,
     monkeypatch: pytest.MonkeyPatch,

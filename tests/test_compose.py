@@ -257,6 +257,13 @@ def test_text_parser_matches_path_reader(tmp_path: Path) -> None:
     assert parse_config(SERUM, path) == read_config(path)
 
 
+def test_a_config_with_a_byte_order_mark_reads(tmp_path: Path) -> None:
+    """Windows PowerShell 5.1's `Set-Content -Encoding utf8` writes the mark first."""
+    path = tmp_path / "poser.toml"
+    path.write_bytes(b"\xef\xbb\xbf" + SERUM.encode("utf-8"))
+    assert read_config(path) == parse_config(SERUM, path)
+
+
 @pytest.mark.parametrize("text", ["[instruments]\n", "instruments = ["])
 def test_text_parser_matches_path_reader_errors(tmp_path: Path, text: str) -> None:
     path = tmp_path / "poser.toml"
