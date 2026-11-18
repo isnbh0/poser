@@ -10,6 +10,7 @@ import hashlib
 import struct
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -19,7 +20,7 @@ import pytest
 from contracts import check_instrument_contract
 from distlib.scripts import ScriptMaker, enquote_executable
 from interpreter import BASE_PYTHON
-from poser_scsynth.instrument import ScsynthInstrument, create
+from poser_scsynth.instrument import ENGINE_PATH_LIMIT, ScsynthInstrument, create, scratch
 from poser_scsynth.scores import build_score, hz
 
 from poser.core.audio import NUM_CHANNELS, SAMPLE_RATE, Audio, read_raw_audio
@@ -467,6 +468,44 @@ def test_a_render_runs_scsynth_where_child_cwd_says(
     assert reported.read_text(encoding="utf-8") == str(ran_in)
 
 
+def test_the_engine_s_scratch_is_the_render_s_directory(tmp_path: Path) -> None:
+    """While every path the engine reads or writes stays within `ENGINE_PATH_LIMIT`
+    characters, the scratch is the render's directory."""
+    renders = tmp_path / "renders"
+    renders.mkdir()
+    assert scratch(renders) is renders
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32", reason="Windows moves the scratch past the engine's limit"
+)
+def test_the_engine_s_scratch_sits_deep_where_paths_have_no_limit(tmp_path: Path) -> None:
+    """macOS and Linux keep the engine's command file and output sound in the render's
+    directory, at any depth."""
+    renders = tmp_path / ("d" * 200)
+    renders.mkdir()
+    assert scratch(renders) is renders
+
+
+@pytest.mark.parametrize(("characters", "temp"), [(230, False), (231, True)])
+def test_the_engine_s_scratch_follows_the_engine_s_limit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, characters: int, temp: bool
+) -> None:
+    """On Windows, scsynth opens no path past `ENGINE_PATH_LIMIT` characters, so when the
+    render's directory plus the names inside would pass it, the scratch moves to the system's
+    temporary directory. The macOS run here simulates Windows; CI's long-paths step renders
+    through the real engine in a deep folder."""
+    renders = tmp_path / ("d" * (characters - len(str(tmp_path)) - 1))
+    renders.mkdir()
+    monkeypatch.setattr(sys, "platform", "win32")
+    chosen = scratch(renders)
+    assert len(str(chosen)) + len("/.scsynth-xxxxxxxx/score.osc") <= ENGINE_PATH_LIMIT
+    if temp:
+        assert chosen == Path(tempfile.gettempdir())
+    else:
+        assert chosen is renders
+
+
 def test_non_finite_output_is_a_crash(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("SCSTUB_NAN", "1")
     instrument = make_instrument(tmp_path, make_stub(tmp_path), {"demo": make_source(tmp_path)})
@@ -475,6 +514,19 @@ def test_non_finite_output_is_a_crash(tmp_path: Path, monkeypatch: pytest.Monkey
     assert failure.status is RenderFailureStatus.CRASHED
     assert failure.detail == "non-finite audio"
     assert not (tmp_path / "stem.npy").exists()
+
+
+def test_a_crash_names_what_scsynth_prints_on_stdout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A nonzero exit's diagnosis lands on stdout, as scsynth's does when it cannot open a
+    sound file."""
+    monkeypatch.setenv("SCSTUB_STDOUT", "*** ERROR: Cannot open sound file '/deep/output.wav'")
+    instrument = make_instrument(tmp_path, make_stub(tmp_path), {"demo": make_source(tmp_path)})
+    failure = render_failure(instrument, tmp_path)
+    assert isinstance(failure, RenderFailure)
+    assert failure.status is RenderFailureStatus.CRASHED
+    assert "Cannot open sound file" in failure.detail
 
 
 def test_stems_are_exact_stereo_float32(tmp_path: Path) -> None:

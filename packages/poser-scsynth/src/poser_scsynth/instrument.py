@@ -15,6 +15,7 @@ import json
 import os
 import struct
 import subprocess
+import sys
 import tempfile
 import threading
 import warnings
@@ -46,6 +47,13 @@ from poser_scsynth.config import BUILTIN_SOURCE, SAVED_SOURCE, ScsynthConfig, fr
 from poser_scsynth.formats import SoundRecipe
 from poser_scsynth.scores import compile_score
 from poser_scsynth.synthdefs import VOICE_BYTES, VOICE_META, VOICE_NAME
+
+ENGINE_PATH_LIMIT = 258
+"""The most characters in a path scsynth reads or writes.
+
+scsynth carries no long-path manifest, so Windows opens no deeper path for it, whatever
+LongPathsEnabled lets poser itself use. A render keeps the engine's command file and output
+sound within the limit and reads and writes the results itself."""
 
 ADAPTER_VERSION = "2"
 SYNTHDEF_SUFFIX = ".scsyndef"
@@ -176,6 +184,22 @@ def combine(*scans: SourceScan) -> SourceScan:
     )
 
 
+def scratch(renders_dir: Path) -> Path:
+    """The directory under which a render makes the engine's command file and output sound.
+
+    The render's directory holds them while every path the engine reads or writes stays within
+    `ENGINE_PATH_LIMIT` characters, as on macOS and Linux always, since the names inside add
+    "/.scsynth-xxxxxxxx/score.osc" to the directory's path. On Windows past the limit, the
+    system's temporary directory stands in, because scsynth opens no deeper path however long
+    poser's own paths may be; the render deletes both files when it ends.
+    """
+    if sys.platform == "win32" and (
+        len(str(renders_dir)) + len("/.scsynth-xxxxxxxx/score.osc") > ENGINE_PATH_LIMIT
+    ):
+        return Path(tempfile.gettempdir())
+    return renders_dir
+
+
 class ScsynthInstrument:
     """A SuperCollider engine, its sound sources, and the sounds saved with save-sound."""
 
@@ -276,7 +300,9 @@ class ScsynthInstrument:
             )
         score = compile_score(recipe, request.performance, SAMPLE_RATE)
         self._renders_dir.mkdir(parents=True, exist_ok=True)
-        with tempfile.TemporaryDirectory(prefix=".scsynth-", dir=self._renders_dir) as directory:
+        with tempfile.TemporaryDirectory(
+            prefix=".scsynth-", dir=scratch(self._renders_dir)
+        ) as directory:
             failure = self._run(scsynth, score, Path(directory), timeout_s)
             if failure is not None:
                 return failure
@@ -339,10 +365,11 @@ class ScsynthInstrument:
         except OSError as error:
             return RenderFailure(RenderFailureStatus.LOAD_FAILED, f"cannot start scsynth: {error}")
         if finished.returncode != 0:
-            tail = finished.stderr.decode(errors="replace")[-STDERR_TAIL:].strip()
-            return RenderFailure(
-                RenderFailureStatus.CRASHED, f"scsynth exited {finished.returncode}: {tail}"
-            )
+            # What went wrong lands on stdout, as the message scan of a finished render below
+            # assumes; the engine's stderr rarely names it.
+            tail = (finished.stdout + finished.stderr).decode(errors="replace")
+            detail = f"scsynth exited {finished.returncode}: {tail[-STDERR_TAIL:].strip()}"
+            return RenderFailure(RenderFailureStatus.CRASHED, detail)
         # scsynth reports command/load errors on stdout and can still exit zero with silence.
         # Unknown control names are ignored by the engine and do not produce these diagnostics.
         messages = (finished.stdout + finished.stderr).decode(errors="replace")

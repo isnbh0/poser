@@ -15,6 +15,8 @@ and does not do:
 - `SCSTUB_NAN=1` — write NaN into the first block (the adapter owns finiteness).
 - `SCSTUB_CWD=<path>` — write the stub's working directory into that file (where a child
   starts).
+- `SCSTUB_STDOUT=<message>` — print that message to stdout and exit 1 (an engine whose
+  diagnosis lands on stdout).
 
 The real engine's behaviors mirrored here: malformed records are a loud failure; a score whose
 messages are unusable still renders silence silently; and, as on an account that never ran
@@ -81,6 +83,9 @@ def main(argv: list[str]) -> int:
     if mode:
         print("stub was told to die this way", file=sys.stderr)
         return int(mode)
+    if message := os.environ.get("SCSTUB_STDOUT"):
+        print(message)
+        return 1
     if sleep := os.environ.get("SCSTUB_SLEEP"):
         time.sleep(float(sleep))
         if woke := os.environ.get("SCSTUB_WOKE"):
