@@ -18,11 +18,16 @@ jobs:
       - run: make check
 
   distribution:
-    name: Plugin-free packaging (${{ matrix.artifact }})
-    runs-on: macos-latest
+    name: Plugin-free packaging (${{ matrix.os }}, ${{ matrix.artifact }})
+    runs-on: ${{ matrix.os }}
     strategy:
       matrix:
+        os: [macos-latest, windows-latest]
         artifact: [wheel, sdist]
+    # PowerShell on both, so one script handles Windows paths and the venv's Scripts\python.exe.
+    defaults:
+      run:
+        shell: pwsh
     steps:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v10.3.3
@@ -30,17 +35,22 @@ jobs:
         env:
           ARTIFACT: ${{ matrix.artifact }}
         run: |
-          uv build --out-dir "$RUNNER_TEMP/poser-dist"
-          uv venv --python 3.13 "$RUNNER_TEMP/poser-venv"
-          if [ "$ARTIFACT" = wheel ]; then
-            uv pip install --python "$RUNNER_TEMP/poser-venv/bin/python" "$RUNNER_TEMP"/poser-dist/*.whl
-          else
-            uv pip install --python "$RUNNER_TEMP/poser-venv/bin/python" "$RUNNER_TEMP"/poser-dist/*.tar.gz
-          fi
+          $PSNativeCommandUseErrorActionPreference = $true
+          $dist = Join-Path $env:RUNNER_TEMP "poser-dist"
+          $venv = Join-Path $env:RUNNER_TEMP "poser-venv"
+          uv build --out-dir $dist
+          uv venv --python 3.13 $venv
+          $python = Join-Path $venv ($IsWindows ? "Scripts/python.exe" : "bin/python")
+          $suffix = if ($env:ARTIFACT -eq "wheel") { "*.whl" } else { "*.tar.gz" }
+          $artifact = @(Get-ChildItem -Path $dist -Filter $suffix)
+          if ($artifact.Count -ne 1) { throw "expected one $suffix in $dist, found $($artifact.Count)" }
+          uv pip install --python $python $artifact[0].FullName
+          "POSER_PYTHON=$python" >> $env:GITHUB_ENV
       - name: Smoke packaging only (no real plugin or audio acceptance)
         run: |
-          cd "$RUNNER_TEMP"
-          "$RUNNER_TEMP/poser-venv/bin/python" -I "$GITHUB_WORKSPACE/scripts/check_distribution.py"
+          $PSNativeCommandUseErrorActionPreference = $true
+          Set-Location $env:RUNNER_TEMP
+          & $env:POSER_PYTHON -I (Join-Path $env:GITHUB_WORKSPACE "scripts/check_distribution.py")
 
   windows:
     name: Windows (plugin-free suite, documented studio, Surge XT, and scsynth)

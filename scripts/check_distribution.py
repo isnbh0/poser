@@ -5,6 +5,8 @@ The empty VST3 directory is only a path fixture; no command loads a plugin.
 """
 
 import importlib
+import os
+import shutil
 import subprocess
 import sys
 import sysconfig
@@ -20,13 +22,20 @@ def require(condition: object, message: str) -> None:
 
 
 def run(name: str, *args: str, cwd: Path) -> str:
-    executable = Path(sysconfig.get_path("scripts")) / name
+    """Run the installed console script `name` as a shell would: a launcher `.exe` on Windows and
+    a script with a shebang elsewhere, found in this environment's scripts folder."""
+    scripts = sysconfig.get_path("scripts")
+    executable = shutil.which(name, path=scripts)
+    require(executable is not None, f"No console script {name} in {scripts}")
+    # The script's interpreter runs without -I, so drop the variables that would redirect its
+    # imports, and set UTF-8 mode so it writes the pipe as UTF-8.
+    environment = {key: value for key, value in os.environ.items() if not key.startswith("PYTHON")}
     result = subprocess.run(
-        [sys.executable, "-I", "-X", "utf8", str(executable), *args],
+        [str(executable), *args],
         cwd=cwd,
+        env=environment | {"PYTHONUTF8": "1"},
         check=False,
         text=True,
-        # UTF-8 mode makes the console script write the pipe as UTF-8; -I ignores PYTHONIOENCODING.
         encoding="utf-8",
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
