@@ -340,11 +340,11 @@ def test_remove_tree_of_nothing_raises_file_not_found(fs: FileSystem, tmp_path: 
 def test_the_path_limit_is_where_the_system_refuses(
     fs: FileSystem, tmp_path: Path, fill: str
 ) -> None:
-    """The longest directory and file paths this process creates, of `fill` characters, fit the
-    reported limit, and one character more passes it. `d` is one byte and one UTF-16 unit, `€`
-    three bytes and one unit, and `𝄞` four bytes and two units, so a limit counted in the wrong
-    unit fails. The Windows workflow sets POSER_EXPECT_LONG_PATHS to the long-paths switch it
-    set."""
+    """The longest directory and file paths this process creates, of `fill` characters, reach
+    the reported limit, and for an exact limit one character more passes it. `d` is one byte and
+    one UTF-16 unit, `€` three bytes and one unit, and `𝄞` four bytes and two units, so a limit
+    counted in the wrong unit fails. The Windows workflow sets POSER_EXPECT_LONG_PATHS to the
+    long-paths switch it set."""
     limit = fs.path_limit()
     if (expected := os.environ.get("POSER_EXPECT_LONG_PATHS")) is not None:
         assert (limit.lift is None) == (expected == "1"), limit
@@ -358,4 +358,5 @@ def test_the_path_limit_is_where_the_system_refuses(
             limit.unit.length(str(path_of_length(base, length, fill)))
             for length in (longest, longest + 1)
         ]
-        assert lengths[0] <= most < lengths[1], (name, lengths, most)
+        fits = lengths[0] <= most < lengths[1] if limit.exact else most <= lengths[0]
+        assert fits, (name, lengths, most, limit.exact)

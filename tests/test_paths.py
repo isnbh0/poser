@@ -102,3 +102,13 @@ def test_a_path_limit_counts_in_its_unit(tmp_path: Path) -> None:
             f"its file {file} would be {length} {unit.value}, past the {length - 1} this system "
             "allows; to fix it, shorten it"
         )
+
+
+def test_a_limit_that_is_not_exact_says_it_is_the_least_the_system_allows(tmp_path: Path) -> None:
+    directory = tmp_path.absolute()
+    file = directory / "name"
+    limit = PathLimit(len(str(directory)), len(str(file)) - 1, PathUnit.UTF16_UNITS, exact=False)
+    assert limit.problem(directory, "name", "shorten it") == (
+        f"its file {file} would be {len(str(file))} characters, past the {len(str(file)) - 1} "
+        "this system allows everywhere; to fix it, shorten it"
+    )

@@ -39,7 +39,7 @@ HELD_ADVICE = (
     "hold it open; close it and try again"
 )
 # A path holds MAX_PATH (260) characters with its terminating null, and a directory's leaves room
-# for an 8.3 file name, unless long paths are on; then the limit is 32,767 characters:
+# for an 8.3 file name, unless long paths are on; then the limit is about 32,767 characters:
 # https://learn.microsoft.com/windows/win32/fileio/maximum-file-path-limitation
 MAX_PATH = 260
 SHORT_PATHS = PathLimit(
@@ -48,7 +48,11 @@ SHORT_PATHS = PathLimit(
     unit=PathUnit.UTF16_UNITS,
     lift=f"turn on Windows long paths as {PREREQUISITES_URL} shows",
 )
-LONG_PATHS = PathLimit(32_767 - 1, 32_767 - 1, PathUnit.UTF16_UNITS)
+# Windows calls the 32,767 approximate because it expands a path to a longer form of its own,
+# which names the volume's device in place of its drive letter; the Windows workflow's runner
+# makes paths of 32,744 on its C: and D: drives. The expansion differs by volume, so the limit
+# leaves 767 characters for it.
+LONG_PATHS = PathLimit(32_000, 32_000, PathUnit.UTF16_UNITS, exact=False)
 
 
 @cache
@@ -56,8 +60,9 @@ def _long_paths() -> bool:
     """Whether this process may create a directory whose path passes MAX_PATH.
 
     Windows lifts the limit for a program only when the system turns long paths on and the
-    program's manifest opts in, as Python's does since 3.6, and reads the switch when a process
-    starts. No documented function says whether both hold, so this tries.
+    program's manifest opts in, as Python's does since 3.6, and caches the switch for a process at
+    its first call to a file function the limit affects. No documented function says whether both
+    hold, so this tries.
     """
     try:
         with tempfile.TemporaryDirectory(prefix="poser-paths-", ignore_cleanup_errors=True) as root:
@@ -123,7 +128,8 @@ class WindowsFileSystem:
     - The read-only attribute stops replacing or deleting a file, so replacing and removing
       clear it first, and replacing sets it again on the destination when the replacement fails.
     - Renaming a directory never replaces one, even an empty one.
-    - Unless long paths are on, a file's path holds 259 characters and a directory's 247.
+    - Unless long paths are on, a file's path holds 259 characters and a directory's 247. With
+      them on, the limit depends on the volume, and poser allows the 32,000 every volume allows.
     """
 
     def path_limit(self) -> PathLimit:

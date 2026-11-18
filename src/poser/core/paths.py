@@ -34,12 +34,18 @@ class PathUnit(Enum):
 class PathLimit:
     """The most a platform lets a program's paths hold, counted in `unit` on the absolute path:
     a directory's and a file's, and what lifts the limit, if anything does, phrased as an
-    instruction."""
+    instruction.
+
+    An exact limit is where the system refuses one unit more. Where the system's limit varies,
+    such as by volume, the limit is not exact: it is the least the system allows on any volume,
+    so every path within it can be made and a path past it may be refused though the system would
+    have made it."""
 
     directory: int
     file: int
     unit: PathUnit
     lift: str | None = None
+    exact: bool = True
 
     def problem(self, directory: Path, file_name: str, shorten: str) -> str | None:
         """Why the directory `directory`, or the file `file_name` in it, would pass the limit, or
@@ -51,9 +57,10 @@ class PathLimit:
         ):
             if (length := self.unit.length(str(path))) > limit:
                 remedy = f"{self.lift}, or {shorten}" if self.lift else shorten
+                allows = "this system allows" if self.exact else "this system allows everywhere"
                 return (
                     f"its {kind} {path} would be {length} {self.unit.value}, past the {limit} "
-                    f"this system allows; to fix it, {remedy}"
+                    f"{allows}; to fix it, {remedy}"
                 )
         return None
 
