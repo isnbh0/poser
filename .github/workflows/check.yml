@@ -123,7 +123,8 @@ jobs:
           $ErrorActionPreference = "Continue"
           $inventory = uv run python tests/doc_blocks.py --root $env:GITHUB_WORKSPACE --json
           if ($LASTEXITCODE -ne 0) { throw "documentation inventory is invalid" }
-          $examples = @(ConvertFrom-Json -InputObject ($inventory -join "`n"))
+          # Windows PowerShell 5.1 returns a JSON array as one object; do not nest it in @(...).
+          $examples = ConvertFrom-Json -InputObject ($inventory -join "`n")
           Remove-Item Env:UV_LOCKED  # The new studios have no lockfiles yet.
           $script:executed = @()
           function Invoke-Example([string]$Id, [hashtable]$Replace = @{}, [switch]$AllowNativeFailure) {

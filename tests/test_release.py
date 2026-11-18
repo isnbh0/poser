@@ -305,7 +305,7 @@ def test_doc_search_mirrors_preserve_search_semantics(tmp_path: Path, search: st
     for name, body in fixtures.items():
         path = tmp_path / name
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(body, encoding="utf-8")
+        path.write_text(body, encoding="utf-8", newline="\n")
     if sys.platform == "win32":
         shell = shutil.which("powershell.exe")
         assert shell is not None, "Windows PowerShell 5.1 is required, not pwsh"
@@ -346,7 +346,7 @@ def test_doc_search_mirrors_preserve_search_semantics(tmp_path: Path, search: st
         if not positive:
             for name in fixtures:
                 # r+ can overwrite a Windows Hidden file without trying to recreate it.
-                with (tmp_path / name).open("r+", encoding="utf-8") as stream:
+                with (tmp_path / name).open("r+", encoding="utf-8", newline="\n") as stream:
                     stream.write("nothing to find\n")
                     stream.truncate()
         result = subprocess.run(
@@ -412,6 +412,66 @@ def test_windows_doc_execution_covers_discovered_examples() -> None:
         e.id for e in examples if e.runner == "studio"
     }
     assert [e.id for e in examples if e.runner == "long-paths"] == ["registry"]
+
+
+@pytest.mark.skipif(
+    sys.platform != "win32", reason="executes Windows PowerShell 5.1 JSON conversion"
+)
+@pytest.mark.parametrize("nest_array", [False, True], ids=["workflow", "reject-nested-regression"])
+def test_windows_inventory_json_is_a_flat_example_array(nest_array: bool) -> None:
+    shell = shutil.which("powershell.exe")
+    assert shell is not None, "Windows PowerShell 5.1 is required, not pwsh"
+    examples = discover_examples(REPO_DIR)
+    workflow = yaml.safe_load(
+        (REPO_DIR / ".github/workflows/check.yml").read_text(encoding="utf-8")
+    )
+    step = next(
+        s
+        for s in workflow["jobs"]["windows"]["steps"]
+        if s.get("name") == "A Surge XT studio through the documented PowerShell (required)"
+    )
+    # Exercise the workflow's actual conversion line: @(<ConvertFrom-Json>) nests arrays in 5.1.
+    (conversion,) = [
+        line.strip() for line in step["run"].splitlines() if line.strip().startswith("$examples = ")
+    ]
+    if nest_array:
+        conversion = conversion.replace("$examples = ", "$examples = @(", 1) + ")"
+    inventory = json.dumps([asdict(example) for example in examples])
+    script = (
+        "$ErrorActionPreference = 'Stop'\n"
+        "if ($PSVersionTable.PSVersion.Major -ne 5) { throw 'requires Windows PowerShell 5.1' }\n"
+        f"$inventory = @'\n{inventory}\n'@\n{conversion}\n"
+        f"if ($examples.Count -ne {len(examples)}) "
+        "{ throw 'inventory is nested or incomplete' }\n"
+        "foreach ($example in $examples) {\n"
+        "  if ($example -is [array] -or $example.powershell -isnot [string]) "
+        "{ throw 'expected one example object with a command string' }\n"
+        "}\n"
+        "$found = @($examples | Where-Object { $_.id -eq 'setup-create' "
+        "-and $_.runner -eq 'studio' })\n"
+        "if ($found.Count -ne 1 -or -not "
+        "$found[0].powershell.Contains('git+https://github.com/isnbh0/poser')) "
+        "{ throw 'scenario lookup did not select a single example' }\n"
+    )
+    result = subprocess.run(
+        [
+            shell,
+            "-NoProfile",
+            "-NonInteractive",
+            "-EncodedCommand",
+            base64.b64encode(script.encode("utf-16-le")).decode("ascii"),
+        ],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=False,
+    )
+    if nest_array:
+        assert result.returncode != 0
+        assert "inventory is nested or incomplete" in result.stderr
+    else:
+        assert result.returncode == 0, result.stderr
+        assert not result.stderr, result.stderr
 
 
 def test_windows_checks_precede_the_installed_plugin_isolation_suite() -> None:
