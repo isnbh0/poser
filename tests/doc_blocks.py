@@ -319,9 +319,10 @@ def console_output_encoding_command(text: str) -> str:
     )
     # Discover assignments before checking approved spelling: aliases or changed values must
     # still count as duplicates. Multiple assignments in one code span count separately too.
+    # Match complete delimiter runs, allowing newlines and unequal backtick runs in the body.
     candidates = [
         span[2]
-        for span in re.finditer(r"(?<!`)(`+)([^`]*)\1(?!`)", text)
+        for span in re.finditer(r"(?<!`)(`+)(?!`)(.*?)(?<!`)\1(?!`)", text, re.DOTALL)
         for _ in assignment.finditer(span[2])
     ]
     if len(candidates) != 1:

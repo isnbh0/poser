@@ -148,6 +148,7 @@ def test_inline_console_encoding_command_is_exact_and_unambiguous(tmp_path: Path
     assert console_output_encoding_command(source) == approved
     assert console_output_encoding_command(f"Use `{approved}` before piping.") == approved
     assert console_output_encoding_command(f"Use ``{approved}`` before piping.") == approved
+    assert console_output_encoding_command(f"Use ```{approved}``` before piping.") == approved
     # Property mentions/getters are not assignments and cannot supply a missing setter.
     mention = "Read `[Console]::OutputEncoding` and `$encoding = [Console]::OutputEncoding`."
     assert console_output_encoding_command(mention + f"\n`{approved}`") == approved
@@ -164,6 +165,10 @@ def test_inline_console_encoding_command_is_exact_and_unambiguous(tmp_path: Path
         f"`{approved}`\n``{wrong}``",
         f"`{approved}`\n`[Console]::OutputEncoding =\n[Text.Encoding]::GetEncoding(1252)`",
         f"`{approved}`\r\n``[System.Console]::OutputEncoding =\r\n[Text.Encoding]::ASCII``",
+        f'`{approved}`\n``{wrong}; Write-Output "`n"``',
+        f'`{approved}`\n``{wrong}; Write-Output "`n"`r``',
+        f'`{approved}`\n```{wrong}; Write-Output "``n"```',
+        f'`{approved}`\n``{wrong}; Write-Output "```n"``',
     )
     for text in ("", mention, *duplicates):
         with pytest.raises(ValueError, match="expected exactly one inline"):
