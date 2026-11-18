@@ -338,12 +338,14 @@ jobs:
           $recipe = "`n[effects.surge_effects]`nadapter = `"pedalboard`"`npath = '$effects'`n"
           Add-Content -Encoding utf8 -NoNewline -Path poser.toml -Value $recipe
           Get-Content poser.toml
+          # Disable capture so successful preset/control metrics reach the native evidence log.
           # Tee-Object prints each line as it comes, so the log times each test.
-          uv run pytest -m real_plugins -v -rs --durations=0 `
+          uv run pytest -m real_plugins -v -s -rs --durations=0 `
             "tests/test_pedalboard_real.py::test_each_instrument_meets_the_instrument_contract" `
             "tests/test_pedalboard_real.py::test_a_render_has_exactly_the_performance_s_frames" `
             "tests/test_pedalboard_real.py::test_a_windows_plugin_loads_from_its_binary_as_from_its_bundle" `
             "tests/test_pedalboard_real.py::test_surge_restored_preset_keeps_its_first_note" `
+            "tests/test_pedalboard_real.py::test_surge_factory_presets_take_effect_headlessly" `
             "tests/test_pedalboard_real.py::test_each_effect_renders_as_many_frames_as_it_is_given" 2>&1 |
             Tee-Object -Variable output
           $status = $LASTEXITCODE

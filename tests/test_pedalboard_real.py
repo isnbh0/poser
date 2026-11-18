@@ -2,6 +2,7 @@
 
 import base64
 import dataclasses
+import os
 import subprocess
 import sys
 from importlib import metadata
@@ -13,16 +14,25 @@ from contracts import check_instrument_contract
 from helpers import (
     CAPTURE_STATE,
     REAL_FORMATS,
+    HarmonicMetrics,
+    assert_sine_saw_pair,
     fxp_bytes,
+    harmonic_metrics,
     real_composition,
     real_pedalboard_instruments,
+    render_without_restoring_state,
     strongest_hz,
 )
 
 from poser.adapters.filesystem import native
+from poser.adapters.pedalboard import instrument as instrument_module
 from poser.adapters.pedalboard.config import from_options
 from poser.adapters.pedalboard.formats import SavedFormat, SavedSound
-from poser.adapters.pedalboard.instrument import PedalboardInstrument, plugin_version
+from poser.adapters.pedalboard.instrument import (
+    PedalboardInstrument,
+    payload_state,
+    plugin_version,
+)
 from poser.adapters.pedalboard.plugin_files import windows_binary
 from poser.adapters.pedalboard.state import component_state
 from poser.core.audio import SAMPLE_RATE, SILENCE_DBFS, Audio, measure_peak_dbfs, read_raw_audio
@@ -140,6 +150,73 @@ def test_surge_restored_preset_keeps_its_first_note(tmp_path: Path, delay_sample
     assert late_start_s(audio.samples, performance) is None
     if delay_samples:
         assert measure_peak_dbfs(audio.samples[:, : first.sample]) < -100
+
+
+def test_surge_factory_presets_take_effect_headlessly(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    instrument = real_pedalboard_instruments(tmp_path).get("surge")
+    if instrument is None:
+        pytest.skip("the root poser.toml has no Pedalboard Surge instrument named 'surge'")
+    sine = instrument.resolve(SoundRef(Identifier("surge"), "presets/Templates/Init Sine"))
+    saw = instrument.resolve(SoundRef(Identifier("surge"), "presets/Templates/Init Saw"))
+    assert isinstance(sine, ResolvedSound), sine
+    assert isinstance(saw, ResolvedSound), saw
+    sine_state, saw_state = payload_state(sine.payload), payload_state(saw.payload)
+    assert sine_state, "Init Sine must resolve to nonempty state"
+    assert saw_state, "Init Saw must resolve to nonempty state"
+    assert sine_state != saw_state
+    assert sine.payload != saw.payload
+    assert sine.identity != saw.identity
+
+    composition = real_composition(tmp_path)
+    spec = next(item for item in composition.config.instruments if item.name == "surge")
+    config = from_options(spec.name, spec.spec.options, composition.context.root)
+    versions = f"pedalboard {metadata.version('pedalboard')}, Surge {plugin_version(config.path)}"
+    print(f"headless factory preset selection: {versions}")
+    # A4 is held throughout the 0.2-1.2 s analysis window; every request is a fresh attempt 1.
+    performance = Performance(
+        2 * SAMPLE_RATE, (NoteOn(0, 69, 100), NoteOff(3 * SAMPLE_RATE // 2, 69))
+    )
+
+    def measure(sound: ResolvedSound, label: str) -> HarmonicMetrics:
+        path = tmp_path / f"{label}.npy"
+        failure = instrument.render(RenderRequest(sound, performance, path, attempt=1), 120)
+        assert failure is None, f"{label}: {failure}"
+        audio = read_raw_audio(path, performance.samples)
+        assert isinstance(audio, Audio), f"{label}: {audio}"
+        assert audio.frames == performance.samples, label
+        assert np.isfinite(audio.samples).all(), label
+        peak = measure_peak_dbfs(audio.samples)
+        assert peak > SILENCE_DBFS, f"{label}: peak {peak:.2f} dBFS"
+        metrics = harmonic_metrics(audio.samples)
+        print(
+            f"{label} {sound.ref}: frames={audio.frames}, peak={peak:.2f} dBFS, "
+            f"window RMS={metrics.rms_dbfs:.2f} dBFS, f0={metrics.fundamental_hz:.2f} Hz, "
+            f"P1/total={metrics.fundamental_fraction:.4f}, H2/P1={metrics.h2_db:.2f} dB"
+        )
+        return metrics
+
+    first_sine = measure(sine, "sine-first")
+    selected_saw = measure(saw, "saw")
+    last_sine = measure(sine, "sine-again")
+    assert_sine_saw_pair(first_sine, selected_saw)
+    assert_sine_saw_pair(last_sine, selected_saw)
+
+    # Route only these two requests to an importable CHILD target, never replace isolation.
+    # The context restores both routing and the complete inherited PYTHONPATH on exit.
+    pythonpath = str(Path(__file__).resolve().parent)
+    inherited = os.environ.get("PYTHONPATH")
+    if inherited is not None:
+        pythonpath += os.pathsep + inherited
+    with monkeypatch.context() as patch:
+        patch.setenv("PYTHONPATH", pythonpath)
+        patch.setattr(instrument_module, "render_job", render_without_restoring_state)
+        ignored_sine = measure(sine, "ignored-sine")
+        ignored_saw = measure(saw, "ignored-saw")
+    # Both controls must render and pass ALL health checks before semantic rejection counts.
+    with pytest.raises(AssertionError, match=r"^harmonic class:"):
+        assert_sine_saw_pair(ignored_sine, ignored_saw)
 
 
 def captured_state(instrument_path: Path, tmp_path: Path) -> bytes:

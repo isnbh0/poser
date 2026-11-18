@@ -20,7 +20,14 @@ from typing import NoReturn, cast
 import numpy as np
 import pytest
 from contracts import check_instrument_contract, check_sound_capture_contract
-from helpers import fxp_bytes, needs_posix_permissions, write_pe
+from helpers import (
+    assert_sine_saw_pair,
+    fxp_bytes,
+    harmonic_metrics,
+    needs_posix_permissions,
+    render_without_restoring_state,
+    write_pe,
+)
 from interpreter import start_python
 from test_performance import cc_track, performed
 
@@ -235,6 +242,55 @@ def failed(instrument: PedalboardInstrument, name: str) -> SoundFailure:
 
 def captured(state: bytes = b"test-state") -> Captured:
     return Captured(Json.of({"state": encode_state(state)}))
+
+
+# The real preset-selection oracle, exercised without plugins.
+
+
+def harmonic_signal(kind: str) -> np.ndarray:
+    """Build a sine or finite saw series, with a known -6 dB second harmonic for the saw."""
+    phase = 2 * np.pi * 440 * np.arange(3 * SAMPLE_RATE // 2) / SAMPLE_RATE
+    harmonics = 1 if kind == "sine" else 20
+    mono = 0.2 * sum(np.sin(k * phase) / k for k in range(1, harmonics + 1))
+    return np.stack((mono, mono)).astype(np.float32)
+
+
+def test_harmonic_oracle_accepts_the_expected_sine_saw_classes() -> None:
+    sine = harmonic_metrics(harmonic_signal("sine"))
+    saw = harmonic_metrics(harmonic_signal("saw"))
+    assert_sine_saw_pair(sine, saw)
+    assert sine.h2_db < -100
+    assert saw.h2_db == pytest.approx(-6.0206, abs=0.01)
+    assert sine.fundamental_hz == pytest.approx(440, abs=1)
+    assert saw.fundamental_hz == pytest.approx(440, abs=1)
+
+
+@pytest.mark.parametrize("pair", [("sine", "sine"), ("saw", "saw"), ("saw", "sine")])
+def test_harmonic_oracle_rejects_same_class_and_reversed_pairs(pair: tuple[str, str]) -> None:
+    first, second = (harmonic_metrics(harmonic_signal(kind)) for kind in pair)
+    with pytest.raises(AssertionError, match=r"^harmonic class:"):
+        assert_sine_saw_pair(first, second)
+
+
+def test_harmonic_oracle_refuses_a_silent_window_even_with_an_audible_start() -> None:
+    audio = harmonic_signal("sine")
+    audio[:, int(0.2 * SAMPLE_RATE) :] = 0
+    with pytest.raises(AssertionError, match="harmonic window RMS"):
+        harmonic_metrics(audio)
+
+
+@pytest.mark.parametrize("kind", ["sine", "saw"])
+def test_harmonic_oracle_is_invariant_to_stereo_antiphase(kind: str) -> None:
+    audio = harmonic_signal(kind)
+    same_phase = harmonic_metrics(audio)
+    audio[1] *= -1
+    assert harmonic_metrics(audio) == same_phase
+
+
+def test_harmonic_oracle_refuses_the_wrong_fundamental() -> None:
+    audio = np.repeat(harmonic_signal("sine"), 2, axis=1)  # A3, not A4.
+    with pytest.raises(AssertionError, match=r"harmonic fundamental .* is not A4"):
+        harmonic_metrics(audio)
 
 
 # Config
@@ -1437,6 +1493,54 @@ def loader(monkeypatch: pytest.MonkeyPatch) -> FakeLoader:
 
 def message_values(messages: list[object]) -> list[tuple[object, ...]]:
     return [(m.type, m.dict()) for m in messages]  # ty: ignore[unresolved-attribute]
+
+
+def test_ignored_restoration_control_keeps_the_primer_and_original_job(
+    loader: FakeLoader, tmp_path: Path
+) -> None:
+    plugin = FakePlugin()
+    plugin.state_error = AssertionError("control assigned raw_state")
+    loader.queue.append(plugin)
+    path = tmp_path / "ignored.npy"
+    job = fake_job("audio_path", path, b"original nonempty state")
+    before = json.dumps(job)
+    original_load = worker_module.load
+
+    assert render_without_restoring_state(job) == {"status": "ok"}
+
+    assert worker_module.load is original_load
+    assert json.dumps(job) == before
+    assert loader.loads == [("/S.vst3", None, INITIALIZATION_TIMEOUT_S)]
+    [(prime_messages, prime_kwargs, prime_state), (messages, kwargs, state)] = plugin.calls
+    assert prime_messages == []
+    assert prime_state is None
+    assert prime_kwargs == {
+        "duration": render_duration_s(BUFFER_SIZE),
+        "sample_rate": SAMPLE_RATE,
+        "num_channels": 2,
+        "buffer_size": BUFFER_SIZE,
+        "reset": False,
+    }
+    assert messages
+    assert state is None
+    assert kwargs["reset"] is False
+    assert isinstance(read_raw_audio(path, PERFORMANCE.samples), Audio)
+
+
+@pytest.mark.parametrize("state", [None, "", encode_state(b"")])
+def test_ignored_restoration_control_refuses_absent_or_empty_state(state: JsonValue) -> None:
+    with pytest.raises(AssertionError, match="control requires nonempty"):
+        render_without_restoring_state({"state": state})
+
+
+def test_ignored_restoration_control_requires_the_load_wrapper(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original_load = worker_module.load
+    monkeypatch.setattr(worker_module, "render_job", lambda job: {"status": "ok"})
+    with pytest.raises(AssertionError, match="control load wrapper ran 0 times"):
+        render_without_restoring_state({"state": encode_state(b"state")})
+    assert worker_module.load is original_load
 
 
 def test_render_fresh_renders_the_new_instance_without_a_reset(

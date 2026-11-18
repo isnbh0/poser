@@ -6,25 +6,33 @@ import stat
 import struct
 import sys
 import tomllib
+from dataclasses import dataclass
 from importlib.resources import files
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
 import pytest
 from pedalboard.io import ReadableAudioFile
 
+from poser.adapters.pedalboard import worker as pedalboard_worker
 from poser.adapters.pedalboard.formats import PRESET_FORMATS
 from poser.adapters.pedalboard.instrument import PedalboardInstrument
+from poser.adapters.pedalboard.state import decode_state
 from poser.cli.common import RENDER_TIMEOUT_S
 from poser.compose import Composition, load
 from poser.core.analysis import analyze_song
-from poser.core.audio import SAMPLE_RATE
+from poser.core.audio import SAMPLE_RATE, SILENCE_DBFS, measure_peak_dbfs
 from poser.core.graph import Graph
+from poser.core.jsonvalue import JsonValue
 from poser.core.loading import LoadedSong
 from poser.core.names import SongId
 from poser.core.rendering import TrackResult, render_song
 from poser.core.report import Report
 from poser.core.song import Song
+
+if TYPE_CHECKING:
+    from pedalboard import AudioUnitPlugin, VST3Plugin
 
 REPO_DIR = Path(__file__).resolve().parents[1]
 SCAFFOLD_DIR = Path(str(files("poser").joinpath("scaffold")))
@@ -143,6 +151,81 @@ def strongest_hz(audio: np.ndarray) -> float:
     freqs = np.fft.rfftfreq(len(mono), 1 / SAMPLE_RATE)
     band = freqs > 20
     return float(freqs[band][np.argmax(spectrum[band])])
+
+
+@dataclass(frozen=True)
+class HarmonicMetrics:
+    """Health-checked steady-window measurements, with channel powers summed, not waveforms."""
+
+    rms_dbfs: float
+    fundamental_hz: float
+    fundamental_fraction: float
+    h2_db: float
+
+
+def harmonic_metrics(audio: np.ndarray) -> HarmonicMetrics:
+    """Measure 0.2-1.2 seconds of held MIDI 69, refusing unhealthy audio before class checks.
+
+    Hann-window each channel separately; integrate power within ±5 Hz of the strongest >20 Hz
+    peak and twice that peak. Floor the dimensionless P2/P1 ratio at 1e-15 (-150 dB), so a
+    numerically absent second harmonic remains finite without changing the separated classes.
+    """
+    start, end = int(0.2 * SAMPLE_RATE), int(1.2 * SAMPLE_RATE)
+    assert audio.ndim == 2
+    assert audio.shape[0] == 2
+    assert audio.shape[1] >= end
+    assert np.isfinite(audio).all(), "harmonic audio contains non-finite samples"
+    assert measure_peak_dbfs(audio) > SILENCE_DBFS, "harmonic audio is inaudible"
+    window = audio[:, start:end].astype(np.float64)
+    rms_dbfs = 20 * float(np.log10(max(float(np.sqrt(np.mean(window**2))), 1e-15)))
+    assert rms_dbfs > -60, f"harmonic window RMS {rms_dbfs:.2f} dBFS is too quiet"
+    power = np.sum(np.abs(np.fft.rfft(window * np.hanning(end - start), axis=1)) ** 2, axis=0)
+    frequencies = np.fft.rfftfreq(end - start, 1 / SAMPLE_RATE)
+    non_dc = frequencies > 20
+    fundamental = float(frequencies[non_dc][np.argmax(power[non_dc])])
+    assert abs(fundamental - 440) <= 5, f"harmonic fundamental {fundamental:.2f} Hz is not A4"
+    p1 = float(power[np.abs(frequencies - fundamental) <= 5].sum())
+    p2 = float(power[np.abs(frequencies - 2 * fundamental) <= 5].sum())
+    fraction = p1 / float(power[non_dc].sum())
+    assert fraction > 0.1, f"harmonic fundamental power fraction {fraction:.4f} is too small"
+    h2_db = 10 * float(np.log10(max(p2 / p1, 1e-15)))
+    return HarmonicMetrics(rms_dbfs, fundamental, fraction, h2_db)
+
+
+def assert_sine_saw_pair(sine: HarmonicMetrics, saw: HarmonicMetrics) -> None:
+    """Require the selected presets' distinct harmonic classes, not waveform inequality."""
+    assert sine.h2_db < -30, f"harmonic class: expected sine H2 < -30 dB, got {sine.h2_db:.2f}"
+    assert saw.h2_db > -15, f"harmonic class: expected saw H2 > -15 dB, got {saw.h2_db:.2f}"
+
+
+def render_without_restoring_state(job: JsonValue) -> JsonValue:
+    """Child-only counterfactual: omit raw_state assignment, retaining the original render job.
+
+    Import this target via inherited PYTHONPATH. Keeping nonempty state in render_job preserves
+    its ordinary post-state no-MIDI preparation even though load ignores restoration.
+    """
+    assert isinstance(job, dict)
+    encoded = job.get("state")
+    assert isinstance(encoded, str), "control requires nonempty job state"
+    assert encoded, "control requires nonempty job state"
+    expected = decode_state(encoded)
+    assert expected, "control requires nonempty decoded state"
+    original_load = pedalboard_worker.load
+    calls = 0
+
+    def ignore_state(
+        path: str, plugin_name: str | None, state: bytes | None
+    ) -> "VST3Plugin | AudioUnitPlugin":
+        nonlocal calls
+        calls += 1
+        assert state == expected, "control load did not receive the original nonempty state"
+        return original_load(path, plugin_name, None)
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(pedalboard_worker, "load", ignore_state)
+        result = pedalboard_worker.render_job(job)
+    assert calls == 1, f"control load wrapper ran {calls} times, expected exactly once"
+    return result
 
 
 def fxp_bytes(chunk: bytes, name: str = "test", kind: bytes = b"FPCh") -> bytes:
