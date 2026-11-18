@@ -261,23 +261,6 @@ jobs:
             "assert surge['sources']['presets'] == str(Path(sys.argv[2]).resolve()), surge"
           uv run python -c $code $bundle $patches
           Copy-Item poser.toml (Join-Path $env:GITHUB_WORKSPACE poser.toml)
-      # Diagnostic controls collect evidence without accepting a failed showcase or changing its song.
-      - name: Probe Surge showcase onset (diagnostic)
-        if: ${{ !cancelled() }}
-        timeout-minutes: 15
-        run: |
-          $PSNativeCommandUseErrorActionPreference = $true
-          $probe = Join-Path $env:RUNNER_TEMP surge-onset-probe
-          uv run pytest -m real_plugins -q -s --basetemp $probe `
-            tests/test_pedalboard_onset_real.py::test_surge_showcase_onset_probe
-      - name: Keep the isolated onset evidence
-        if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@v7.0.2
-        with:
-          name: surge-onset-windows
-          path: ${{ runner.temp }}/surge-onset-probe/
-          if-no-files-found: error
-          retention-days: 7
       # The Effects bundle the Surge XT installer adds joins the studio's configuration as an
       # effect recipe, so the effect test renders a Windows effect plugin; a skip fails.
       - name: Surge XT and Surge XT Effects through Pedalboard (required)
@@ -295,6 +278,7 @@ jobs:
             "tests/test_pedalboard_real.py::test_each_instrument_meets_the_instrument_contract" `
             "tests/test_pedalboard_real.py::test_a_render_has_exactly_the_performance_s_frames" `
             "tests/test_pedalboard_real.py::test_a_windows_plugin_loads_from_its_binary_as_from_its_bundle" `
+            "tests/test_pedalboard_real.py::test_surge_restored_preset_keeps_its_first_note" `
             "tests/test_pedalboard_real.py::test_each_effect_renders_as_many_frames_as_it_is_given" 2>&1 |
             Tee-Object -Variable output
           $status = $LASTEXITCODE

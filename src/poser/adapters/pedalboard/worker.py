@@ -593,8 +593,8 @@ def render_fresh(
     performance: Performance,
     settle_s: float = 0.0,
 ) -> np.ndarray | NotLoaded:
-    """Load a plugin, restore a state into it, wait `settle_s` seconds for it to finish loading in
-    the background, and render a performance on that new instance.
+    """Load a plugin, restore a state and process one no-MIDI block, then wait `settle_s` seconds
+    for background loading and render the performance. Default patches skip the state block.
 
     Returns what Pedalboard returns, unchecked. An exception raised while processing escapes.
     """
@@ -606,12 +606,22 @@ def render_fresh(
         return NotLoaded(str(error))
     if not plugin.is_instrument:
         return NotLoaded(f"{path} is not an instrument")
+    if state is not None:
+        # Some plugins lose the first note without processing after state restoration. Prepare them
+        # without MIDI before authored events; discard only this separate output.
+        plugin(
+            [],
+            duration=render_duration_s(BUFFER_SIZE),
+            sample_rate=SAMPLE_RATE,
+            num_channels=NUM_CHANNELS,
+            buffer_size=BUFFER_SIZE,
+            reset=False,
+        )
     if settle_s > 0:
         time.sleep(settle_s)
-    # The plugin was loaded for this render and has processed nothing, so Pedalboard's reset (save
-    # the state, recreate the plugin, restore the state) has nothing to clear. Its rebuild also
-    # plays a note no event asked for, which a long amp release or an effect tail carries into the
-    # render.
+    # This instance has played no authored notes, so there is no performance to clear. Pedalboard's
+    # reset rebuilds the plugin and loses its preparation; that rebuild also plays an unrequested
+    # note, which a long amp release or an effect tail carries into the render.
     # Pedalboard's stubs take a `list` of its message union, and `list` is invariant.
     messages: list[MIDIMessageLike] = [*performance_messages(performance)]
     return plugin(

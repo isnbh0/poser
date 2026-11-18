@@ -176,8 +176,8 @@ class PedalboardInstrument:
 
     @property
     def adapter_version(self) -> str:
-        # 3: a late start is rendered again after a wait, so stems from 2 may hold missed notes.
-        return "3"
+        # 4: process restored state before authored MIDI; stems from 3 may miss the first note.
+        return "4"
 
     @property
     def pitches(self) -> PitchSupport:

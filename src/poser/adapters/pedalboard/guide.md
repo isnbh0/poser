@@ -18,6 +18,10 @@ in single quotes, such as `path = 'C:\Program Files\Common Files\VST3\Synth.vst3
 A Pedalboard instrument plays whole MIDI pitches only; a fractional pitch fails as
 `unsupported_pitch`.
 
+After restoring a preset or saved sound, poser processes one block without MIDI before the
+authored notes, including in saved-sound previews. That preparatory output is discarded; authored
+event times and the rendered frame count are unchanged.
+
 Some presets load their samples in the background, and notes played before the samples arrive stay
 silent. When a track's sound begins late after its first note, poser renders it again, and this
 adapter waits 1 s, then 4 s, after restoring the sound before it plays. A `save-sound` preview

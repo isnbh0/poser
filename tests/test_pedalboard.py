@@ -1447,7 +1447,16 @@ def test_render_fresh_renders_the_new_instance_without_a_reset(
     audio = render_fresh("/S.vst3", "Synth", b"state", PERFORMANCE)
 
     assert loader.loads == [("/S.vst3", "Synth", INITIALIZATION_TIMEOUT_S)]
-    [(messages, kwargs, state)] = plugin.calls
+    [(prime_messages, prime_kwargs, prime_state), (messages, kwargs, state)] = plugin.calls
+    assert prime_messages == []
+    assert prime_state == b"state"
+    assert prime_kwargs == {
+        "duration": render_duration_s(BUFFER_SIZE),
+        "sample_rate": SAMPLE_RATE,
+        "num_channels": 2,
+        "buffer_size": BUFFER_SIZE,
+        "reset": False,
+    }
     assert state == b"state"
     assert message_values(messages) == message_values(list(performance_messages(PERFORMANCE)))
     assert kwargs == {
@@ -1457,7 +1466,27 @@ def test_render_fresh_renders_the_new_instance_without_a_reset(
         "buffer_size": 512,
         "reset": False,
     }
-    assert audio is plugin.rendered[0]
+    assert isinstance(audio, np.ndarray)
+    assert audio is plugin.rendered[1]
+    assert audio.shape == (2, PERFORMANCE.samples)
+
+
+def test_render_fresh_applies_queued_state_before_authored_midi(loader: FakeLoader) -> None:
+    """Stand-in for a plugin that applies restored state during its first processing call."""
+    plugin = FakePlugin()
+
+    def processing_applies_state() -> None:
+        plugin.fill = 0.0 if len(plugin.calls) == 1 else 1.0
+
+    plugin.on_call = processing_applies_state
+    loader.queue.append(plugin)
+
+    audio = render_fresh("/S.vst3", None, b"queued state", PERFORMANCE)
+
+    assert isinstance(audio, np.ndarray)
+    assert np.array_equal(audio, np.ones((2, PERFORMANCE.samples), np.float32))
+    assert plugin.calls[0][0] == []
+    assert plugin.calls[0][2] == b"queued state"
 
 
 def test_render_fresh_waits_after_restoring_the_state(
@@ -1466,13 +1495,13 @@ def test_render_fresh_waits_after_restoring_the_state(
     plugin = FakePlugin()
     loader.queue.append(plugin)
     events: list[str] = []
-    plugin.on_call = lambda: events.append("render")
+    plugin.on_call = lambda: events.append("prepare" if not plugin.calls[-1][0] else "render")
     clock = SimpleNamespace(sleep=lambda seconds: events.append(f"sleep {seconds}"))
     monkeypatch.setattr(worker_module, "time", clock)
 
     render_fresh("/S.vst3", None, b"state", PERFORMANCE, 1.0)
 
-    assert events == ["sleep 1.0", "render"]
+    assert events == ["prepare", "sleep 1.0", "render"]
 
 
 def test_render_fresh_with_no_wait_does_not_sleep(
@@ -1537,24 +1566,39 @@ def test_render_fresh_reports_a_rejected_state(loader: FakeLoader) -> None:
     assert plugin.calls == []
 
 
-def test_render_fresh_reports_a_non_instrument(loader: FakeLoader) -> None:
+@pytest.mark.parametrize("state", [None, b"state"])
+def test_render_fresh_reports_a_non_instrument(loader: FakeLoader, state: bytes | None) -> None:
     plugin = FakePlugin()
     plugin.is_instrument = False
     loader.queue.append(plugin)
 
-    result = render_fresh("/S.vst3", None, None, PERFORMANCE)
+    result = render_fresh("/S.vst3", None, state, PERFORMANCE)
 
     assert result == NotLoaded("/S.vst3 is not an instrument")
     assert plugin.calls == []
 
 
-def test_render_fresh_lets_a_processing_exception_escape(loader: FakeLoader) -> None:
+@pytest.mark.parametrize(
+    ("state", "failing_call"),
+    [(None, 1), (b"state", 1), (b"state", 2)],
+    ids=["default", "preparation", "performance-after-preparation"],
+)
+def test_render_fresh_lets_a_processing_exception_escape(
+    loader: FakeLoader, state: bytes | None, failing_call: int
+) -> None:
     plugin = FakePlugin()
-    plugin.call_error = RuntimeError("boom")
+
+    def fail_during_processing() -> None:
+        if len(plugin.calls) == failing_call:
+            raise RuntimeError("boom")
+
+    plugin.on_call = fail_during_processing
     loader.queue.append(plugin)
 
     with pytest.raises(RuntimeError, match="boom"):
-        render_fresh("/S.vst3", None, None, PERFORMANCE)
+        render_fresh("/S.vst3", None, state, PERFORMANCE)
+    assert len(plugin.calls) == failing_call
+    assert len(plugin.rendered) == failing_call - 1
 
 
 def fake_job(output: str, path: Path, state: bytes | None = None) -> dict[str, JsonValue]:
@@ -1613,10 +1657,12 @@ def test_capture_job_previews_the_captured_state_on_a_new_instance(
     [(messages, kwargs, _)] = editor_calls
     assert messages == []
     assert kwargs["reset"] is False
-    [(messages, _, state)] = preview.calls
+    [(prime_messages, _, prime_state), (messages, _, state)] = preview.calls
+    assert prime_messages == []
+    assert prime_state == EDITED
     assert message_values(messages) == message_values(list(performance_messages(PERFORMANCE)))
     assert state == EDITED
-    assert editor_alive == [False]
+    assert editor_alive == [False, False]
     audio = read_raw_audio(preview_path, PERFORMANCE.samples)
     assert isinstance(audio, Audio)
     assert np.array_equal(audio.samples, np.full((2, PERFORMANCE.samples), 0.5, np.float32))
