@@ -899,7 +899,9 @@ def test_render_maps_each_worker_failure(
     detail: str,
 ) -> None:
     use_workers(monkeypatch, workers, render=worker)
-    failure = render(make_instrument(tmp_path), tmp_path / "out.npy", timeout_s=0.5)
+    # Only the hang waits out its timeout; the others get time to start on a loaded machine.
+    timeout_s = 0.5 if status is RenderFailureStatus.TIMED_OUT else 30
+    failure = render(make_instrument(tmp_path), tmp_path / "out.npy", timeout_s=timeout_s)
     assert isinstance(failure, RenderFailure), failure
     assert failure.status is status
     assert re.search(detail, failure.detail), failure.detail
