@@ -96,10 +96,8 @@ def from_options(name: str, options: Mapping[str, JsonValue], base: Path) -> Ped
         raise ConfigError(f"{owner}: sources must be a table of paths")
     sources: dict[Identifier, Path] = {}
     for source, directory in raw_sources.items():
-        if not Identifier.PATTERN.fullmatch(source):
-            raise ConfigError(
-                f"{owner}: source name {source!r} does not match {Identifier.PATTERN.pattern}"
-            )
+        if (problem := Identifier.problem(source)) is not None:
+            raise ConfigError(f"{owner}: source name {problem}")
         if source == SAVED_SOURCE:
             raise ConfigError(f"{owner}: source name {SAVED_SOURCE!r} is reserved")
         text = _text(directory)
@@ -174,7 +172,7 @@ def effect_from_options(name: str, options: Mapping[str, JsonValue], base: Path)
         raise ConfigError(f"{owner}: path must be non-empty text")
     if path is None and builtin is None:
         raise ConfigError(f"{owner}: builtin must be non-empty text")
-    if builtin is not None and not Identifier.PATTERN.fullmatch(builtin):
+    if builtin is not None and not builtin.isidentifier():
         raise ConfigError(f"{owner}: builtin must name a pedalboard-native class, got {builtin!r}")
 
     raw_parameters = options.get("parameters", {})

@@ -44,7 +44,7 @@ def build() -> Song:
 |---|---|---|---|
 | `bpm` | song | number | above 0 |
 | `tracks` | song | list of tracks | names unique |
-| `name` | track | text | letters, digits, `_`, `-` |
+| `name` | track | text | letters, digits, `_`, `-`; not a name Windows reserves, such as `con` or `aux` |
 | `sound` | track | text | a name from `uv run list-sounds` |
 | `effects` | track, optional | list of recipe names | names from `poser.toml` `[effects]` |
 | `notes` | track | list of notes | |

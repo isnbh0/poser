@@ -11,7 +11,16 @@ from poser.core.audio import NUM_CHANNELS, Audio, AudioFault, AudioProblem, make
 from poser.core.cache import sound_key
 from poser.core.checks import CheckFailureStatus, check_status
 from poser.core.jsonvalue import Json
-from poser.core.names import Identifier, NodeName, SongId, Suffix, TrackName, is_inner_relative
+from poser.core.names import (
+    Identifier,
+    NodeName,
+    SongId,
+    Suffix,
+    TrackName,
+    inner_relative_problem,
+    is_inner_relative,
+    name_problem,
+)
 from poser.core.performance import Control, NoteOff, NoteOn, Performance
 from poser.core.ports import StemMeta
 from poser.core.report import (
@@ -107,6 +116,10 @@ def test_track_name() -> None:
     assert TrackName("lead_1-a") == "lead_1-a"
     for value in ("", "a b", "../x", "a/b", "a.b", True, 1):
         _bad(TrackName, value)
+    for value in ("con", "AUX", "nul", "com1", "LPT9"):
+        _bad(TrackName, value)
+    for value in ("console", "com0", "aux2", "nul_", "com10"):
+        assert TrackName(value) == value
 
 
 def test_node_name() -> None:
@@ -117,12 +130,16 @@ def test_node_name() -> None:
     assert isinstance(TrackName("lead"), NodeName)
     for value in ("", "a b", "../x", "a/b", "a[b]", ".lead", "lead.", "lead..drive", True, 1):
         _bad(NodeName, value)
+    # Windows reads `nul.drive.wav` as the device `nul`.
+    for value in ("nul.drive", "Con.drive.2"):
+        _bad(NodeName, value)
+    assert NodeName("lead.nul") == "lead.nul"
 
 
 def test_identifier() -> None:
     for value in ("Serum", "Serum2", "serum-2", "a_b", "0x"):
         assert Identifier(value) == value
-    for value in ("", "-a", "_a", "Serum Presets", "a:b", True):
+    for value in ("", "-a", "_a", "Serum Presets", "a:b", True, "prn", "Com3", "lpt1"):
         _bad(Identifier, value)
 
 
@@ -136,9 +153,39 @@ def test_suffix() -> None:
 def test_song_id() -> None:
     assert SongId("songs/demo.yaml") == "songs/demo.yaml"
     assert SongId("demo.py") == "demo.py"
-    assert SongId("a/C:b") == "a/C:b"  # A colon is a filename character on POSIX.
+    assert SongId("songs/console.yaml") == "songs/console.yaml"
     for value in ("", "/a", "a/../b", "a//b", "a\\b", "./a", "a/", "..", "C:a", "c:", True):
         _bad(SongId, value)
+    # Windows reads a colon after the first part as a stream: `a/C:b` writes the stream `b` of `C`.
+    for value in ("a/C:b", "songs/con.yaml", "nul/demo.yaml", "songs/demo.yaml.", "a /b"):
+        _bad(SongId, value)
+
+
+@pytest.mark.parametrize(
+    ("name", "problem"),
+    [
+        ("con", "device"),
+        ("NUL.txt", "device"),
+        ("nul.tar.gz", "device"),
+        ("aux .txt", "device"),
+        ("COM\u00b9", "device"),
+        ("lpt9.wav", "device"),
+        ("a.", "trailing"),
+        ("a ", "trailing"),
+        ("a:b", "forbids ':'"),
+        ("a\tb", "forbids '\\t'"),
+        ("a<b>", "forbids '<', '>'"),
+    ],
+)
+def test_names_windows_cannot_hold(name: str, problem: str) -> None:
+    found = name_problem(name)
+    assert found is not None
+    assert problem in found, found
+
+
+@pytest.mark.parametrize("name", ["console", "com0", "lpt10", "nullable.wav", ".hidden", "a.b"])
+def test_names_every_platform_holds(name: str) -> None:
+    assert name_problem(name) is None
 
 
 @pytest.mark.parametrize("flavor", [PurePosixPath, PureWindowsPath])
@@ -147,8 +194,18 @@ def test_is_inner_relative_on_each_platform_s_rules(
 ) -> None:
     for inner in ("a", "a/b", "a/./b"):
         assert is_inner_relative(flavor(inner)), inner
-    for outer in ("", ".", "..", "a/../b", "/a"):
+    for outer in ("", ".", "..", "a/../b", "/a", "a/nul.txt", "con/a", "a./b", "a/b "):
         assert not is_inner_relative(flavor(outer)), outer
+
+
+def test_the_inner_relative_problem_names_the_part() -> None:
+    assert inner_relative_problem(PurePosixPath("audio/aux.wav")) == (
+        "'aux.wav': Windows reserves it as a device name"
+    )
+    assert inner_relative_problem(PurePosixPath("a/../b")) == "it has a '..' part"
+    assert inner_relative_problem(PureWindowsPath("C:a")) == "it starts with 'C:'"
+    assert inner_relative_problem(PurePosixPath(".")) == "it names the directory itself"
+    assert inner_relative_problem(PurePosixPath("audio/mix.wav")) is None
 
 
 def test_is_inner_relative_refuses_windows_anchors() -> None:

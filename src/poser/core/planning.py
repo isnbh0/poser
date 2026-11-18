@@ -116,7 +116,7 @@ def _resolve_effect(
     """Resolve an effect node's recipe through its adapter, or return why it cannot be used."""
     recipe = node.effect
     if (
-        not Identifier.PATTERN.fullmatch(recipe)
+        Identifier.problem(recipe) is not None
         or (effect := effects.get(Identifier(recipe))) is None
     ):
         return SoundFailure(SoundFailureStatus.UNKNOWN_SOUND, f"no effect {recipe!r} in poser.toml")

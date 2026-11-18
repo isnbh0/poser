@@ -326,6 +326,21 @@ def test_mark_rows_match_validation() -> None:
         parse_song(with_key("marks", {"Parts": [{"beat": 0, "end": 1, "text": "a"}]}))
 
 
+def test_the_track_name_row_matches_validation() -> None:
+    rows = {row[0]: row[1:] for row in table("Songs")}
+    allowed, reserved = rows["`name`"][2].split("; ")
+    assert allowed == "letters, digits, `_`, `-`"
+    parse_song(with_key("name", "Lead_2-b"))
+    for rejected in ("lead.2", "lead 2", "lead/2"):
+        with pytest.raises(SongError):
+            parse_song(with_key("name", rejected))
+    examples = re.findall(r"`([^`]+)`", reserved)
+    assert examples
+    for rejected in examples:
+        with pytest.raises(SongError):
+            parse_song(with_key("name", rejected))
+
+
 def test_the_deliberate_row_matches_validation() -> None:
     rows = {row[0]: row[1:] for row in table("Songs")}
     assert rows["`deliberate`"][:2] == ["mark, optional", "`true` or `false`"]

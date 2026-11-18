@@ -273,10 +273,8 @@ def _recipes(
     seen: dict[str, str] = {}
     for name, item in table.items():
         owner = f"{where}.{name}"
-        if not Identifier.PATTERN.fullmatch(name):
-            raise ConfigError(
-                f"{path}: {owner}: the name does not match {Identifier.PATTERN.pattern}"
-            )
+        if (problem := Identifier.problem(name)) is not None:
+            raise ConfigError(f"{path}: {owner}: the name {problem}")
         if (other := seen.get(name.lower())) is not None:
             raise ConfigError(f"{path}: {owner}: the name differs only in case from {other!r}")
         seen[name.lower()] = name

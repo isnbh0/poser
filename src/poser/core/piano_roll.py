@@ -4,8 +4,8 @@ from dataclasses import dataclass
 from itertools import pairwise
 
 from poser.core.graph import Graph
+from poser.core.names import NodeName
 from poser.core.rules import (
-    NODE_NAME,
     Note,
     duplicate_name_problems,
     is_number,
@@ -22,7 +22,7 @@ class PianoRollPanel:
     notes: tuple[Note, ...]
 
     def __post_init__(self) -> None:
-        if not (isinstance(self.name, str) and NODE_NAME.fullmatch(self.name)):
+        if NodeName.problem(self.name) is not None:
             raise ValueError(f"Invalid panel name: {self.name!r}")
         if not isinstance(self.notes, list | tuple):
             raise ValueError("Panel notes must be a list or tuple of Note values")

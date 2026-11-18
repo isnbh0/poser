@@ -490,8 +490,8 @@ def test_track_name_cannot_leave_the_render_directory() -> None:
 
 def test_sound_that_is_not_a_reference_is_a_song_error() -> None:
     expected = (
-        "must be <instrument> or <instrument>:<name>, with an instrument name matching "
-        "[A-Za-z0-9][A-Za-z0-9_-]*, got 'bad name'"
+        "must be <instrument> or <instrument>:<name>; the instrument name must start with a "
+        "letter or digit and contain only letters, digits, '_', and '-', got 'bad name'"
     )
     data = valid_song()
     set_track(data, "sound", "bad name")
@@ -502,6 +502,41 @@ def test_sound_that_is_not_a_reference_is_a_song_error() -> None:
 
     assert parsed.value.problems == [f"tracks[0].sound: {expected}"]
     assert built.value.problems == [f"Track.sound: {expected}"]
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "problem"),
+    [
+        ("name", "aux", "tracks[0].name: must not be 'aux': Windows reserves it as a device name"),
+        ("name", "Con", "tracks[0].name: must not be 'Con': Windows reserves it as a device name"),
+        (
+            "sound",
+            "nul:pad",
+            (
+                "tracks[0].sound: must be <instrument> or <instrument>:<name>; the instrument "
+                "name must not be 'nul': Windows reserves it as a device name"
+            ),
+        ),
+        (
+            "sound",
+            "synth:",
+            (
+                "tracks[0].sound: must be <instrument> or <instrument>:<name>; a sound reference "
+                "must name a sound after ':', got 'synth:'"
+            ),
+        ),
+    ],
+)
+def test_name_and_sound_problems_say_which_rule_they_break(
+    field: str, value: str, problem: str
+) -> None:
+    """A track's name names its stem files, and an instrument's its folders, on every platform
+    the song may render on."""
+    data = valid_song()
+    set_track(data, field, value)
+    with pytest.raises(SongError) as parsed:
+        parse_song(data)
+    assert parsed.value.problems == [problem]
 
 
 @pytest.mark.parametrize(

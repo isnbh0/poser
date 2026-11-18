@@ -313,7 +313,12 @@ CONFIG_ERRORS = {
     "bad-name": (
         '[instruments."bad name"]\nadapter = "pedalboard"\n',
         "instruments.bad name",
-        "does not match",
+        "the name must start with a letter or digit",
+    ),
+    "reserved-name": (
+        '[instruments.aux]\nadapter = "pedalboard"\n',
+        "instruments.aux",
+        "the name must not be 'aux': Windows reserves it as a device name",
     ),
     "name-differs-in-case": (
         SERUM + '[instruments.Serum]\nadapter = "pedalboard"\n',
@@ -361,7 +366,12 @@ CONFIG_ERRORS = {
     "effect-bad-name": (
         SERUM + '[effects."bad name"]\nadapter = "pedalboard"\nbuiltin = "Gain"\n',
         "effects.bad name",
-        "does not match",
+        "the name must start with a letter or digit",
+    ),
+    "effect-reserved-name": (
+        SERUM + '[effects.NUL]\nadapter = "pedalboard"\nbuiltin = "Gain"\n',
+        "effects.NUL",
+        "the name must not be 'NUL': Windows reserves it as a device name",
     ),
     "effect-name-differs-in-case": (
         SERUM

@@ -659,11 +659,12 @@ def test_save_refuses_an_unknown_instrument_by_name(
 @pytest.mark.parametrize(
     ("args", "problem"),
     [
-        (["bad synth", "new"], "instrument: Identifier must match"),
-        (["synth", "bad name"], "name: Identifier must match"),
+        (["bad synth", "new"], "instrument: Identifier must start with"),
+        (["synth", "bad name"], "name: Identifier must start with"),
+        (["synth", "con"], "name: Identifier must not be 'con': Windows reserves"),
         (["synth", "new", "--from", "synth:"], "--from: "),
     ],
-    ids=["instrument", "name", "from"],
+    ids=["instrument", "name", "reserved-name", "from"],
 )
 def test_save_names_the_argument_it_cannot_parse(
     workspace: CommandWorkspace,

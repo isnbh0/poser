@@ -81,10 +81,8 @@ def from_options(name: str, options: Mapping[str, JsonValue], base: Path) -> Scs
         raise ConfigError(f"{owner}: sources must be a table of paths")
     sources: dict[Identifier, Path] = {}
     for source, directory in raw_sources.items():
-        if not Identifier.PATTERN.fullmatch(source):
-            raise ConfigError(
-                f"{owner}: source name {source!r} does not match {Identifier.PATTERN.pattern}"
-            )
+        if (problem := Identifier.problem(source)) is not None:
+            raise ConfigError(f"{owner}: source name {problem}")
         if source == SAVED_SOURCE:
             raise ConfigError(f"{owner}: source name {SAVED_SOURCE!r} is reserved")
         if source == BUILTIN_SOURCE:

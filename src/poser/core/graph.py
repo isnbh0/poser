@@ -7,10 +7,10 @@ from typing import ClassVar, Literal, NotRequired, TypedDict
 
 from poser.core.marks import NO_MARKS, Marks, MarksData, layers_to_data, marks_field_problems
 from poser.core.meter import NO_METER, Meter, MeterData, meter_field_problems, meter_to_data
+from poser.core.names import NodeName
 from poser.core.rules import (
     GAIN_MAX_DB,
     GAIN_MIN_DB,
-    NODE_NAME,
     ControlChange,
     ControlData,
     Note,
@@ -70,10 +70,8 @@ def _node_problems(name: object, gain_db: object) -> list[str]:
     # Chain nodes carry their track's name and recipe with dots between, so dots are legal here
     # where a track's own name forbids them.
     problems: list[str] = []
-    if not (isinstance(name, str) and NODE_NAME.fullmatch(name)):
-        problems.append(
-            f"Node.name: must contain only letters, digits, '_', '-', and '.', got {name!r}"
-        )
+    if (problem := NodeName.problem(name)) is not None:
+        problems.append(f"Node.name: {problem}")
     return problems + _gain_problems(gain_db, "Node.gain_db")
 
 
@@ -160,11 +158,8 @@ class Wire:
         problems: list[str] = []
         for field in ("from_name", "to_name"):
             value = getattr(self, field)
-            if not (isinstance(value, str) and NODE_NAME.fullmatch(value)):
-                problems.append(
-                    f"Wire.{field}: must contain only letters, digits, '_', '-', and '.', "
-                    f"got {value!r}"
-                )
+            if (problem := NodeName.problem(value)) is not None:
+                problems.append(f"Wire.{field}: {problem}")
         if self.kind not in WIRE_KINDS:
             problems.append(f"Wire.kind: must be audio or control, got {self.kind!r}")
         problems += _gain_problems(self.gain_db, "Wire.gain_db")

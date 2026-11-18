@@ -408,6 +408,19 @@ def test_unsafe_includes_refused(harness: Harness, include: str) -> None:
     assert not harness.instrument.renders
 
 
+@pytest.mark.parametrize("include", ["parts/nul.py", "Aux.txt", "parts/theme.py.", "parts/a|b.py"])
+def test_includes_another_platform_cannot_hold_are_refused(harness: Harness, include: str) -> None:
+    """A bundle unpacks on every platform, so an include Windows cannot hold under its name is
+    refused even where the file exists."""
+    (harness.root / include).parent.mkdir(parents=True, exist_ok=True)
+    if sys.platform != "win32":
+        (harness.root / include).write_text("x = 1\n", encoding="utf-8", newline="\n")
+    harness.includes = (Path(include),)
+    with pytest.raises(ValueError, match=r"include .* inside the source root: .*Windows"):
+        harness.run()
+    assert not harness.instrument.renders
+
+
 def test_include_symlink_escape_refused(harness: Harness, tmp_path: Path) -> None:
     outside = tmp_path.parent / f"{tmp_path.name}-outside"
     outside.write_text("private", encoding="utf-8", newline="\n")

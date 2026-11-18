@@ -7,11 +7,8 @@ from dataclasses import dataclass
 from itertools import pairwise
 from typing import Literal, NotRequired, Protocol, TypedDict, TypeGuard, cast
 
-from poser.core.names import Identifier, NodeName, TrackName
+from poser.core.names import Identifier, TrackName
 from poser.core.sounds import parse_sound_ref
-
-TRACK_NAME = TrackName.PATTERN
-NODE_NAME = NodeName.PATTERN
 
 # A track's level in decibels, applied at mixdown.
 GAIN_MIN_DB, GAIN_MAX_DB = -60, 12
@@ -217,15 +214,10 @@ def track_field_problems(values: Mapping[str, object], where: str) -> list[str]:
     name, sound, gain = values.get("name"), values.get("sound"), values.get("gain")
     pitched = values.get("pitched")
     problems: list[str] = []
-    if "name" in values and not (isinstance(name, str) and TRACK_NAME.fullmatch(name)):
-        problems.append(
-            f"{where}.name: must contain only letters, digits, '_', and '-', got {name!r}"
-        )
-    if "sound" in values and not _is_sound_ref(sound):
-        problems.append(
-            f"{where}.sound: must be <instrument> or <instrument>:<name>, with an instrument "
-            f"name matching {Identifier.PATTERN.pattern}, got {sound!r}"
-        )
+    if "name" in values and (problem := TrackName.problem(name)) is not None:
+        problems.append(f"{where}.name: {problem}")
+    if "sound" in values and (problem := _sound_ref_problem(sound)) is not None:
+        problems.append(f"{where}.sound: must be <instrument> or <instrument>:<name>; {problem}")
     if "gain" in values and not (is_number(gain) and GAIN_MIN_DB <= gain <= GAIN_MAX_DB):
         problems.append(
             f"{where}.gain: must be a number of decibels from {GAIN_MIN_DB} to {GAIN_MAX_DB}, "
@@ -250,14 +242,16 @@ def unpitched_problems(notes: Sequence[tuple[int, Note]], where: str) -> list[st
     ]
 
 
-def _is_sound_ref(value: object) -> bool:
+def _sound_ref_problem(value: object) -> str | None:
     if not isinstance(value, str):
-        return False
+        return f"got {value!r}"
+    if (problem := Identifier.problem(value.partition(":")[0])) is not None:
+        return f"the instrument name {problem}"
     try:
         parse_sound_ref(value)
-    except ValueError:
-        return False
-    return True
+    except ValueError as error:
+        return str(error)
+    return None
 
 
 def notes_problems(notes: object, where: str) -> list[str]:

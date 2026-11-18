@@ -14,7 +14,7 @@ from typing import ClassVar
 from poser.core.analysis import REPORT_NAME, AnalysisTools, _analyze
 from poser.core.jsonvalue import JsonValue
 from poser.core.loading import load_song
-from poser.core.names import Identifier, SongId, is_inner_relative
+from poser.core.names import Identifier, SongId, inner_relative_problem, is_inner_relative
 from poser.core.ports import (
     AudioFiles,
     DeliveryWriter,
@@ -144,8 +144,10 @@ def capture_inputs(
     captured_song = source(song)
     captured_includes: list[InputSnapshot] = []
     for include in includes:
-        if not is_inner_relative(include):
-            raise ValueError(f"include must be a nonescaping source-relative file: {include}")
+        if problem := inner_relative_problem(include):
+            raise ValueError(
+                f"include {include} must name a file inside the source root: {problem}"
+            )
         item = source(source_root / include, preserve_name=True)
         if item.path != captured_song.path and item not in captured_includes:
             captured_includes.append(item)
