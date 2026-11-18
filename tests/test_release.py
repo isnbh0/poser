@@ -321,6 +321,8 @@ def test_doc_search_mirrors_preserve_search_semantics(tmp_path: Path, search: st
         )
         # Capture MatchInfo properties, never PowerShell's host-formatted console table.
         script = (
+            # Module autoload can serialize first-use progress to stderr as CLIXML in 5.1.
+            "$ProgressPreference = 'SilentlyContinue'\n"
             "$ErrorActionPreference = 'Stop'\n"
             "if ($PSVersionTable.PSVersion.Major -ne 5) "
             "{ throw 'requires Windows PowerShell 5.1' }\n"
@@ -438,6 +440,7 @@ def test_windows_inventory_json_is_a_flat_example_array(nest_array: bool) -> Non
         conversion = conversion.replace("$examples = ", "$examples = @(", 1) + ")"
     inventory = json.dumps([asdict(example) for example in examples])
     script = (
+        "$ProgressPreference = 'SilentlyContinue'\n"
         "$ErrorActionPreference = 'Stop'\n"
         "if ($PSVersionTable.PSVersion.Major -ne 5) { throw 'requires Windows PowerShell 5.1' }\n"
         f"$inventory = @'\n{inventory}\n'@\n{conversion}\n"
