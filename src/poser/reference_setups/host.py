@@ -9,10 +9,11 @@ from pathlib import Path
 
 @dataclass(frozen=True)
 class Host:
-    """What a reference setup's search reads from the machine: the platform (`sys.platform`), the
-    environment, the user's home folder, and the system-wide library folder (`/Library` on macOS).
-    A search is a function of this value; only a command reads the real machine, through
-    `current`."""
+    """What a reference setup's search reads from the machine besides its files: the platform
+    (`sys.platform`), the environment, the user's home folder, and the system-wide library folder
+    (`/Library` on macOS). The places a search looks are a function of this value, and whether
+    each exists is read from the file system; only a command reads the real machine's values,
+    through `current`."""
 
     platform: str
     environ: Mapping[str, str]

@@ -28,12 +28,12 @@ def run(name: str, *args: str, cwd: Path) -> str:
     executable = shutil.which(name, path=scripts)
     require(executable is not None, f"No console script {name} in {scripts}")
     # The script's interpreter runs without -I, so drop the variables that would redirect its
-    # imports, and set UTF-8 mode so it writes the pipe as UTF-8.
+    # imports or set its encoding: each command writes the pipe as UTF-8 itself.
     environment = {key: value for key, value in os.environ.items() if not key.startswith("PYTHON")}
     result = subprocess.run(
         [str(executable), *args],
         cwd=cwd,
-        env=environment | {"PYTHONUTF8": "1"},
+        env=environment,
         check=False,
         text=True,
         encoding="utf-8",
