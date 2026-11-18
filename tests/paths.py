@@ -1,5 +1,6 @@
 """Paths of an exact length, and the longest path a system lets this process create."""
 
+import shutil
 from collections.abc import Callable
 from pathlib import Path
 
@@ -31,14 +32,21 @@ def make_file(path: Path) -> None:
 def longest_created(base: Path, create: Callable[[Path], None], below: int, fill: str = "d") -> int:
     """The length, in characters, of the longest `path_of_length(base, length, fill)` shorter
     than `below` that `create` makes, found by bisection; a system that makes one makes every
-    shorter. The system refuses with an OSError, or, on Windows past 32,767 characters, Python
-    refuses with a ValueError."""
+    shorter. Each attempt starts from an empty `base`, so no earlier attempt's file stands where
+    a folder must go, or its folder where the file must. The system refuses with an OSError, or,
+    on Windows past 32,767 characters, Python refuses with a ValueError."""
+
+    def attempt(length: int) -> None:
+        if base.exists():
+            shutil.rmtree(base)
+        create(path_of_length(base, length, fill))
+
     low, high = len(str(base.absolute())) + 2, below
-    create(path_of_length(base, low, fill))
+    attempt(low)
     while high - low > 1:
         middle = (low + high) // 2
         try:
-            create(path_of_length(base, middle, fill))
+            attempt(middle)
         except (OSError, ValueError):
             high = middle
         else:
