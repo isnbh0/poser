@@ -1,62 +1,60 @@
 """Prepare the packaged Surge XT reference setup."""
 
 import json
-import os
-import sys
 import tomllib
 from dataclasses import dataclass
 from importlib.resources import files
 from pathlib import Path
 
 from poser.core.ports import ConfigError
+from poser.reference_setups.host import Host
 
 DOC_URL = "https://github.com/isnbh0/poser/blob/main/src/poser/reference_setups/surge/README.md"
-MAC_PLUGIN_PATHS = (
-    Path("/Library/Audio/Plug-Ins/VST3/Surge XT.vst3"),
-    Path.home() / "Library/Audio/Plug-Ins/VST3/Surge XT.vst3",
-)
-MAC_PRESET_PATHS = (
-    Path("/Library/Application Support/Surge XT/patches_factory"),
-    Path.home() / "Library/Application Support/Surge XT/patches_factory",
-)
+# macOS's VST3 folder and Surge XT's data folder, each under a user's or the system's Library.
+MAC_VST3 = Path("Audio/Plug-Ins/VST3/Surge XT.vst3")
+MAC_DATA = Path("Application Support/Surge XT")
 # Steinberg's per-user and system-wide VST3 folders, in its priority order, each as
 # (environment variable, folder under it).
 WINDOWS_VST3_FOLDERS = (("LOCALAPPDATA", "Programs/Common/VST3"), ("CommonProgramFiles", "VST3"))
 WINDOWS_BUNDLE = "Surge Synth Team/Surge XT.vst3"
 
 
-def _environment_path(name: str) -> Path | None:
-    value = os.environ.get(name)
-    return Path(value) if value else None
+def plugin_paths(host: Host) -> tuple[Path, ...]:
+    """Return where Surge XT's VST3 bundle is installed on `host`, in search order.
 
-
-def plugin_paths() -> tuple[Path, ...]:
-    """Return where Surge XT's VST3 bundle is installed on this platform, in search order.
-
-    On Windows, Surge's layout in the per-user VST3 folder, then in the system-wide one where the
-    installer puts it: Steinberg's priority, so the search finds the bundle a VST3 host loads. A
-    folder whose environment variable is unset or empty is left out. Elsewhere, the macOS
-    locations.
+    The per-user VST3 folder, then the system-wide one where the installer puts it: Steinberg's
+    priority, so the search finds the bundle a VST3 host loads. On Windows, a folder whose
+    environment variable is unset or empty is left out. Off Windows, the macOS folders.
     """
-    if sys.platform != "win32":
-        return MAC_PLUGIN_PATHS
-    roots = ((_environment_path(name), folder) for name, folder in WINDOWS_VST3_FOLDERS)
-    return tuple(root / folder / WINDOWS_BUNDLE for root, folder in roots if root is not None)
+    if host.platform == "win32":
+        roots = ((host.path(name), folder) for name, folder in WINDOWS_VST3_FOLDERS)
+        return tuple(root / folder / WINDOWS_BUNDLE for root, folder in roots if root is not None)
+    return (host.home / "Library" / MAC_VST3, host.library / MAC_VST3)
 
 
-def preset_paths(plugin: Path) -> tuple[Path, ...]:
-    """Return the factory patch folders to search for the bundle `plugin`, in order.
-
-    On Windows, the `patches_factory` of the data folder Surge XT itself uses (`windows_data`),
-    so poser and the plugin agree on the patches. Elsewhere, the macOS locations.
-    """
-    if sys.platform != "win32":
-        return MAC_PRESET_PATHS
-    data = windows_data(plugin)
+def preset_paths(plugin: Path, host: Host) -> tuple[Path, ...]:
+    """Return the factory patch folders to search for the bundle `plugin` on `host`, in order:
+    the `patches_factory` of the data folder Surge XT itself uses, so poser and the plugin agree
+    on the patches."""
+    data = windows_data(plugin, host) if host.platform == "win32" else mac_data(host)
     return () if data is None else (data / "patches_factory",)
 
 
-def windows_data(plugin: Path) -> Path | None:
+def mac_data(host: Host) -> Path:
+    """Return the data folder Surge XT uses on macOS.
+
+    Follows Surge XT's own lookup (`SurgeStorage.cpp`): a nonempty `SURGE_DATA_HOME`; else
+    `~/Library/Application Support/Surge XT` when it is a directory; else
+    `/Library/Application Support/Surge XT`, where the installer puts it.
+    """
+    override = host.path("SURGE_DATA_HOME")
+    if override is not None:
+        return override
+    user = host.home / "Library" / MAC_DATA
+    return user if user.is_dir() else host.library / MAC_DATA
+
+
+def windows_data(plugin: Path, host: Host) -> Path | None:
     """Return the data folder Surge XT uses on Windows for the bundle `plugin`, or None.
 
     Follows Surge XT's own lookup (`SurgeStorage.cpp`): a nonempty `SURGE_DATA_HOME`; else the
@@ -66,7 +64,7 @@ def windows_data(plugin: Path) -> Path | None:
     `SurgeXTData` beside its `Surge XT.vst3` to `%ProgramData%\\Surge XT`, and the portable zip
     keeps the real folder there.
     """
-    override = _environment_path("SURGE_DATA_HOME")
+    override = host.path("SURGE_DATA_HOME")
     if override is not None:
         return override
     binary_folder = plugin / "Contents" / "x86_64-win"
@@ -75,10 +73,10 @@ def windows_data(plugin: Path) -> Path | None:
             break
         if (folder / "SurgeXTData").is_dir():
             return folder / "SurgeXTData"
-    shared = _environment_path("ProgramData")
+    shared = host.path("ProgramData")
     if shared is not None and (shared / "Surge XT").is_dir():
         return shared / "Surge XT"
-    user = _environment_path("LOCALAPPDATA")
+    user = host.path("LOCALAPPDATA")
     return None if user is None else user / "Surge XT"
 
 
@@ -95,14 +93,15 @@ class Setup:
     presets: Path | None
 
 
-def prepare(plugin: Path | None, presets: Path | None) -> Setup:
-    """Resolve paths and produce a complete, self-contained configuration and demo."""
+def prepare(plugin: Path | None, presets: Path | None, host: Host) -> Setup:
+    """Resolve paths, searching `host` for those not given, and produce a complete,
+    self-contained configuration and demo."""
     if plugin is not None:
         plugin = plugin.expanduser().resolve()
         if not plugin.is_dir():
             raise ConfigError(f"plugin path is not a directory: {plugin}; see {DOC_URL}")
     else:
-        candidates = plugin_paths()
+        candidates = plugin_paths(host)
         plugin = next((p for p in candidates if p.is_dir()), None)
         if plugin is None:
             if candidates:
@@ -121,7 +120,7 @@ def prepare(plugin: Path | None, presets: Path | None) -> Setup:
         if not presets.is_dir():
             raise ConfigError(f"presets path is not a directory: {presets}; see {DOC_URL}")
     else:
-        presets = next((p.resolve() for p in preset_paths(plugin) if p.is_dir()), None)
+        presets = next((p.resolve() for p in preset_paths(plugin, host) if p.is_dir()), None)
 
     resources = files(__package__)
     template = tomllib.loads(resources.joinpath("poser.toml").read_text(encoding="utf-8"))

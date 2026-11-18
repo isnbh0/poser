@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 from helpers import set_instrument_guide
+from hosts import isolated_host
 from links import LINK_KINDS, make_dangling_link
 
 from poser.adapters.song_formats import SONG_FORMATS
@@ -20,6 +21,7 @@ from poser.core.loading import load_song
 from poser.core.paths import is_link, walk
 from poser.core.ports import ConfigError
 from poser.core.song import Song, SongError
+from poser.reference_setups.host import Host
 from poser.reference_setups.surge import prepare as surge
 
 
@@ -178,10 +180,27 @@ def test_help_links_to_current_documents(capsys: pytest.CaptureFixture[str]) -> 
     assert files("poser.reference_setups.surge").joinpath("README.md").is_file()
 
 
-def test_missing_plugin_diagnostic_links_to_recovery(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+def test_the_initializer_searches_the_current_host(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(surge, "plugin_paths", lambda: ())
+    """The command reads the machine only through `Host.current()`, which every plugin-free test
+    replaces with an empty host."""
+    host = isolated_host(tmp_path / "host")
+    plugin = surge.plugin_paths(host)[0]
+    plugin.mkdir(parents=True)
+    (presets,) = surge.preset_paths(plugin, host)
+    presets.mkdir(parents=True)
+    monkeypatch.setattr(Host, "current", staticmethod(lambda: host))
+    target = tmp_path / "studio"
+    assert init_workspace.main([str(target), "--setup", "surge"]) == 0
+    surge_config = tomllib.loads((target / "poser.toml").read_text(encoding="utf-8"))
+    assert surge_config["instruments"]["surge"]["path"] == str(plugin.resolve())
+    assert surge_config["instruments"]["surge"]["sources"] == {"presets": str(presets.resolve())}
+
+
+def test_missing_plugin_diagnostic_links_to_recovery(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     target = tmp_path / "studio"
     assert init_workspace.main([str(target), "--setup", "surge"]) == 2
     diagnostic = capsys.readouterr().err

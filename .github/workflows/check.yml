@@ -55,17 +55,6 @@ jobs:
       - run: uv sync --locked
       - name: Show which interpreter the tests start
         run: uv run python -c "import sys; print(sys.executable); print(sys._base_executable)"
-      # Before Surge XT is installed, so no plugin-free test finds an installed Surge.
-      - name: Plugin-free suite (required)
-        timeout-minutes: 30
-        run: uv run pytest -q -rs
-      - name: Type-check the Windows backends (required)
-        if: ${{ !cancelled() }}
-        run: >-
-          uv run ty check src/poser/adapters/filesystem_windows.py
-          src/poser/adapters/isolation_windows.py src/poser/adapters/isolation.py
-          src/poser/adapters/pedalboard/plugin_files.py src/poser/adapters/pedalboard/worker.py
-          tests/test_isolation.py
       # The installer from the Surge XT 1.3.4 release, with its default components, as a user
       # runs it. The release publishes no digest; the pin is computed from a download.
       - name: Install Surge XT (required)
@@ -100,6 +89,19 @@ jobs:
           $version = "$(uv run python -c $code $bundle)".Trim()
           Write-Output "plugin_version: $version"
           if ($LASTEXITCODE -ne 0 -or $version -ne "1.3.4.0") { throw "expected 1.3.4.0" }
+      # After Surge XT is installed, so a plugin-free test that searched the machine instead of
+      # its isolated host (tests/conftest.py) would find Surge and fail.
+      - name: Plugin-free suite (required)
+        if: ${{ !cancelled() }}
+        timeout-minutes: 30
+        run: uv run pytest -q -rs
+      - name: Type-check the Windows backends (required)
+        if: ${{ !cancelled() }}
+        run: >-
+          uv run ty check src/poser/adapters/filesystem_windows.py
+          src/poser/adapters/isolation_windows.py src/poser/adapters/isolation.py
+          src/poser/adapters/pedalboard/plugin_files.py src/poser/adapters/pedalboard/worker.py
+          tests/test_isolation.py
       # The PowerShell blocks of the setup guide and the upgrade guide, as written, in Windows
       # PowerShell 5.1, which ships with Windows. The one change: the studio adds the checkout as
       # its poser in place of the Git URL.

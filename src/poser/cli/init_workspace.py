@@ -15,6 +15,7 @@ from poser.core.paths import is_link
 from poser.core.ports import AdapterContext, ConfigError, WorkspaceInitializer
 from poser.core.text import BYTE_ORDER_MARK
 from poser.reference_setups.dispatch import SETUPS, prepare
+from poser.reference_setups.host import Host
 
 SETUP_GUIDE = "https://github.com/isnbh0/poser/blob/main/docs/setup.md"
 SETUP_README = (
@@ -102,7 +103,7 @@ def main(argv: list[str] | None = None) -> int:
     workspace = Workspace(directory)
     try:
         initializer = workspace_initializer(directory)
-        setup = prepare(args.setup, args.plugin_path, args.presets_path)
+        setup = prepare(args.setup, args.plugin_path, args.presets_path, Host.current())
         config_text = (
             setup.config + "\n[guidance]\nadvice = " + str(args.advice == "on").lower() + "\n"
         )

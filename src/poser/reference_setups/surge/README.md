@@ -18,14 +18,18 @@ Download the macOS Intel/ARM Universal release and run the packaged installer, s
 and factory patches as needed. The installer installs for all users, which needs administrator
 approval.
 
-The initializer searches for the VST3 bundle in this order:
+The initializer searches for the VST3 bundle in Steinberg's priority order, per-user before
+system-wide, so it finds the bundle a VST3 host loads:
 
-1. `/Library/Audio/Plug-Ins/VST3/Surge XT.vst3`
-2. `~/Library/Audio/Plug-Ins/VST3/Surge XT.vst3`
+1. `~/Library/Audio/Plug-Ins/VST3/Surge XT.vst3`
+2. `/Library/Audio/Plug-Ins/VST3/Surge XT.vst3`
 
-Factory patches are searched independently, first at
-`/Library/Application Support/Surge XT/patches_factory`, then at
-`~/Library/Application Support/Surge XT/patches_factory`.
+Factory patches come from the `patches_factory` of the data folder Surge XT itself uses, which is
+the first of these that applies:
+
+1. The folder that `SURGE_DATA_HOME` names.
+2. `~/Library/Application Support/Surge XT`, when it exists.
+3. `/Library/Application Support/Surge XT`, where the installer puts it.
 
 ### Windows
 
