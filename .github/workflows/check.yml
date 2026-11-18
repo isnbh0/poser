@@ -193,15 +193,27 @@ jobs:
             "assert surge['sources']['presets'] == str(Path(sys.argv[2]).resolve()), surge"
           uv run python -c $code $bundle $patches
           Copy-Item poser.toml (Join-Path $env:GITHUB_WORKSPACE poser.toml)
-      - name: Surge XT through Pedalboard (required)
+      # The Effects bundle the Surge XT installer adds joins the studio's configuration as an
+      # effect recipe, so the effect test renders a Windows effect plugin; a skip fails.
+      - name: Surge XT and Surge XT Effects through Pedalboard (required)
         if: ${{ !cancelled() }}
         timeout-minutes: 15
         run: |
-          uv run pytest -m real_plugins -q -rs `
+          $effects = Join-Path $env:CommonProgramFiles "VST3\Surge Synth Team\Surge XT Effects.vst3"
+          $binary = Join-Path $effects "Contents\x86_64-win\Surge XT Effects.vst3"
+          if (-not (Test-Path -PathType Leaf $binary)) { throw "no plugin binary at $binary" }
+          $recipe = "`n[effects.surge_effects]`nadapter = `"pedalboard`"`npath = '$effects'`n"
+          Add-Content -Encoding utf8 -NoNewline -Path poser.toml -Value $recipe
+          Get-Content poser.toml
+          $output = uv run pytest -m real_plugins -q -rs `
             "tests/test_pedalboard_real.py::test_each_instrument_meets_the_instrument_contract" `
             "tests/test_pedalboard_real.py::test_a_render_has_exactly_the_performance_s_frames" `
-            "tests/test_pedalboard_real.py::test_a_windows_plugin_loads_from_its_binary_as_from_its_bundle"
-          if ($LASTEXITCODE -ne 0) { throw "the real-plugin tests failed" }
+            "tests/test_pedalboard_real.py::test_a_windows_plugin_loads_from_its_binary_as_from_its_bundle" `
+            "tests/test_pedalboard_real.py::test_each_effect_renders_the_same_frames_and_repeats" 2>&1
+          $status = $LASTEXITCODE
+          $output | Write-Output
+          if ($status -ne 0) { throw "the real-plugin tests failed" }
+          if ($output -match "skipped") { throw "a real-plugin test skipped" }
       - name: Install SuperCollider (required)
         if: ${{ !cancelled() }}
         timeout-minutes: 15
