@@ -1,8 +1,8 @@
 """Tests for running a function in a child process.
 
 On Windows, `sys.executable` may be a virtual environment's launcher, which starts the real
-interpreter as its child. A PID a test must kill is therefore one a script reports with
-`os.getpid()`, not `Popen.pid`.
+interpreter as its child. A test starts the processes it kills with `start_python`, and a process
+the worker starts reports its own PID with `os.getpid()`.
 """
 
 import _thread
@@ -21,6 +21,7 @@ from types import ModuleType
 from typing import NoReturn, cast
 
 import pytest
+from interpreter import start_python
 
 from poser.adapters.isolation import (
     WorkerCrashedError,
@@ -365,28 +366,21 @@ def test_a_normal_exit_leaves_the_processes_the_worker_started(
 def test_the_worker_dies_with_the_process_that_started_it(
     workers: ModuleType, tmp_path: Path, worker: str
 ) -> None:
-    pid_file, parent_file = tmp_path / "pids", tmp_path / "parent"
+    pid_file = tmp_path / "pids"
     script = tmp_path / "parent.py"
     script.write_text(
-        "import os\n"
-        "from pathlib import Path\n"
         "import isolation_workers\n"
         "from poser.adapters.isolation import run_isolated\n"
-        f"Path({str(parent_file)!r}).write_text(str(os.getpid()))\n"
         f"job = {{'pid_file': {str(pid_file)!r}, 'seconds': 60}}\n"
         f"run_isolated(isolation_workers.{worker}, job, None)\n",
         encoding="utf-8",
         newline="\n",
     )
-    parent = subprocess.Popen([sys.executable, str(script)])
-    try:
-        worker_pid, grandchild = read_pids(pid_file)
-    finally:
+    with start_python(str(script)) as parent:
         try:
-            kill(int(parent_file.read_text(encoding="utf-8")))
-        except (OSError, ValueError):
+            worker_pid, grandchild = read_pids(pid_file)
+        finally:
             parent.kill()
-        parent.wait()
     survivors = [pid for pid in (worker_pid, grandchild) if not ended(pid)]
     for pid in survivors:
         kill(pid)  # Still running, so its PID still names it.

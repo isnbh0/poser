@@ -21,6 +21,7 @@ import numpy as np
 import pytest
 from contracts import check_instrument_contract, check_sound_capture_contract
 from helpers import fxp_bytes, needs_posix_permissions, write_pe
+from interpreter import start_python
 from test_performance import cc_track, performed
 
 from poser.adapters.filesystem import native
@@ -1082,15 +1083,7 @@ def test_two_processes_storing_one_name_save_one_sound(
     tmp_path: Path, names: tuple[str, str]
 ) -> None:
     go = tmp_path / "go"
-    storers = [
-        subprocess.Popen(
-            [sys.executable, "-c", STORER, str(tmp_path), name, str(go)],
-            stdout=subprocess.PIPE,
-            text=True,
-            encoding="utf-8",
-        )
-        for name in names
-    ]
+    storers = [start_python("-c", STORER, str(tmp_path), name, str(go)) for name in names]
     try:
         for storer in storers:
             assert storer.stdout is not None

@@ -1,6 +1,5 @@
 """Tests for the render store on the filesystem."""
 
-import subprocess
 import sys
 from collections.abc import Generator
 from contextlib import AbstractContextManager, contextmanager
@@ -8,6 +7,7 @@ from pathlib import Path
 
 import pytest
 from contracts import check_render_store_contract
+from interpreter import start_python
 from links import LINK_KINDS, make_link
 
 from poser.adapters.filestore import LOCK_NAME, SONGS_LOCK_NAME, FileRenderStore, FileSongStore
@@ -530,12 +530,7 @@ with song.lock():
 
 def test_a_second_process_finds_the_song_busy(tmp_path: Path) -> None:
     store = renders(tmp_path)
-    with subprocess.Popen(
-        [sys.executable, "-c", LOCK_HOLDER, str(tmp_path / "renders"), "songs/a.yaml"],
-        stdout=subprocess.PIPE,
-        text=True,
-        encoding="utf-8",
-    ) as holder:
+    with start_python("-c", LOCK_HOLDER, str(tmp_path / "renders"), "songs/a.yaml") as holder:
         try:
             assert holder.stdout is not None
             assert holder.stdout.readline() == "locked\n"

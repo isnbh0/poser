@@ -18,6 +18,7 @@ import numpy as np
 import pytest
 from contracts import check_instrument_contract
 from distlib.scripts import ScriptMaker, enquote_executable
+from interpreter import BASE_PYTHON
 from poser_scsynth.instrument import ScsynthInstrument, create
 from poser_scsynth.scores import build_score, hz
 
@@ -60,21 +61,15 @@ def make_source(directory: Path) -> Path:
     return source
 
 
-def stub_interpreter() -> Path:
-    """The Python the stub runs on. On Windows it is the base interpreter: a venv's python.exe
-    starts the real interpreter as a child, which would break away from the launcher's job and
-    outlive a kill."""
-    if sys.platform == "win32":
-        return Path(sys.base_prefix) / "python.exe"
-    return Path(sys.executable)
-
-
 def make_stub(directory: Path) -> Path:
     """Write the stub engine into `directory`, a launcher .exe on Windows and an executable
     script elsewhere, and return its path."""
     maker = ScriptMaker(str(STUB_SOURCE.parent), str(directory))
-    # Set by hand, the executable is used as given; a path with a space needs its quotes.
-    maker.executable = enquote_executable(str(stub_interpreter()))
+    # The stub needs only the standard library, so it runs on the base interpreter, which is the
+    # interpreter itself and not, as on Windows `sys.executable` can be, a launcher whose child
+    # would outlive a kill. Set by hand, the executable is used as given; a path with a space
+    # needs its quotes.
+    maker.executable = enquote_executable(str(BASE_PYTHON))
     (written,) = maker.make(STUB_SOURCE.name)
     return Path(written)
 

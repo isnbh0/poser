@@ -1,17 +1,16 @@
 """The file-system facility's contract, tested on whatever `native()` returns on this machine.
 
 Every backend passes this file unchanged on its own platform, so it uses only portable
-mechanisms: threads, `sys.executable` subprocesses, and `Popen.kill()`.
+mechanisms: threads, interpreter subprocesses from `start_python`, and `Popen.kill()`.
 """
 
-import subprocess
-import sys
 import threading
 import time
 from pathlib import Path
 
 import pytest
 from helpers import assert_mode
+from interpreter import start_python
 from links import LINK_KINDS, make_link
 
 from poser.adapters.filesystem import FileSystem, native
@@ -125,7 +124,7 @@ with native().lock(Path(sys.argv[1]), wait=True):
 
 def test_a_lock_ends_when_its_process_is_killed(fs: FileSystem, tmp_path: Path) -> None:
     path, ready = tmp_path / "lock", tmp_path / "ready"
-    with subprocess.Popen([sys.executable, "-c", HOLDER, str(path), str(ready)]) as child:
+    with start_python("-c", HOLDER, str(path), str(ready)) as child:
         try:
             deadline = time.monotonic() + DEADLINE_S
             while not ready.exists():
