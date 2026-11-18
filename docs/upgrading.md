@@ -36,9 +36,13 @@ Get-ChildItem songs -Recurse -File | Where-Object { $_.Extension -in '.yaml', '.
 `update-guide` rewrites `POSER.md` for the new poser; until then, `update-guide --check` reports
 `POSER.md is out of date`. `AGENTS.md`, `poser.toml`, and songs are yours and are never rewritten.
 If a command fails after the upgrade, find its message below, newest change first, and apply the
-fix. A change listed here applies to every studio that last ran a poser from before it. Where a
-note searches with `grep -rn <pattern> <path>`, PowerShell's
-`Get-ChildItem <path> -Recurse -File | Select-String <pattern>` does the same.
+fix. A change listed here applies to every studio that last ran a poser from before it.
+
+The search pairs below recurse through files and report matching lines. The device-name pair
+ignores case and searches both `songs` and `poser.toml`; the `bar_dbfs` and mode pairs are
+case-sensitive and search `.` and `songs`, respectively. PowerShell's `-Force` includes hidden
+files and folders in these searches. When there are no matches, `grep` exits with status 1, not a
+search error; the PowerShell pipeline instead succeeds with no output.
 
 ## Names Windows cannot hold
 
@@ -53,8 +57,22 @@ note searches with `grep -rn <pattern> <path>`, PowerShell's
   `aux.txt`; a name that ends in a dot or a space; or one holding `<`, `>`, `:`, `"`, `/`, `\`,
   `|`, `?`, `*`, or a control character.
   **Fix:** rename it, such as the track `aux` to `aux-bus`, and rename what refers to it.
-  `grep -rniwE 'con|prn|aux|nul|conin\$|conout\$|com[1-9]|lpt[1-9]' songs poser.toml` finds the
-  device names with ASCII digits.
+  Search for candidate device names, including those with ASCII digits:
+
+  ```bash
+  grep -rniwE 'con|prn|aux|nul|conin\$|conout\$|com[1-9]|lpt[1-9]' songs poser.toml
+  ```
+
+  In PowerShell:
+
+  ```powershell
+  @(Get-ChildItem songs -Recurse -File -Force; Get-Item poser.toml) | Select-String -Pattern '(?<!\w)(?:con|prn|aux|nul|conin\$|conout\$|com[1-9]|lpt[1-9])(?!\w)'
+  ```
+
+  The PowerShell pattern uses lookarounds to keep the whole-word behavior even after the literal
+  `$` in `conin$` and `conout$`. These are candidate searches, not exhaustive Windows-name
+  validation: they can match names such as `aux-bus` that poser permits and miss other forbidden
+  names, including device names with superscript digits.
 
 ## Song meter
 
@@ -75,8 +93,20 @@ note searches with `grep -rn <pattern> <path>`, PowerShell's
   span that would be shorter than 0.25 beats joins the one before it. Each span's bounds are
   computed from its own beats, so a bound can move by one sample and a value can differ slightly
   from the old `bar_dbfs` value. No command reads the studio's own prose, so also search it for
-  the old name, as in `grep -rn bar_dbfs .`, and for text that calls the levels bars: song
-  docstrings, notes, and instrument notes in `poser.toml`.
+  the old name:
+
+  ```bash
+  grep -rn bar_dbfs .
+  ```
+
+  In PowerShell:
+
+  ```powershell
+  Get-ChildItem . -Recurse -File -Force | Select-String -Pattern 'bar_dbfs' -CaseSensitive
+  ```
+
+  Also search for text that calls the levels bars: song docstrings, notes, and instrument notes
+  in `poser.toml`.
 
 - **New:** `tonal` reads windows of whole declared bars: where a song declares a meter, a window
   is `window_bars` bars, four unless set beside `window_beats` under `[adapters] frameworks`,
@@ -97,8 +127,17 @@ note searches with `grep -rn <pattern> <path>`, PowerShell's
   `ScoreRequest.default(graph)`.
 
 - **New:** a key names any of the seven modes, as in `D dorian`, so search the songs for marks
-  and comments where `minor` or `major` stood in for a mode, as in
-  `grep -rnE "minor|major" songs`.
+  and comments where `minor` or `major` stood in for a mode:
+
+  ```bash
+  grep -rnE "minor|major" songs
+  ```
+
+  In PowerShell:
+
+  ```powershell
+  Get-ChildItem songs -Recurse -File -Force | Select-String -Pattern 'minor|major' -CaseSensitive
+  ```
 
 ## No initialization journal
 

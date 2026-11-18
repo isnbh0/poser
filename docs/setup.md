@@ -124,6 +124,13 @@ uv run render-song <song-path> &&
 uv run analyze-song <song-path> --json
 ```
 
+In PowerShell, run these lines in order and stop at the first that fails:
+
+```powershell
+uv run render-song <song-path>
+uv run analyze-song <song-path> --json
+```
+
 Inspect the JSON report's node and mix defects and the spectrograms, revise against your brief and
 the results, then render and analyze again.
 
@@ -132,6 +139,12 @@ the results, then render and analyze again.
 For a delivery that poser verifies against its render and analysis, run:
 
 ```bash
+uv run export-song <song-path> --destination deliveries/first-song
+```
+
+In PowerShell:
+
+```powershell
 uv run export-song <song-path> --destination deliveries/first-song
 ```
 

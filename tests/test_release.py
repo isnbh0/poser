@@ -1,11 +1,14 @@
 """The files that make poser a releasable package: license, metadata, README, and type marker."""
 
+import base64
 import json
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 import tomllib
+from dataclasses import asdict, replace
 from importlib import metadata
 from importlib.resources import files
 from pathlib import Path, PureWindowsPath
@@ -13,6 +16,16 @@ from urllib.parse import unquote, urlsplit
 
 import pytest
 import yaml
+from doc_blocks import (
+    EXCEPTIONS,
+    ONBOARDING,
+    SCENARIOS,
+    Scenario,
+    corpus_paths,
+    discover_document,
+    discover_examples,
+    validate_fences,
+)
 from helpers import REPO_DIR
 
 from poser.core.report import (
@@ -49,19 +62,9 @@ def test_readme_commands_are_project_scripts() -> None:
     assert set(commands) <= set(PROJECT["scripts"])
 
 
-ONBOARDING = (
-    REPO_DIR / "README.md",
-    REPO_DIR / "docs/setup.md",
-    REPO_DIR / "docs/bootstrap.md",
-    REPO_DIR / "docs/ablation.md",
-    REPO_DIR / "docs/showcase.md",
-    REPO_DIR / "src/poser/reference_setups/surge/README.md",
-    REPO_DIR / "packages/poser-scsynth/README.md",
-)
-
-
 def test_onboarding_local_links_resolve_to_project_files() -> None:
-    for document in ONBOARDING:
+    for name in ONBOARDING:
+        document = REPO_DIR / name
         assert document.is_file(), document
         links = re.findall(r"!?\[[^]]*\]\(([^)]+)\)", document.read_text(encoding="utf-8"))
         for link in links:
@@ -73,7 +76,8 @@ def test_onboarding_local_links_resolve_to_project_files() -> None:
 
 
 def test_onboarding_commands_are_project_scripts() -> None:
-    for document in ONBOARDING:
+    for name in ONBOARDING:
+        document = REPO_DIR / name
         commands = re.findall(r"uv run ([\w-]+)", document.read_text(encoding="utf-8"))
         assert set(commands) <= set(PROJECT["scripts"]), document
 
@@ -107,6 +111,307 @@ def test_powershell_blocks_mirror_the_bash_chains(document: str, text: str) -> N
     assert powershell.splitlines() == [line.removesuffix(" &&") for line in bash.splitlines()], (
         document
     )
+
+
+def test_all_runnable_doc_fences_have_powershell_mirrors() -> None:
+    paths = corpus_paths(REPO_DIR)
+    assert paths == tuple(sorted(set(paths)))
+    assert set(REPO_DIR.glob("docs/*.md")) <= set(paths)
+    assert {REPO_DIR / name for name in ONBOARDING} <= set(paths)
+    examples = discover_examples(REPO_DIR)
+    fences = tuple(
+        fence
+        for path in paths
+        for fence in discover_document(
+            path.relative_to(REPO_DIR).as_posix(), path.read_text(encoding="utf-8")
+        )
+    )
+    assert {(e.document, e.line) for e in examples} == {
+        (f.document, f.line) for f in fences if f.language == "powershell"
+    }
+    assert {e.id for e in examples} == {s.id for s in SCENARIOS}
+    result = subprocess.run(
+        [sys.executable, str(REPO_DIR / "tests/doc_blocks.py"), "--root", str(REPO_DIR), "--json"],
+        check=True,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    )
+    assert json.loads(result.stdout) == json.loads(json.dumps([asdict(e) for e in examples]))
+
+
+def test_doc_fence_discovery_is_total() -> None:
+    text = (
+        "# Guide\r\n## New section\r\n"
+        "  ```sh\r\n  first &&\r\n  second\r\n  ```\r\n"
+        "  ```ps1\r\n  first\r\n  second\r\n  ```\r\n"
+        "~~~shell\r\nthird\r\n~~~\r\n~~~pwsh\r\nthird\r\n~~~\r\n"
+        "### Final handoff\r\n```zsh\r\nfourth\r\n```\r\n"
+        "```PowerShell\r\nfourth\r\n```\r\n"
+        '```json\r\n{"not": "a command"}\r\n```\r\n'
+    )
+    scenarios = (
+        Scenario("first", "new.md", ("Guide", "New section")),
+        Scenario("second", "new.md", ("Guide", "New section"), ordinal=2),
+        Scenario("third", "new.md", ("Guide", "New section", "Final handoff")),
+    )
+    fences = discover_document("new.md", text)
+    examples = validate_fences(fences, exceptions=(), scenarios=scenarios)
+    assert len(examples) == 3
+    assert fences[0].line == 3
+    assert fences[0].body == "first &&\nsecond\n"
+    assert examples[2].headings == ("Guide", "New section", "Final handoff")
+    invalid = (
+        "```bash\ncommand\n",  # Unclosed.
+        "```bash\ncommand\n```~\n",  # Mixed markers cannot close a fence.
+        "```bash extra\ncommand\n```\n",  # Malformed label.
+        "```bash\ncommand\n```powershell\ncommand\n```\n",  # Missing closer.
+        "```\ncommand\n```\n",  # An unlabelled shell cannot disappear from inventory.
+        "```console\n$ command\n```\n",  # Explicitly rejected runnable alias.
+        "```cmd\ncommand\n```\n",
+        "```shell-script\ncommand\n```\n",  # Unknown aliases fail closed.
+        "```unclassified\ncommand\n```\n",
+        "> ```bash\n> command\n> ```\n",  # Unsupported containers cannot hide commands.
+        "- ```sh\n  command\n  ```\n",
+        "1. > ```pwsh\n   > command\n   > ```\n",
+        "# Same\n```bash\none\n```\n# Same\n```ps1\none\n```\n",  # Cross-section pairing.
+        "# Same\n## Child\n```sh\none\n```\n# Same\n## Child\n```ps\none\n```\n",
+    )
+    for markdown in invalid:
+        with pytest.raises(ValueError, match=r"bad.md:\d+"):
+            discover_document("bad.md", markdown)
+    unpaired = (
+        "```bash\none\n```\n",
+        "```powershell\none\n```\n",
+        "```bash\none\n```\n```bash\ntwo\n```\n```powershell\none\n```\n",
+        "```bash\none\n```\n## Different\n```powershell\none\n```\n",
+    )
+    for markdown in unpaired:
+        with pytest.raises(ValueError, match=r"bad.md:\d+.*(?:mirror|unpaired)"):
+            validate_fences(discover_document("bad.md", markdown), exceptions=(), scenarios=())
+    # Can-fail mutations run the actual validator, not a parallel imitation of its rules.
+    all_fences = tuple(
+        fence
+        for path in corpus_paths(REPO_DIR)
+        for fence in discover_document(
+            path.relative_to(REPO_DIR).as_posix(), path.read_text(encoding="utf-8")
+        )
+    )
+    ablation = (REPO_DIR / "docs/ablation.md").read_text(encoding="utf-8")
+    extra = discover_document("docs/ablation.md", ablation + "\n## New\n```bash\nuncovered\n```\n")
+    with pytest.raises(ValueError, match=r"docs/ablation.md:\d+.*New.*mirror"):
+        validate_fences(all_fences + extra)
+    with pytest.raises(ValueError, match=r"docs/ablation.md:\d+.*container prefix"):
+        discover_document("docs/ablation.md", ablation + "\n> ```bash\n> uncovered\n> ```\n")
+    ordinary = next(
+        f for f in all_fences if f.language == "powershell" and "uv init --bare" in f.body
+    )
+    with pytest.raises(ValueError, match="missing/ambiguous PowerShell mirror"):
+        validate_fences(tuple(f for f in all_fences if f != ordinary))
+    with pytest.raises(ValueError, match="command drift"):
+        validate_fences(
+            tuple(
+                replace(f, body=f.body + "unexpected\n") if f == ordinary else f for f in all_fences
+            )
+        )
+    compose = next(s for s in SCENARIOS if s.id == "setup-compose")
+    with pytest.raises(ValueError, match="unused/stale execution dispositions"):
+        validate_fences(
+            tuple(
+                f
+                for f in all_fences
+                if (f.document, f.headings) != (compose.document, compose.headings)
+            )
+        )
+    # Only a terminal ` &&` is removed, never other whitespace or shell syntax.
+    pair = discover_document("x.md", "```bash\nx && y\n```\n```powershell\nx\n```\n")
+    with pytest.raises(ValueError, match="command drift"):
+        validate_fences(pair, exceptions=(), scenarios=(Scenario("x", "x.md", ()),))
+
+
+def test_doc_fence_exceptions_are_exact_and_consumed() -> None:
+    for rule in EXCEPTIONS:
+        scenario = rule.scenario
+        prefix = "\n".join(
+            f"{'#' * level} {title}" for level, title in enumerate(scenario.headings, 1)
+        )
+        # Each reviewed pair is checked in isolation, with its real identity and exact bodies.
+        markdown = prefix + "\n"
+        if rule.bash is not None:
+            markdown += f"```bash\n{rule.bash}```\n"
+        markdown += f"```powershell\n{rule.powershell}```\n"
+        isolated = replace(scenario, ordinal=1)
+        exact = replace(rule, scenario=isolated)
+        fences = discover_document(scenario.document, markdown)
+        assert validate_fences(fences, exceptions=(exact,), scenarios=(isolated,))
+        for index in range(len(fences)):
+            changed = tuple(
+                replace(f, body=f.body + "unrelated-command\n") if i == index else f
+                for i, f in enumerate(fences)
+            )
+            with pytest.raises(ValueError, match="stale exception"):
+                validate_fences(changed, exceptions=(exact,), scenarios=(isolated,))
+        moved = tuple(replace(f, headings=("Unreviewed section",)) for f in fences)
+        with pytest.raises(ValueError, match=r"(?:unpaired|command drift)"):
+            validate_fences(moved, exceptions=(exact,), scenarios=(isolated,))
+        with pytest.raises(ValueError, match="unused/stale exceptions"):
+            validate_fences((), exceptions=(exact,), scenarios=(isolated,))
+        with pytest.raises(ValueError, match="duplicate/overbroad exception"):
+            validate_fences(fences, exceptions=(exact, exact), scenarios=(isolated,))
+        with pytest.raises(ValueError, match="exception needs a reason"):
+            validate_fences(fences, exceptions=(replace(exact, reason=""),), scenarios=(isolated,))
+
+
+@pytest.mark.parametrize("search", ["search-devices", "search-levels", "search-modes"])
+def test_doc_search_mirrors_preserve_search_semantics(tmp_path: Path, search: str) -> None:
+    examples = {example.id: example for example in discover_examples(REPO_DIR)}
+    example = examples[search]
+    fixtures = {
+        "songs/direct file.yaml": (
+            "CON\naux.txt\n'conin$'\nconout$!\nbar_dbfs\nminor major\n"
+            "auxiliary recon _nul com10 lpt0 xconin$ conin$Suffix conout\n"
+            "BAR_DBFS Minor MAJOR\nprefixbar_dbfssuffix\nminority\nno candidates\n"
+        ),
+        "songs/nested/deep file.yml": "prn; lpt9\nbar_dbfs major\nconin$Suffix\n",
+        "songs/.hidden.yaml": "NUL\nminor bar_dbfs\n",
+        "poser.toml": "COM1\nbar_dbfs\nmajor\n",
+        "notes with spaces.txt": "aux\nbar_dbfs\nmajor\n",
+    }
+    expected = {
+        "search-devices": {
+            ("songs/direct file.yaml", 1),
+            ("songs/direct file.yaml", 2),
+            ("songs/direct file.yaml", 3),
+            ("songs/direct file.yaml", 4),
+            ("songs/nested/deep file.yml", 1),
+            ("songs/.hidden.yaml", 1),
+            ("poser.toml", 1),
+        },
+        "search-levels": {
+            ("songs/direct file.yaml", 5),
+            ("songs/direct file.yaml", 9),
+            ("songs/nested/deep file.yml", 2),
+            ("songs/.hidden.yaml", 2),
+            ("poser.toml", 2),
+            ("notes with spaces.txt", 2),
+        },
+        "search-modes": {
+            ("songs/direct file.yaml", 6),
+            ("songs/direct file.yaml", 10),
+            ("songs/nested/deep file.yml", 2),
+            ("songs/.hidden.yaml", 2),
+        },
+    }[search]
+    for name, body in fixtures.items():
+        path = tmp_path / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(body, encoding="utf-8")
+    if sys.platform == "win32":
+        shell = shutil.which("powershell.exe")
+        assert shell is not None, "Windows PowerShell 5.1 is required, not pwsh"
+        # A dotfile alone is not hidden on Windows: exercise the actual Hidden attribute too.
+        attrib = shutil.which("attrib.exe")
+        assert attrib is not None
+        subprocess.run(
+            [attrib, "+H", str(tmp_path / "songs/.hidden.yaml")],
+            check=True,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+        )
+        # Capture MatchInfo properties, never PowerShell's host-formatted console table.
+        script = (
+            "$ErrorActionPreference = 'Stop'\n"
+            "if ($PSVersionTable.PSVersion.Major -ne 5) "
+            "{ throw 'requires Windows PowerShell 5.1' }\n"
+            f"$matchesFound = @({example.powershell.strip()})\n"
+            "$rows = @($matchesFound | ForEach-Object {\n"
+            "  @{path = $_.Path; line = $_.LineNumber}\n"
+            "})\nConvertTo-Json -InputObject $rows -Compress\n"
+        )
+        command = [
+            shell,
+            "-NoProfile",
+            "-NonInteractive",
+            "-EncodedCommand",
+            base64.b64encode(script.encode("utf-16-le")).decode("ascii"),
+        ]
+    else:
+        shell = shutil.which("bash")
+        if shell is None or shutil.which("grep") is None:
+            pytest.skip("documented bash search requires bash and grep")
+        assert example.bash is not None
+        command = [shell, "-c", example.bash]
+    for positive in (True, False):
+        if not positive:
+            for name in fixtures:
+                # r+ can overwrite a Windows Hidden file without trying to recreate it.
+                with (tmp_path / name).open("r+", encoding="utf-8") as stream:
+                    stream.write("nothing to find\n")
+                    stream.truncate()
+        result = subprocess.run(
+            command, cwd=tmp_path, capture_output=True, text=True, encoding="utf-8", check=False
+        )
+        assert not result.stderr, result.stderr
+        if sys.platform == "win32":
+            assert result.returncode == 0  # Select-String returns success even without matches.
+            rows = json.loads(result.stdout)
+            actual = {
+                (Path(row["path"]).relative_to(tmp_path).as_posix(), row["line"]) for row in rows
+            }
+        else:
+            assert result.returncode == (
+                0 if positive else 1
+            )  # grep 1 means no matches, not error.
+            actual = set()
+            for line in result.stdout.splitlines():
+                path, number, _ = line.split(":", 2)
+                actual.add((Path(path).as_posix(), int(number)))
+        assert actual == (expected if positive else set())
+
+
+def test_windows_doc_execution_covers_discovered_examples() -> None:
+    examples = discover_examples(REPO_DIR)
+    fences = tuple(
+        fence
+        for path in corpus_paths(REPO_DIR)
+        for fence in discover_document(
+            path.relative_to(REPO_DIR).as_posix(), path.read_text(encoding="utf-8")
+        )
+    )
+    for scenario in SCENARIOS:
+        with pytest.raises(ValueError, match="no execution disposition"):
+            validate_fences(fences, scenarios=tuple(s for s in SCENARIOS if s != scenario))
+    new = discover_document(
+        "new.md", "# New\n```bash\nnew-command\n```\n```ps1\nnew-command\n```\n"
+    )
+    with pytest.raises(ValueError, match=r"new.md:5.*New.*no execution disposition"):
+        validate_fences(fences + new)
+    registry = next(s for s in SCENARIOS if s.id == "registry")
+    with pytest.raises(ValueError, match="only registry may use long-paths"):
+        validate_fences(
+            fences,
+            scenarios=tuple(replace(s, runner="studio") if s == registry else s for s in SCENARIOS),
+        )
+    workflow = yaml.safe_load(
+        (REPO_DIR / ".github/workflows/check.yml").read_text(encoding="utf-8")
+    )
+    (step,) = [
+        s
+        for s in workflow["jobs"]["windows"]["steps"]
+        if s.get("name") == "A Surge XT studio through the documented PowerShell (required)"
+    ]
+    assert step["shell"] == "powershell"
+    script = step["run"]
+    assert "doc_blocks.py" in script
+    assert "--root" in script
+    assert "--json" in script
+    assert "ConvertFrom-Json" in script
+    assert "Get-Blocks" not in script
+    assert set(re.findall(r"Invoke-Example\s+'([^']+)'", script)) == {
+        e.id for e in examples if e.runner == "studio"
+    }
+    assert [e.id for e in examples if e.runner == "long-paths"] == ["registry"]
 
 
 def test_windows_checks_precede_the_installed_plugin_isolation_suite() -> None:

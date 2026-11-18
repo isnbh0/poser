@@ -112,54 +112,59 @@ jobs:
         if: ${{ !cancelled() }}
         timeout-minutes: 30
         run: uv run pytest -q -rs
-      # The PowerShell blocks of the setup guide and the upgrade guide, as written, in Windows
-      # PowerShell 5.1, which ships with Windows. The one change: the studio adds the checkout as
-      # its poser in place of the Git URL.
+      # Shared discovery validates every documented shell example. Scenarios provide only the
+      # declared working directories, fixtures, and placeholder substitutions, never new commands.
       - name: A Surge XT studio through the documented PowerShell (required)
         if: ${{ !cancelled() }}
-        timeout-minutes: 20
+        timeout-minutes: 25
         shell: powershell
         run: |
-          # Each line's exit code decides, as for a user, not what a native command writes to stderr.
+          # Check native exit codes ourselves; uv may write successful build progress to stderr.
           $ErrorActionPreference = "Continue"
-          Remove-Item Env:UV_LOCKED  # The new studio has no lockfile yet.
-          function Get-Blocks([string]$Text) {
-            $found = [regex]::Matches($Text, '```powershell\r?\n(.*?)```', 'Singleline')
-            if ($found.Count -eq 0) { throw "no PowerShell block" }
-            foreach ($block in $found) { , @($block.Groups[1].Value.Trim() -split '\r?\n') }
-          }
-          function Invoke-Lines([string[]]$Lines) {
-            foreach ($line in $Lines) {
-              Write-Output "PS> $line"
+          $inventory = uv run python tests/doc_blocks.py --root $env:GITHUB_WORKSPACE --json
+          if ($LASTEXITCODE -ne 0) { throw "documentation inventory is invalid" }
+          $examples = @(ConvertFrom-Json -InputObject ($inventory -join "`n"))
+          Remove-Item Env:UV_LOCKED  # The new studios have no lockfiles yet.
+          $script:executed = @()
+          function Invoke-Example([string]$Id, [hashtable]$Replace = @{}, [switch]$AllowNativeFailure) {
+            $found = @($examples | Where-Object { $_.id -eq $Id -and $_.runner -eq "studio" })
+            if ($found.Count -ne 1) { throw "expected one studio example: $Id" }
+            Write-Host "example: $Id ($($found[0].document):$($found[0].line))"
+            $body = $found[0].powershell
+            foreach ($key in $Replace.Keys) {
+              if (-not $body.Contains($key)) { throw "$Id has no placeholder $key" }
+              $body = $body.Replace($key, $Replace[$key])
+            }
+            foreach ($line in ($body -split '\r?\n')) {
+              if (-not $line.Trim()) { continue }
+              Write-Host "PS> $line"
               $global:LASTEXITCODE = 0
               Invoke-Expression $line
-              if (-not $? -or $LASTEXITCODE -ne 0) { throw "exit code $LASTEXITCODE from: $line" }
+              if ((-not $? -or $LASTEXITCODE -ne 0) -and -not $AllowNativeFailure) {
+                throw "exit code $LASTEXITCODE from: $line"
+              }
+            }
+            $script:executed += $Id
+          }
+          function Assert-Matches([object[]]$Matches, [string[]]$Expected, [string]$Root) {
+            $actual = @($Matches | ForEach-Object {
+              if (-not ($_ -is [Microsoft.PowerShell.Commands.MatchInfo])) {
+                throw "search returned something other than a matching file/line"
+              }
+              $relative = $_.Path.Substring($Root.Length).TrimStart('\').Replace('\', '/')
+              "$relative`:$($_.LineNumber)"
+            } | Sort-Object -Unique)
+            if (($actual -join "`n") -ne (($Expected | Sort-Object -Unique) -join "`n")) {
+              throw "search matches [$actual], expected [$Expected]"
             }
           }
-          $docs = Join-Path $env:GITHUB_WORKSPACE docs
-          $setup = Get-Content -Raw -Encoding UTF8 (Join-Path $docs setup.md)
-          $section = [regex]::Match($setup, '(?ms)^## Create and verify$(.*?)^## ').Groups[1].Value
-          $lines = @(Get-Blocks $section)[0]
-          $url = "git+https://github.com/isnbh0/poser"
-          $local = @($lines | Where-Object { $_.Contains($url) })
-          if ($local.Count -ne 1) { throw "expected one line with $url, found $($local.Count)" }
-          $lines = $lines | ForEach-Object { $_.Replace($url, $env:GITHUB_WORKSPACE) }
           Set-Location $env:RUNNER_TEMP
-          Invoke-Lines $lines
-          $upgrading = Get-Content -Raw -Encoding UTF8 (Join-Path $docs upgrading.md)
-          $preamble = ($upgrading -split '(?m)^## ')[0]
-          $blocks = @(Get-Blocks $preamble)
-          if ($blocks.Count -ne 2) { throw "expected two upgrade blocks, found $($blocks.Count)" }
-          Invoke-Lines $blocks[0]
-          # The song loop reports each song that fails and goes on. Two broken songs, one in a
-          # subfolder, must give two errors, so a loop that finds no song fails here.
-          $loop = $blocks[1]
-          if ($loop.Count -ne 1) { throw "expected a one-line song loop, found $($loop.Count)" }
-          New-Item -ItemType Directory songs\nested | Out-Null
-          Set-Content -Path songs\broken.yaml -Value "bpm: 120`ntracks: 3" -Encoding Ascii
-          Copy-Item songs\broken.yaml songs\nested\broken.yml
-          Get-ChildItem songs -Recurse -File | ForEach-Object { Write-Output "song: $($_.FullName)" }
-          # A function named uv runs before uv.exe, so it counts the loop's runs and failures.
+          # The Git dependency is the sole setup-command substitution.
+          Invoke-Example 'setup-create' @{ 'git+https://github.com/isnbh0/poser' = $env:GITHUB_WORKSPACE }
+          $studio = (Get-Location).Path
+          Invoke-Example 'upgrade'
+          # Count actual loop invocations, first with only the valid demo, then with two broken
+          # songs (one in a path with spaces). The .txt file must never be offered to read-song.
           $global:runs = 0
           $global:failures = 0
           function uv {
@@ -167,22 +172,84 @@ jobs:
             & uv.exe @args
             if ($LASTEXITCODE -ne 0) { $global:failures++ }
           }
-          Write-Output "PS> $($loop[0])"
-          Invoke-Expression $loop[0]
+          Invoke-Example 'upgrade-songs'
+          if ($global:runs -ne 1 -or $global:failures -ne 0) { throw "valid song loop failed" }
+          New-Item -ItemType Directory 'songs\nested folder' | Out-Null
+          Set-Content -Path songs\broken.yaml -Value "bpm: 120`ntracks: 3" -Encoding Ascii
+          Copy-Item songs\broken.yaml 'songs\nested folder\broken.yml'
+          Copy-Item songs\broken.yaml 'songs\nested folder\ignored.txt'
+          $global:runs = 0
+          $global:failures = 0
+          Invoke-Example 'upgrade-songs' -AllowNativeFailure
           Remove-Item Function:uv
-          Write-Output "read-song ran $global:runs times, $global:failures failed"
-          if ($global:runs -lt 3) { throw "expected the demo and two broken songs to be read" }
-          if ($global:failures -ne 2) { throw "expected two failing songs" }
-          $global:LASTEXITCODE = 0  # The step exits with the last broken song's code otherwise.
-          Remove-Item -Recurse songs\broken.yaml, songs\nested
-      - name: Export the demo and check the studio's configuration (required)
+          Write-Host "read-song ran $global:runs times, $global:failures failed"
+          if ($global:runs -ne 3 -or $global:failures -ne 2) { throw "broken song loop lost coverage" }
+          $global:LASTEXITCODE = 0
+          Remove-Item -Recurse songs\broken.yaml, 'songs\nested folder'
+          Invoke-Example 'setup-compose' @{ '<song-path>' = 'songs/demo.yaml' }
+          Invoke-Example 'setup-export' @{ '<song-path>' = 'songs/demo.yaml' }
+          Copy-Item (Join-Path $env:GITHUB_WORKSPACE src/poser/reference_setups/surge/showcase.py) songs/showcase.py
+          Invoke-Example 'showcase-export'
+
+          # Text fixtures keep the searches independent of actual studio content or validation.
+          $search = Join-Path $env:RUNNER_TEMP 'poser search fixtures'
+          New-Item -ItemType Directory (Join-Path $search 'songs\nested folder') -Force | Out-Null
+          Set-Content -Encoding Ascii (Join-Path $search songs\visible.yaml) -Value @(
+            'aux', 'aux-bus', 'conin$', 'conin$tail', 'xaux', 'auxiliary', 'CONOUT$',
+            'major', 'MINOR', 'minor', 'bar_dbfs', 'BAR_DBFS', 'xcom1y', 'lpt9', 'com10', 'bar_dbfs')
+          Set-Content -Encoding Ascii (Join-Path $search 'songs\nested folder\part.yml') -Value @(
+            'PRN', 'minor', 'bar_dbfs')
+          Set-Content -Encoding Ascii (Join-Path $search songs\.hidden-note) -Value @(
+            'aux', 'major', 'bar_dbfs')
+          $hidden = Get-Item (Join-Path $search songs\.hidden-note)
+          $hidden.Attributes = $hidden.Attributes -bor [IO.FileAttributes]::Hidden
+          Set-Content -Encoding Ascii (Join-Path $search poser.toml) -Value @(
+            '[instruments.aux]', 'bar_dbfs = 0', 'note = "major"')
+          Set-Content -Encoding Ascii (Join-Path $search 'notes with spaces.txt') -Value @('bar_dbfs', 'nul')
+          Push-Location $search
+          Assert-Matches @(Invoke-Example 'search-devices') @(
+            'poser.toml:1', 'songs/visible.yaml:1', 'songs/visible.yaml:2', 'songs/visible.yaml:3',
+            'songs/visible.yaml:7', 'songs/visible.yaml:14', 'songs/nested folder/part.yml:1',
+            'songs/.hidden-note:1') $search
+          Assert-Matches @(Invoke-Example 'search-levels') @(
+            'notes with spaces.txt:1', 'poser.toml:2', 'songs/visible.yaml:11', 'songs/visible.yaml:16',
+            'songs/nested folder/part.yml:3', 'songs/.hidden-note:3') $search
+          Assert-Matches @(Invoke-Example 'search-modes') @(
+            'songs/visible.yaml:8', 'songs/visible.yaml:10', 'songs/nested folder/part.yml:2',
+            'songs/.hidden-note:2') $search
+          Get-ChildItem . -Recurse -File -Force | ForEach-Object {
+            Set-Content -Encoding Ascii -LiteralPath $_.FullName -Value 'neutral' -Force
+          }
+          Assert-Matches @(Invoke-Example 'search-devices') @() $search
+          Assert-Matches @(Invoke-Example 'search-levels') @() $search
+          Assert-Matches @(Invoke-Example 'search-modes') @() $search
+          Pop-Location
+
+          # The custom-path example initializes a fresh project, with its quoted placeholder
+          # replaced by the actual installed bundle. Project creation is CI-internal context.
+          $bundle = Join-Path $env:CommonProgramFiles 'VST3\Surge Synth Team\Surge XT.vst3'
+          $custom = Join-Path $env:RUNNER_TEMP 'poser custom paths'
+          uv init --bare --no-workspace --python 3.13 $custom
+          if ($LASTEXITCODE -ne 0) { throw "could not create custom-path project" }
+          Push-Location $custom
+          uv add $env:GITHUB_WORKSPACE
+          if ($LASTEXITCODE -ne 0) { throw "could not add poser to custom-path project" }
+          Invoke-Example 'custom-path' @{ 'D:\Plugins\Surge XT.vst3' = $bundle.Replace("'", "''") }
+          Pop-Location
+          $expected = @($examples | Where-Object { $_.runner -eq 'studio' } | ForEach-Object { $_.id } | Sort-Object)
+          $actual = @($script:executed | Sort-Object -Unique)
+          if (($actual -join "`n") -ne ($expected -join "`n")) {
+            throw "executed scenarios [$actual], expected [$expected]"
+          }
+          Write-Host "all studio examples executed: $actual"
+          Set-Location $studio
+      - name: Check the documented studio's configuration (required)
         if: ${{ !cancelled() }}
         timeout-minutes: 10
         run: |
           $PSNativeCommandUseErrorActionPreference = $true  # A command that fails throws.
           Remove-Item Env:UV_LOCKED
           Set-Location (Join-Path $env:RUNNER_TEMP my-studio)
-          uv run export-song songs/demo.yaml --destination deliveries/first-song
           Get-Content poser.toml
           $bundle = Join-Path $env:CommonProgramFiles "VST3\Surge Synth Team\Surge XT.vst3"
           $patches = Join-Path $env:ProgramData "Surge XT\patches_factory"

@@ -21,6 +21,12 @@ Copy the linked source to `songs/showcase.py`, then run:
 uv run export-song songs/showcase.py --destination deliveries/showcase
 ```
 
+In PowerShell:
+
+```powershell
+uv run export-song songs/showcase.py --destination deliveries/showcase
+```
+
 The destination must be new. The export contains the matching source, WAV, report, images, and
 manifest. Neither this repository nor the export includes the Surge plugin or its patches.
 Renders can differ slightly from the preview between runs and between Surge versions.

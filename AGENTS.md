@@ -50,12 +50,15 @@ advice when `[guidance] advice` is enabled.
 - `make check` runs format, lint, types, and the tests that need no plugins.
 - CI's `windows` job requires whole-project format, lint, and type checks before installing Surge
   XT from its pinned installer. The plugin-free suite then runs with Surge installed to catch tests
-  that search the machine instead of their isolated host. The job runs the PowerShell blocks of
-  `docs/setup.md` and `docs/upgrading.md`, extracted from the docs, in a new studio in Windows
-  PowerShell 5.1. It runs the real-plugin tests against that studio's `poser.toml`, the real-scsynth
-  tests against SuperCollider from its pinned installer, and the documented long-paths registry
-  command verbatim before testing long paths. A change to documented blocks keeps them runnable
-  there; `tests/test_release.py` guards their bash mirrors and the registry command's CI mirror.
+  that search the machine instead of their isolated host. `tests/doc_blocks.py` discovers the
+  onboarding shell examples and `docs/*.md`, requires PowerShell mirrors or exact, justified
+  exceptions, and supplies CI's validated inventory. The job executes every PowerShell example in
+  Windows PowerShell 5.1 scenarios with explicit fixtures and placeholder substitutions; the
+  Windows-only registry command runs in the separate long-paths step. A new example needs both a
+  mirror and an execution disposition. `tests/test_release.py` holds that coverage, the reviewed
+  shell-specific search/loop semantics, and the registry command's CI mirror. The job runs the
+  real-plugin tests against the documented studio's `poser.toml` and the real-scsynth tests against
+  SuperCollider from its pinned installer. Keep documented examples runnable when changing them.
 - `make test-real` runs the `real_plugins` tests, which load the instruments in a root
   `poser.toml`, and the `real_scsynth` tests. The test harness finds `scsynth` through
   `SCSYNTH_PATH`, the SuperCollider app bundle, or `PATH`; the adapter itself runs only its
