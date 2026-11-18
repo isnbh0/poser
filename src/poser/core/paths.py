@@ -1,5 +1,6 @@
 """Facts about paths that hold on every platform: which entries are links, a walk that stays
-inside its tree, and how long a path a platform lets a program create.
+inside its tree, how long a path a platform lets a program create, and where Windows lets a
+child process start.
 
 A link is a symbolic link or, on Windows, a directory junction, which `Path.is_symlink` does not
 report. Every check in poser for "is this a link" uses `is_link`, and every walk that must not
@@ -8,6 +9,7 @@ leave its tree uses `walk`. To ask whether anything at all is at a path, link or
 """
 
 import os
+import sys
 from collections.abc import Iterator
 from dataclasses import dataclass
 from enum import Enum
@@ -63,6 +65,30 @@ class PathLimit:
                     f"{allows}; to fix it, {remedy}"
                 )
         return None
+
+
+CREATE_PROCESS_CWD_LIMIT = 258
+"""The most working-directory characters Windows's CreateProcess starts a child in.
+
+LongPathsEnabled and a long-path-aware manifest let the process itself use far longer paths,
+but they lift nothing for the child's working directory, inherited or passed, and the `\\\\?\\\\`
+prefix does not help. libuv shortens the directory before `CreateProcessW` for the same
+reason."""
+
+
+def child_cwd(fallback: Path) -> str | None:
+    """The working directory to start a child process in, or None to inherit this process's.
+
+    Windows starts no child in a working directory of more than `CREATE_PROCESS_CWD_LIMIT`
+    characters, whatever long paths the process itself may use, so a child of a process
+    working in a longer directory starts in `fallback`, which the caller keeps within the
+    limit. macOS and Linux start a child in a working directory of any length, so their
+    children always inherit this process's.
+    """
+    if sys.platform != "win32":
+        return None
+    directory = str(Path.cwd())
+    return None if len(directory) <= CREATE_PROCESS_CWD_LIMIT else str(fallback)
 
 
 def is_link(path: Path) -> bool:

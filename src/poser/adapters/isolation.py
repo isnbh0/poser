@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import TypeGuard
 
 from poser.core.jsonvalue import JsonValue, is_json_value, json_object
+from poser.core.paths import child_cwd
 from poser.core.ports import PREREQUISITES_URL, UnsupportedPlatformError
 
 # The worker writes its stderr as UTF-8, whatever the locale, UTF-8 mode, or PYTHONIOENCODING.
@@ -109,7 +110,10 @@ def run_isolated(
     closing the console end both. A worker that exits 0 after writing its result releases the
     job, so helper processes it left running survive, and the temporary files they hold stay
     behind; after any other exit, poser kills the job. The job controls lifetime and does not
-    sandbox plugin code.
+    sandbox plugin code. Windows starts no child in a working directory of more than
+    `poser.core.paths.CREATE_PROCESS_CWD_LIMIT` characters (`poser.core.paths.child_cwd`), so a
+    worker poser runs from a longer directory starts in the directory that holds its job and
+    result files.
     """
     module = getattr(target, "__module__", None)
     qualname = getattr(target, "__qualname__", None)
@@ -126,6 +130,7 @@ def run_isolated(
         result_path = Path(directory) / "result.json"
         stderr_path = Path(directory) / "stderr.txt"
         job_path.write_text(json.dumps(job, allow_nan=False), encoding="utf-8", newline="\n")
+        cwd = child_cwd(Path(directory))
         command = [
             sys.executable,
             "-P",
@@ -137,9 +142,9 @@ def run_isolated(
             str(result_path),
         ]
         if sys.platform == "win32":
-            returncode = _run_in_job(command, stderr_path, result_path, timeout_s)
+            returncode = _run_in_job(command, stderr_path, result_path, timeout_s, cwd)
         else:
-            returncode = _run_in_group(command, stderr_path, timeout_s)
+            returncode = _run_in_group(command, stderr_path, timeout_s, cwd)
 
         if returncode != 0:
             # Native code in the worker can write any bytes to its stderr.
@@ -161,7 +166,9 @@ def _timed_out(timeout_s: float | None) -> WorkerTimedOutError:
     return WorkerTimedOutError(f"worker exceeded {timeout_s:g} seconds")
 
 
-def _run_in_group(command: list[str], stderr_path: Path, timeout_s: float | None) -> int:
+def _run_in_group(
+    command: list[str], stderr_path: Path, timeout_s: float | None, cwd: str | None
+) -> int:
     """Run the worker as the leader of a new session, passing it the lifeline's read end, and
     return its exit code."""
     assert sys.platform != "win32"  # noqa: S101 - narrows the platform for type checkers.
@@ -174,6 +181,7 @@ def _run_in_group(command: list[str], stderr_path: Path, timeout_s: float | None
                     stdin=subprocess.DEVNULL,
                     stdout=subprocess.DEVNULL,
                     stderr=stderr,
+                    cwd=cwd,
                     start_new_session=True,
                     pass_fds=(read_fd,),
                 )
@@ -192,7 +200,11 @@ def _run_in_group(command: list[str], stderr_path: Path, timeout_s: float | None
 
 
 def _run_in_job(
-    command: list[str], stderr_path: Path, result_path: Path, timeout_s: float | None
+    command: list[str],
+    stderr_path: Path,
+    result_path: Path,
+    timeout_s: float | None,
+    cwd: str | None,
 ) -> int:
     """Run the worker in a Job Object, created suspended and assigned before it runs, and return
     its exit code."""
@@ -213,6 +225,7 @@ def _run_in_job(
                     stdin=subprocess.DEVNULL,
                     stdout=subprocess.DEVNULL,
                     stderr=stderr,
+                    cwd=cwd,
                     creationflags=CREATE_SUSPENDED | subprocess.CREATE_NEW_PROCESS_GROUP,
                 )
             job.start(process.pid)

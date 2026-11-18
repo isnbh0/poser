@@ -13,6 +13,8 @@ and does not do:
   its kill.
 - `SCSTUB_SHORT=1` — write one block instead of the score's full length (padding exercise).
 - `SCSTUB_NAN=1` — write NaN into the first block (the adapter owns finiteness).
+- `SCSTUB_CWD=<path>` — write the stub's working directory into that file (where a child
+  starts).
 
 The real engine's behaviors mirrored here: malformed records are a loud failure; a score whose
 messages are unusable still renders silence silently; and, as on an account that never ran
@@ -111,6 +113,8 @@ def main(argv: list[str]) -> int:
     frames = round(timetags[-1] * int(rate) / BLOCK) * BLOCK + BLOCK
     if os.environ.get("SCSTUB_SHORT") == "1":
         frames = BLOCK
+    if cwd_path := os.environ.get("SCSTUB_CWD"):
+        Path(cwd_path).write_text(str(Path.cwd()), encoding="utf-8", newline="\n")
     Path(output_path).write_bytes(wav_bytes(int(rate), 2, frames))
     return 0
 

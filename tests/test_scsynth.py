@@ -450,6 +450,23 @@ def test_short_output_is_padded(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
     assert audio.frames == SAMPLE_RATE
 
 
+def test_a_render_runs_scsynth_where_child_cwd_says(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`_run` passes `child_cwd`'s directory to scsynth. On Windows, a render poser runs from a
+    working directory past CreateProcess's limit runs scsynth in the system's temporary
+    directory; the command carries every path scsynth reads and writes. The macOS run here
+    injects the directory and reads back where the engine ran."""
+    ran_in = tmp_path / "ran-in"
+    ran_in.mkdir()
+    reported = tmp_path / "cwd.txt"
+    monkeypatch.setenv("SCSTUB_CWD", str(reported))
+    monkeypatch.setattr("poser_scsynth.instrument.child_cwd", lambda fallback: str(ran_in))
+    instrument = make_instrument(tmp_path, make_stub(tmp_path), {"demo": make_source(tmp_path)})
+    assert render_ok(instrument, tmp_path).frames > 0
+    assert reported.read_text(encoding="utf-8") == str(ran_in)
+
+
 def test_non_finite_output_is_a_crash(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("SCSTUB_NAN", "1")
     instrument = make_instrument(tmp_path, make_stub(tmp_path), {"demo": make_source(tmp_path)})

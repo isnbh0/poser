@@ -29,6 +29,7 @@ from scipy.io import wavfile
 from poser.core.audio import NUM_CHANNELS, SAMPLE_RATE, write_raw_audio
 from poser.core.jsonvalue import Json, JsonValue
 from poser.core.names import Identifier
+from poser.core.paths import child_cwd
 from poser.core.performance import PitchSupport
 from poser.core.ports import (
     AdapterContext,
@@ -297,7 +298,13 @@ class ScsynthInstrument:
     def _run(
         self, scsynth: Path, score: bytes, directory: Path, timeout_s: float
     ) -> RenderFailure | None:
-        """Run one `scsynth -N` subprocess and return why it failed, or None when it finished."""
+        """Run one `scsynth -N` subprocess and return why it failed, or None when it finished.
+
+        Windows starts no child in a working directory of more than
+        `poser.core.paths.CREATE_PROCESS_CWD_LIMIT` characters, so a render poser runs from a
+        longer directory runs scsynth in the system's temporary directory; the command carries
+        every path scsynth reads and writes.
+        """
         score_path = directory / "score.osc"
         score_path.write_bytes(score)
         output_path = directory / "output.wav"
@@ -320,7 +327,13 @@ class ScsynthInstrument:
         ]
         try:
             # subprocess.run kills and reaps the child before raising TimeoutExpired.
-            finished = subprocess.run(command, timeout=timeout_s, capture_output=True, check=False)
+            finished = subprocess.run(
+                command,
+                timeout=timeout_s,
+                capture_output=True,
+                check=False,
+                cwd=child_cwd(Path(tempfile.gettempdir())),
+            )
         except subprocess.TimeoutExpired as error:
             return RenderFailure(RenderFailureStatus.TIMED_OUT, f"scsynth: {error}")
         except OSError as error:

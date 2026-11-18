@@ -1,5 +1,5 @@
-"""`poser.core.paths`: link detection that knows junctions, a walk that enters no link, and the
-limit on a path's length."""
+"""`poser.core.paths`: link detection that knows junctions, a walk that enters no link, the
+limit on a path's length, and where a child process may start."""
 
 import sys
 from pathlib import Path
@@ -7,7 +7,14 @@ from pathlib import Path
 import pytest
 from links import LINK_KINDS, make_dangling_link, make_link
 
-from poser.core.paths import PathLimit, PathUnit, is_link, walk
+from poser.core.paths import (
+    CREATE_PROCESS_CWD_LIMIT,
+    PathLimit,
+    PathUnit,
+    child_cwd,
+    is_link,
+    walk,
+)
 
 
 def test_is_link_is_false_for_a_directory_a_file_and_a_missing_path(tmp_path: Path) -> None:
@@ -112,3 +119,30 @@ def test_a_limit_that_is_not_exact_says_it_is_the_least_the_system_allows(tmp_pa
         f"its file {file} would be {len(str(file))} characters, past the {len(str(file)) - 1} "
         "this system allows everywhere; to fix it, shorten it"
     )
+
+
+def test_a_child_inherits_this_process_s_working_directory(tmp_path: Path) -> None:
+    """macOS and Linux start a child in a working directory of any length, so every child
+    inherits this process's."""
+    assert child_cwd(tmp_path) is None
+
+
+@pytest.mark.parametrize(
+    ("length", "expected"),
+    [(CREATE_PROCESS_CWD_LIMIT, None), (CREATE_PROCESS_CWD_LIMIT + 1, "short")],
+)
+def test_a_windows_child_s_directory_follows_the_limit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, length: int, expected: str | None
+) -> None:
+    """On Windows, a working directory of at most `CREATE_PROCESS_CWD_LIMIT` characters is one a
+    child may start in, and one character more is not, whatever long paths the process itself
+    may use. The macOS run here simulates Windows; CI's long-paths step exercises the real
+    refusal, whose threshold this pins."""
+    working = tmp_path / ("d" * (length - len(str(tmp_path)) - 1))
+    working.mkdir()
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.chdir(working)
+    assert len(str(Path.cwd())) == length
+    fallback = tmp_path / "short"
+    fallback.mkdir()
+    assert child_cwd(fallback) == (None if expected is None else str(fallback))

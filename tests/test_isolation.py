@@ -67,6 +67,10 @@ def mark(job):
     return {"done": True}
 
 
+def where(job):
+    return {"cwd": os.getcwd()}
+
+
 def noisy(job):
     print("not json {")
     sys.stdout.flush()
@@ -194,6 +198,16 @@ def test_run_isolated_without_a_timeout_waits(workers: ModuleType) -> None:
 
 def test_run_isolated_ignores_what_the_target_prints(workers: ModuleType) -> None:
     assert run_isolated(target(workers, "noisy"), {}, 30) == {"done": True}
+
+
+def test_a_worker_runs_where_child_cwd_says(
+    workers: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`run_isolated` starts the worker in the directory `child_cwd` names. On Windows, a worker
+    whose poser working directory is past CreateProcess's limit starts in the directory that
+    holds its job; every other worker inherits poser's working directory."""
+    monkeypatch.setattr("poser.adapters.isolation.child_cwd", lambda fallback: str(tmp_path))
+    assert run_isolated(target(workers, "where"), {}, 30) == {"cwd": str(tmp_path)}
 
 
 class Holder:
