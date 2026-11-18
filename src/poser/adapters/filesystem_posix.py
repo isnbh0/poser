@@ -8,6 +8,7 @@ import ctypes
 import errno
 import fcntl
 import os
+import shutil
 import sys
 from collections.abc import Generator
 from contextlib import contextmanager
@@ -15,8 +16,12 @@ from pathlib import Path
 
 
 class PosixFileSystem:
-    """Advisory `flock` locks, `fsync` through read-only descriptors, symbolic links, and the C
-    library's no-clobber rename."""
+    """Advisory `flock` locks, `fsync` through read-only descriptors, symbolic links, the C
+    library's no-clobber rename, and the standard library's renames and removals.
+
+    No program holding a file open stops renaming or removing it, and a file's read-only mode
+    does not stop replacing or removing it, so no operation here waits or retries.
+    """
 
     @contextmanager
     def lock(self, path: Path, *, wait: bool) -> Generator[None]:
@@ -79,3 +84,23 @@ class PosixFileSystem:
             code = ctypes.get_errno()
             # OSError with EEXIST constructs a FileExistsError.
             raise OSError(code, os.strerror(code), str(destination))
+
+    def rename_directory(self, source: Path, destination: Path) -> None:
+        """`os.rename`, which replaces an empty directory at `destination`."""
+        try:
+            source.rename(destination)
+        except OSError as error:
+            if error.errno in (errno.EEXIST, errno.ENOTEMPTY):
+                raise FileExistsError(
+                    errno.EEXIST, os.strerror(errno.EEXIST), str(destination)
+                ) from error
+            raise
+
+    def replace_file(self, source: Path, destination: Path) -> None:
+        source.replace(destination)
+
+    def remove_file(self, path: Path) -> None:
+        path.unlink()
+
+    def remove_tree(self, path: Path) -> None:
+        shutil.rmtree(path)

@@ -1,15 +1,13 @@
 """Song formats: YAML song files and Python song scripts."""
 
-import os
 import runpy
-import stat
-import tempfile
 from collections.abc import Mapping
 from pathlib import Path
 from typing import override
 
 import yaml
 
+from poser.adapters.filesystem import native, write_text_file
 from poser.adapters.loading import refuse_options
 from poser.core.graph import Graph, GraphError
 from poser.core.jsonvalue import JsonValue
@@ -136,39 +134,21 @@ SONG_FORMATS: tuple[SongFormat, ...] = (YamlSongFormat(), ScriptSongFormat())
 
 
 def write_yaml_song(song: Song, path: Path) -> None:
-    """Write a song as YAML, replacing `path` only once the file is complete.
+    """Write a song as YAML, replacing `path` only once the file is complete, through the
+    file-system facility's `write_file`.
 
     A symlinked `path` keeps its link and the target is replaced. The file keeps an existing
-    target's permissions, or gets the usual umask-based ones when new.
+    target's permissions, even read-only ones, or gets the usual umask-based ones when new.
+    Raises UnsupportedPlatformError on a platform the facility has no backend for.
     """
     try:
         text = YamlSongFormat().dump(song)
     except SongError as error:
         raise SongError([f"cannot write {path}: {error.__cause__}"]) from error
-    target = Path(path).resolve()
     try:
-        mode = stat.S_IMODE(target.stat().st_mode)
-    except FileNotFoundError:
-        umask = os.umask(0)
-        os.umask(umask)
-        mode = 0o666 & ~umask
+        write_text_file(native(), Path(path), text)
     except OSError as error:
         raise SongError([f"cannot write {path}: {error}"]) from error
-    try:
-        fd, name = tempfile.mkstemp(dir=target.parent, prefix=f".{target.name}.", suffix=".tmp")
-    except OSError as error:
-        raise SongError([f"cannot write {path}: {error}"]) from error
-    temp = Path(name)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
-            handle.write(text)
-        temp.chmod(mode)
-        temp.replace(target)
-    except BaseException as error:
-        temp.unlink(missing_ok=True)
-        if isinstance(error, OSError):
-            raise SongError([f"cannot write {path}: {error}"]) from error
-        raise
 
 
 def create_yaml(options: Mapping[str, JsonValue], _context: AdapterContext) -> YamlSongFormat:

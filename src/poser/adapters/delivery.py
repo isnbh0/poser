@@ -1,7 +1,6 @@
 """Private staging and no-clobber directory publication through the file-system facility."""
 
 import errno
-import shutil
 import tempfile
 from collections.abc import Generator, Mapping
 from contextlib import contextmanager, suppress
@@ -66,7 +65,7 @@ class FileDeliveryWriter:
             yield stage
         finally:
             if stage is not None and not stage.published:
-                shutil.rmtree(stage.path)
+                self._fs.remove_tree(stage.path)
             if stage is None or not stage.published:
                 for parent in reversed(created):
                     # Never remove intervening owner content.

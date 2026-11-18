@@ -1,8 +1,6 @@
 """No-clobber publication and its in-process rollback, on real temporary files."""
 
 import os
-import stat
-import sys
 from collections.abc import Callable
 from pathlib import Path
 
@@ -10,7 +8,8 @@ import pytest
 from helpers import assert_mode
 from links import LINK_KINDS, make_link
 
-from poser.adapters.workspace_init import WorkspaceInitializer
+from poser.adapters.filesystem import native
+from poser.adapters.workspace_init import TEMP_PREFIX, WorkspaceInitializer
 from poser.core.ports import ConfigError
 
 OUTPUTS = {
@@ -47,7 +46,7 @@ def failing_link(calls_before_failure: int, error: BaseException) -> Callable[[P
 
 
 def test_publish_creates_targets_with_bytes_and_mode(tmp_path: Path) -> None:
-    WorkspaceInitializer(tmp_path).publish(
+    WorkspaceInitializer(tmp_path, native()).publish(
         {**OUTPUTS, ".gitignore": b"renders/\n"}, expected_ignore=None
     )
     for name, data in {**OUTPUTS, ".gitignore": b"renders/\n"}.items():
@@ -64,12 +63,12 @@ def test_publish_creates_missing_directory_and_failure_removes_it(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     target = tmp_path / "new" / "studio"
-    WorkspaceInitializer(target).publish(OUTPUTS, expected_ignore=None)
+    WorkspaceInitializer(target, native()).publish(OUTPUTS, expected_ignore=None)
     assert (target / "songs/demo.yaml").read_bytes() == b"demo\n"
     other = tmp_path / "other"
     monkeypatch.setattr(os, "link", failing_link(1, OSError(5, "injected")))
     with pytest.raises(ConfigError, match="cannot create: injected"):
-        WorkspaceInitializer(other).publish(OUTPUTS, expected_ignore=None)
+        WorkspaceInitializer(other, native()).publish(OUTPUTS, expected_ignore=None)
     assert not other.exists()
 
 
@@ -77,7 +76,7 @@ def test_existing_target_refuses_and_removes_earlier_targets(tmp_path: Path) -> 
     (tmp_path / "songs").mkdir()
     (tmp_path / "songs/demo.yaml").write_bytes(b"mine")
     with pytest.raises(FileExistsError):
-        WorkspaceInitializer(tmp_path).publish(OUTPUTS, expected_ignore=None)
+        WorkspaceInitializer(tmp_path, native()).publish(OUTPUTS, expected_ignore=None)
     assert tree(tmp_path) == {"songs": None, "songs/demo.yaml": b"mine"}
 
 
@@ -91,7 +90,7 @@ def test_failure_after_second_target_rolls_back_everything(
     outputs = {".gitignore": b"owner\nrenders/\n", **OUTPUTS}
     monkeypatch.setattr(os, "link", failing_link(2, OSError(5, "injected")))
     with pytest.raises(ConfigError, match=r"demo\.yaml: cannot create"):
-        WorkspaceInitializer(tmp_path).publish(outputs, expected_ignore=b"owner\n")
+        WorkspaceInitializer(tmp_path, native()).publish(outputs, expected_ignore=b"owner\n")
     assert tree(tmp_path) == {".gitignore": b"owner\n"}
     assert_mode(ignore, 0o640)
 
@@ -116,7 +115,7 @@ def test_rollback_restores_a_replaced_gitignore(
 
     monkeypatch.setattr(os, "replace", fail_after_ignore)
     with pytest.raises(KeyboardInterrupt):
-        WorkspaceInitializer(tmp_path).publish(
+        WorkspaceInitializer(tmp_path, native()).publish(
             {**OUTPUTS, ".gitignore": b"owner\nrenders/\n"}, expected_ignore=b"owner\n"
         )
     assert tree(tmp_path) == {".gitignore": b"owner\n"}
@@ -124,12 +123,11 @@ def test_rollback_restores_a_replaced_gitignore(
     assert ignore.stat().st_mtime_ns == 2_000_000_000
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="Windows cannot replace a read-only file")
 def test_replaced_gitignore_keeps_its_mode(tmp_path: Path) -> None:
     ignore = tmp_path / ".gitignore"
     ignore.write_bytes(b"owner\n")
     ignore.chmod(0o444)
-    WorkspaceInitializer(tmp_path).publish(
+    WorkspaceInitializer(tmp_path, native()).publish(
         {".gitignore": b"owner\nrenders/\n"}, expected_ignore=b"owner\n"
     )
     assert ignore.read_bytes() == b"owner\nrenders/\n"
@@ -141,22 +139,17 @@ def test_gitignore_changed_before_replace_refuses(
 ) -> None:
     ignore = tmp_path / ".gitignore"
     ignore.write_bytes(b"owner\n")
-    ignore.chmod(0o600)
-    # The mode the .gitignore reports, which Windows gives as 0o666; its temp file gets it.
-    ignore_mode = stat.S_IMODE(ignore.stat().st_mode)
-    fchmod = os.fchmod
-    edited = False
+    write_bytes = Path.write_bytes
 
-    def mutate(fd: int, mode: int) -> None:
-        nonlocal edited
-        fchmod(fd, mode)
-        if mode == ignore_mode and not edited:
-            edited = True
-            ignore.write_bytes(b"owner edited\n")
+    def edit_after_temp(self: Path, data: bytes) -> int:
+        written = write_bytes(self, data)
+        if self.name.startswith(TEMP_PREFIX) and data == b"owner\nrenders/\n":
+            write_bytes(ignore, b"owner edited\n")
+        return written
 
-    monkeypatch.setattr(os, "fchmod", mutate)
+    monkeypatch.setattr(Path, "write_bytes", edit_after_temp)
     with pytest.raises(ConfigError, match=r"\.gitignore changed during initialization; retry"):
-        WorkspaceInitializer(tmp_path).publish(
+        WorkspaceInitializer(tmp_path, native()).publish(
             {**OUTPUTS, ".gitignore": b"owner\nrenders/\n"}, expected_ignore=b"owner\n"
         )
     assert tree(tmp_path) == {".gitignore": b"owner edited\n"}
@@ -168,7 +161,7 @@ def test_keyboard_interrupt_from_link_rolls_back_and_propagates(
     target = tmp_path / "studio"
     monkeypatch.setattr(os, "link", failing_link(3, KeyboardInterrupt()))
     with pytest.raises(KeyboardInterrupt):
-        WorkspaceInitializer(target).publish(OUTPUTS, expected_ignore=None)
+        WorkspaceInitializer(target, native()).publish(OUTPUTS, expected_ignore=None)
     assert not target.exists()
 
 
@@ -184,7 +177,7 @@ def test_rollback_keeps_a_target_another_run_linked(
 
     monkeypatch.setattr(os, "link", race)
     with pytest.raises(FileExistsError):
-        WorkspaceInitializer(tmp_path).publish(OUTPUTS, expected_ignore=None)
+        WorkspaceInitializer(tmp_path, native()).publish(OUTPUTS, expected_ignore=None)
     assert tree(tmp_path) == {"POSER.md": b"guide\n"}
 
 
@@ -196,7 +189,7 @@ def test_linked_parent_refused(tmp_path: Path, kind: str) -> None:
     studio.mkdir()
     make_link(kind, studio / "songs", elsewhere)
     with pytest.raises(ConfigError, match="linked parent"):
-        WorkspaceInitializer(studio).publish(OUTPUTS, expected_ignore=None)
+        WorkspaceInitializer(studio, native()).publish(OUTPUTS, expected_ignore=None)
     assert list(elsewhere.iterdir()) == []
     assert sorted(p.name for p in studio.iterdir()) == ["songs"]
 
@@ -207,7 +200,7 @@ def test_remove_leftovers_unlinks_matching_targets_and_temps(tmp_path: Path) -> 
     (tmp_path / "songs/demo.yaml").write_bytes(OUTPUTS["songs/demo.yaml"])
     (tmp_path / ".poser-tmp-x").write_bytes(b"partial")
     (tmp_path / "songs/.poser-tmp-y").write_bytes(b"partial")
-    removed = WorkspaceInitializer(tmp_path).remove_leftovers(OUTPUTS)
+    removed = WorkspaceInitializer(tmp_path, native()).remove_leftovers(OUTPUTS)
     assert removed == ("AGENTS.md", "songs/demo.yaml")
     assert tree(tmp_path) == {"songs": None}
 
@@ -216,5 +209,5 @@ def test_remove_leftovers_refuses_a_changed_target(tmp_path: Path) -> None:
     (tmp_path / "AGENTS.md").write_bytes(OUTPUTS["AGENTS.md"])
     (tmp_path / "POSER.md").write_bytes(b"edited\n")
     with pytest.raises(ConfigError, match=r"POSER\.md: changed; not removed"):
-        WorkspaceInitializer(tmp_path).remove_leftovers(OUTPUTS)
+        WorkspaceInitializer(tmp_path, native()).remove_leftovers(OUTPUTS)
     assert tree(tmp_path) == {"POSER.md": b"edited\n"}

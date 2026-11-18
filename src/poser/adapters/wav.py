@@ -1,12 +1,11 @@
 """WAV files in the stem format, read and written through Pedalboard."""
 
-import os
-import tempfile
 from collections.abc import Mapping
 from pathlib import Path
 
 from pedalboard.io import ReadableAudioFile, WriteableAudioFile
 
+from poser.adapters.filesystem import FileSystem, native, write_file
 from poser.adapters.loading import refuse_options
 from poser.core.audio import (
     NUM_CHANNELS,
@@ -22,7 +21,11 @@ from poser.core.ports import AdapterContext, AudioFileError
 
 
 class WavAudioFiles:
-    """Stem-format audio as 32-bit float WAV files."""
+    """Stem-format audio as 32-bit float WAV files, written through the file-system facility's
+    `write_file`."""
+
+    def __init__(self, fs: FileSystem) -> None:
+        self._fs = fs
 
     @property
     def suffix(self) -> Suffix:
@@ -57,15 +60,7 @@ class WavAudioFiles:
         return audio
 
     def write(self, path: Path, audio: Audio) -> None:
-        # Pedalboard picks the file format from the extension, so the name must end in .wav.
-        fd, name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.stem}.", suffix=".wav")
-        os.close(fd)
-        temp = Path(name)
-        # mkstemp creates the file owner-only; give it the usual umask-based mode.
-        umask = os.umask(0)
-        os.umask(umask)
-        try:
-            temp.chmod(0o666 & ~umask)
+        def fill(temp: Path) -> None:
             with WriteableAudioFile(  # ty: ignore[no-matching-overload]
                 str(temp),
                 samplerate=SAMPLE_RATE,
@@ -73,12 +68,15 @@ class WavAudioFiles:
                 bit_depth=STEM_BIT_DEPTH,
             ) as output:
                 output.write(audio.samples)
-            temp.replace(path)
-        finally:
-            temp.unlink(missing_ok=True)
+
+        # Pedalboard picks the file format from the extension, so the name must end in .wav.
+        write_file(self._fs, path, fill, suffix=".wav")
 
 
 def create(options: Mapping[str, JsonValue], _context: AdapterContext) -> WavAudioFiles:
-    """The factory for `wav`. Takes no options."""
+    """The factory for `wav`. Takes no options.
+
+    Raises UnsupportedPlatformError on a platform the file-system facility has no backend for.
+    """
     refuse_options(options)
-    return WavAudioFiles()
+    return WavAudioFiles(native())

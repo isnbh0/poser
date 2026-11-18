@@ -9,6 +9,7 @@ import pytest
 from contracts import check_preset_format_contract
 from helpers import fxp_bytes
 
+from poser.adapters.filesystem import native
 from poser.adapters.pedalboard.formats import (
     FxpFormat,
     PresetError,
@@ -158,12 +159,12 @@ def test_saved_format_refuses_unreadable_json(tmp_path: Path) -> None:
 def test_saved_format_round_trips_write_sound(tmp_path: Path) -> None:
     path = tmp_path / "pad.json"
     sound = SavedSound("warm pad", bytes(range(256)))
-    SavedFormat().write_sound(path, sound)
+    SavedFormat().write_sound(native(), path, sound)
     assert SavedFormat().read_sound(path) == sound
     assert set(json.loads(path.read_text(encoding="utf-8"))) == {"description", "state"}
     assert [entry.name for entry in tmp_path.iterdir()] == ["pad.json"]
     replacement = SavedSound("cold pad", b"other")
-    SavedFormat().write_sound(path, replacement)
+    SavedFormat().write_sound(native(), path, replacement)
     assert SavedFormat().read_sound(path) == replacement
     assert [entry.name for entry in tmp_path.iterdir()] == ["pad.json"]
 
@@ -173,7 +174,7 @@ def test_saved_format_failed_write_leaves_no_temporary_file(tmp_path: Path) -> N
     target.mkdir()  # Replacing a directory with a file fails after the temporary file exists.
     (target / "keep").write_text("", encoding="utf-8", newline="\n")
     with pytest.raises(OSError, match=r"pad\.json"):
-        SavedFormat().write_sound(target, SavedSound("warm", b"s"))
+        SavedFormat().write_sound(native(), target, SavedSound("warm", b"s"))
     assert sorted(entry.name for entry in tmp_path.iterdir()) == ["pad.json"]
 
 
@@ -195,7 +196,7 @@ def test_fxp_format_meets_the_preset_format_contract(tmp_path: Path) -> None:
 def test_saved_format_meets_the_preset_format_contract(tmp_path: Path) -> None:
     sample = tmp_path / "sample" / "pad.json"
     sample.parent.mkdir()
-    SavedFormat().write_sound(sample, SavedSound("warm", b"state"))
+    SavedFormat().write_sound(native(), sample, SavedSound("warm", b"state"))
     check_preset_format_contract(SavedFormat(), sample, tmp_path)
 
 
@@ -237,7 +238,7 @@ def test_saved_format_reads_utf_8(tmp_path: Path) -> None:
 
 def test_saved_format_writes_lf(tmp_path: Path) -> None:
     path = tmp_path / "warm.json"
-    SavedFormat().write_sound(path, SavedSound("café 한글", b"s"))
+    SavedFormat().write_sound(native(), path, SavedSound("café 한글", b"s"))
 
     data = path.read_bytes()
     assert data.endswith(b"}\n")

@@ -1,6 +1,7 @@
 """The file-system facility: the one owner of the platform-specific file-system operations that
-adapters need, which are locking, durable sync, directory links, and no-clobber directory
-publication.
+adapters need, which are locking, durable sync, directory links, renaming and removing files and
+directories, and no-clobber directory publication, and of `write_file`, the one way poser
+replaces or creates a file in one step.
 
 `FileSystem` states what adapters need, not how a platform provides it, and each platform has one
 backend that matches it by structure. `native()` selects the running platform's backend, so
@@ -8,7 +9,11 @@ importing this module loads no platform-specific module and succeeds on every pl
 `tests/test_filesystem.py` holds the contract every backend passes on its own platform.
 """
 
+import os
+import stat
 import sys
+import tempfile
+from collections.abc import Callable
 from contextlib import AbstractContextManager
 from pathlib import Path
 from typing import Protocol
@@ -58,7 +63,45 @@ class FileSystem(Protocol):
     def publish_directory(self, source: Path, destination: Path) -> None:
         """Rename the directory `source` to `destination` in one step, never replacing anything.
 
-        Raise FileExistsError when `destination` exists.
+        Raise FileExistsError when `destination` exists. Raise PermissionError, saying another
+        program may hold a file open, when the platform keeps refusing the rename for that
+        reason.
+        """
+        ...
+
+    def rename_directory(self, source: Path, destination: Path) -> None:
+        """Rename the directory `source` to `destination` in one step.
+
+        Raise FileExistsError when `destination` is a directory holding anything; an empty
+        directory there may be replaced. Raise PermissionError, saying another program may hold
+        a file open, when the platform keeps refusing the rename for that reason.
+        """
+        ...
+
+    def replace_file(self, source: Path, destination: Path) -> None:
+        """Rename the file `source` to `destination` in one step, replacing a file there, even
+        one marked read-only.
+
+        Raise PermissionError, saying another program may hold a file open, when the platform
+        keeps refusing the replacement for that reason. When replacing fails, `destination` is
+        as it was, read-only mark included.
+        """
+        ...
+
+    def remove_file(self, path: Path) -> None:
+        """Delete the file at `path`, even one marked read-only.
+
+        Raise FileNotFoundError when nothing is at `path`, and PermissionError, saying another
+        program may hold it open, when the platform keeps refusing for that reason.
+        """
+        ...
+
+    def remove_tree(self, path: Path) -> None:
+        """Delete the directory `path` and everything under it, read-only files included,
+        removing each link inside without entering it.
+
+        Raise FileNotFoundError when nothing is at `path`, and PermissionError, saying another
+        program may hold a file open, when the platform keeps refusing for that reason.
         """
         ...
 
@@ -82,3 +125,111 @@ def native() -> FileSystem:
         f"poser's file-system support does not cover this platform ({platform}); it covers "
         f"macOS, Linux, and Windows. See {PREREQUISITES_URL}"
     )
+
+
+def umask_mode() -> int:
+    """The permission bits a new file gets by default: read and write for everyone, less the
+    process's umask."""
+    umask = os.umask(0)
+    os.umask(umask)
+    return 0o666 & ~umask
+
+
+def write_file(
+    fs: FileSystem,
+    path: Path,
+    fill: Callable[[Path], object],
+    *,
+    replace: bool = True,
+    mode: int | None = None,
+    prefix: str | None = None,
+    suffix: str = ".tmp",
+    leftover: Callable[[Path, OSError], object] | None = None,
+) -> None:
+    """Publish at `path`, in one step, the file `fill` writes, so a reader finds the old file or
+    the complete new one, never part of one.
+
+    `fill` receives a fresh, empty temporary file in `path`'s directory, named `prefix` (by
+    default `.<name>.`), a random part, and `suffix`, and writes the file there. Its exceptions
+    propagate, and nothing is published. The file is then made durable, given its permission
+    bits, and published.
+
+    With `replace`, a file at `path` is replaced, even one marked read-only, and a symbolic link
+    at `path` is kept and the file it leads to replaced. The file gets `mode`, or by default the
+    permission bits of the file it replaces, or `umask_mode()` when there is none. Without
+    `replace`, FileExistsError is raised when anything, a link included, is at `path`, and the
+    file gets `mode` or `umask_mode()`; publishing links the temporary file at `path`, so a
+    process killed between that link and removing the temporary file leaves both names.
+
+    The temporary file is removed whether `write_file` returns or raises. Failing to remove it
+    never changes the outcome: `leftover`, when given, receives its path and the error. Without
+    `leftover`, that failure is raised after a successful link, with the file already published,
+    and is added as a note to the exception of a failed write.
+    """
+    target = path.resolve() if replace else path
+    if mode is None:
+        try:
+            mode = stat.S_IMODE(target.stat().st_mode) if replace else umask_mode()
+        except FileNotFoundError:
+            mode = umask_mode()
+    descriptor, name = tempfile.mkstemp(
+        dir=target.parent, prefix=f".{target.name}." if prefix is None else prefix, suffix=suffix
+    )
+    os.close(descriptor)
+    temp = Path(name)
+    try:
+        fill(temp)
+        # Before the mode, which may make the file read-only: Windows syncs through a writable
+        # descriptor.
+        fs.sync(temp)
+        temp.chmod(mode)
+        if replace:
+            fs.replace_file(temp, target)
+            return
+        os.link(temp, target)
+    except BaseException as error:
+        try:
+            fs.remove_file(temp)
+        except OSError as cleanup:
+            if leftover is None:
+                error.add_note(f"cannot remove temporary file {temp}: {cleanup}")
+            else:
+                leftover(temp, cleanup)
+        raise
+    try:
+        fs.remove_file(temp)
+    except OSError as cleanup:
+        if leftover is None:
+            raise
+        leftover(temp, cleanup)
+
+
+def write_text_file(fs: FileSystem, path: Path, text: str) -> None:
+    """Replace or create the file at `path` with `text`, as UTF-8 with LF line endings, through
+    `write_file`."""
+    write_file(fs, path, lambda temp: temp.write_text(text, encoding="utf-8", newline="\n"))
+
+
+class AtomicFileWriter:
+    """`poser.core.ports.FileWriter` through `write_file`. Construction performs no file-system
+    work."""
+
+    def __init__(self, fs: FileSystem) -> None:
+        self._fs = fs
+
+    def write(
+        self,
+        path: Path,
+        fill: Callable[[Path], object],
+        *,
+        replace: bool,
+        suffix: str = ".tmp",
+        leftover: Callable[[Path, OSError], object] | None = None,
+    ) -> None:
+        write_file(self._fs, path, fill, replace=replace, suffix=suffix, leftover=leftover)
+
+
+def create_file_writer() -> AtomicFileWriter:
+    """The file writer commands build through `poser.compose.file_writer`. Raises
+    UnsupportedPlatformError on a platform the facility has no backend for."""
+    return AtomicFileWriter(native())

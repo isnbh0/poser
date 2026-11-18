@@ -11,6 +11,8 @@ import time
 from pathlib import Path
 
 import pytest
+from helpers import assert_mode
+from links import LINK_KINDS, make_link
 
 from poser.adapters.filesystem import FileSystem, native
 from poser.core.paths import is_link
@@ -242,3 +244,92 @@ def test_publish_directory_refuses_an_existing_destination(
     with pytest.raises(FileExistsError):
         fs.publish_directory(source, destination)
     assert snapshot(fs, tmp_path) == before
+
+
+def test_rename_directory_moves_a_directory_and_its_contents(
+    fs: FileSystem, tmp_path: Path
+) -> None:
+    source = make_source(tmp_path)
+    destination = tmp_path / "destination"
+    fs.rename_directory(source, destination)
+    assert not source.exists()
+    assert snapshot(fs, destination) == {"inner": ("dir", ""), "inner/file": ("file", "contents")}
+
+
+def test_rename_directory_refuses_a_directory_holding_anything(
+    fs: FileSystem, tmp_path: Path
+) -> None:
+    source = make_source(tmp_path)
+    destination = tmp_path / "destination"
+    destination.mkdir()
+    (destination / "kept").write_text("mine", encoding="utf-8", newline="\n")
+    before = snapshot(fs, tmp_path)
+    with pytest.raises(FileExistsError):
+        fs.rename_directory(source, destination)
+    assert snapshot(fs, tmp_path) == before
+
+
+# Replacing and removing
+
+
+def write(path: Path, text: str, mode: int | None = None) -> Path:
+    path.write_text(text, encoding="utf-8", newline="\n")
+    if mode is not None:
+        path.chmod(mode)
+    return path
+
+
+@pytest.mark.parametrize("mode", [0o644, 0o444])
+def test_replace_file_replaces_a_file_even_a_read_only_one(
+    fs: FileSystem, tmp_path: Path, mode: int
+) -> None:
+    source = write(tmp_path / "new", "new", 0o644)
+    destination = write(tmp_path / "old", "old", mode)
+    fs.replace_file(source, destination)
+    assert not source.exists()
+    assert destination.read_text(encoding="utf-8") == "new"
+    assert_mode(destination, 0o644)
+
+
+def test_a_failed_replace_file_leaves_a_read_only_destination_as_it_was(
+    fs: FileSystem, tmp_path: Path
+) -> None:
+    destination = write(tmp_path / "old", "old", 0o444)
+    with pytest.raises(FileNotFoundError):
+        fs.replace_file(tmp_path / "missing", destination)
+    assert destination.read_text(encoding="utf-8") == "old"
+    assert_mode(destination, 0o444)
+
+
+@pytest.mark.parametrize("mode", [0o644, 0o444])
+def test_remove_file_removes_a_file_even_a_read_only_one(
+    fs: FileSystem, tmp_path: Path, mode: int
+) -> None:
+    path = write(tmp_path / "file", "data", mode)
+    fs.remove_file(path)
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_remove_file_of_nothing_raises_file_not_found(fs: FileSystem, tmp_path: Path) -> None:
+    with pytest.raises(FileNotFoundError):
+        fs.remove_file(tmp_path / "missing")
+
+
+@pytest.mark.parametrize("kind", LINK_KINDS)
+def test_remove_tree_removes_read_only_files_and_enters_no_link(
+    fs: FileSystem, tmp_path: Path, kind: str
+) -> None:
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    write(outside / "kept", "mine", 0o444)
+    tree = make_source(tmp_path)
+    write(tree / "inner" / "read-only", "data", 0o444)
+    make_link(kind, tree / "inner" / "link", outside)
+    fs.remove_tree(tree)
+    assert not tree.exists(follow_symlinks=False)
+    assert snapshot(fs, outside) == {"kept": ("file", "mine")}
+
+
+def test_remove_tree_of_nothing_raises_file_not_found(fs: FileSystem, tmp_path: Path) -> None:
+    with pytest.raises(FileNotFoundError):
+        fs.remove_tree(tmp_path / "missing")

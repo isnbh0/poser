@@ -423,6 +423,18 @@ class LockRecorder:
     def publish_directory(self, source: Path, destination: Path) -> None:
         self._native.publish_directory(source, destination)
 
+    def rename_directory(self, source: Path, destination: Path) -> None:
+        self._native.rename_directory(source, destination)
+
+    def replace_file(self, source: Path, destination: Path) -> None:
+        self._native.replace_file(source, destination)
+
+    def remove_file(self, path: Path) -> None:
+        self._native.remove_file(path)
+
+    def remove_tree(self, path: Path) -> None:
+        self._native.remove_tree(path)
+
 
 def test_lock_takes_the_song_s_lock_under_the_songs_lock_and_holds_only_it(
     tmp_path: Path,

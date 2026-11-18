@@ -120,7 +120,7 @@ def test_a_captured_state_reaches_the_render(tmp_path: Path) -> None:
     (sounds_dir / config.name).mkdir(parents=True)
     saved = SavedFormat()
     sound = SavedSound("three octaves down", state)
-    saved.write_sound(sounds_dir / config.name / f"low{saved.suffix}", sound)
+    saved.write_sound(native(), sounds_dir / config.name / f"low{saved.suffix}", sound)
     # As an installed preset holds it.
     presets = tmp_path / "presets"
     (presets / "Test").mkdir(parents=True)

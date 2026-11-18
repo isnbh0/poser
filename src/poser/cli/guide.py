@@ -1,9 +1,6 @@
 """`update-guide`: write a studio's `POSER.md` from poser and its `poser.toml`."""
 
 import argparse
-import os
-import stat
-import tempfile
 from importlib.resources import files
 from pathlib import Path
 
@@ -16,7 +13,7 @@ from poser.cli.common import (
     load_composition,
 )
 from poser.cli.workspace import WorkspaceError, fill_path_options
-from poser.compose import Composition
+from poser.compose import Composition, file_writer
 from poser.core.guide import GENERATED, GuideBlock, compose_guide
 from poser.core.ports import ConfigError
 
@@ -60,30 +57,6 @@ def foreign_guide_problem(path: Path) -> str:
     return f"{path} was not written by update-guide; move it away to replace it"
 
 
-def write_guide(path: Path, text: str) -> None:
-    """Replace the file at `path` with `text` at once, so a reader never sees half a guide.
-
-    A symlinked `path` keeps its link and the target is replaced. The file keeps an existing
-    target's permissions, or gets the usual umask-based ones when new.
-    """
-    target = path.resolve()
-    try:
-        mode = stat.S_IMODE(target.stat().st_mode)
-    except FileNotFoundError:
-        umask = os.umask(0)
-        os.umask(umask)
-        mode = 0o666 & ~umask
-    descriptor, temporary = tempfile.mkstemp(dir=target.parent, prefix=f".{target.name}.")
-    try:
-        with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as file:
-            file.write(text)
-        Path(temporary).chmod(mode)
-        Path(temporary).replace(target)
-    except BaseException:
-        Path(temporary).unlink(missing_ok=True)
-        raise
-
-
 @command
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog=PROG, description=__doc__)
@@ -98,6 +71,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         fill_path_options(args)
         text = workspace_guide(load_composition(args))
+        writer = file_writer()
     except (WorkspaceError, ConfigError) as error:
         fail(PROG, error)
         return EXIT_BAD_CONFIG
@@ -118,7 +92,10 @@ def main(argv: list[str] | None = None) -> int:
         return EXIT_ALL_PASS
 
     try:
-        write_guide(path, text)
+        # A symlinked guide keeps its link, and the file it leads to is replaced.
+        writer.write(
+            path, lambda temp: temp.write_text(text, encoding="utf-8", newline="\n"), replace=True
+        )
     except OSError as error:
         fail(PROG, f"cannot write {path}: {error}")
         return EXIT_SOME_FAILED

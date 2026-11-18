@@ -10,6 +10,7 @@ from contracts import check_audio_files_contract
 from helpers import assert_mode
 from pedalboard.io import WriteableAudioFile
 
+from poser.adapters.filesystem import native
 from poser.adapters.wav import WavAudioFiles
 from poser.core.audio import SAMPLE_RATE
 from poser.core.ports import AudioFileError
@@ -30,7 +31,7 @@ def constant(value: float, frames: int = FRAMES, channels: int = 2) -> np.ndarra
 
 
 def test_wav_audio_files_meets_the_audio_files_contract(tmp_path: Path) -> None:
-    check_audio_files_contract(WavAudioFiles(), tmp_path)
+    check_audio_files_contract(WavAudioFiles(native()), tmp_path)
 
 
 def test_read_returns_the_written_samples(tmp_path: Path) -> None:
@@ -38,7 +39,7 @@ def test_read_returns_the_written_samples(tmp_path: Path) -> None:
     audio[1, 10] = -0.5
     path = write_wav(tmp_path / "stem.wav", audio)
 
-    read = WavAudioFiles().read(path, FRAMES)
+    read = WavAudioFiles(native()).read(path, FRAMES)
 
     assert np.array_equal(read.samples, audio)
 
@@ -100,7 +101,7 @@ def test_read_refuses_a_file_that_is_not_a_stem(
     make(path)
 
     with pytest.raises(AudioFileError, match=message):
-        WavAudioFiles().read(path, FRAMES)
+        WavAudioFiles(native()).read(path, FRAMES)
 
 
 def test_read_refuses_a_file_holding_a_nan(tmp_path: Path) -> None:
@@ -109,7 +110,7 @@ def test_read_refuses_a_file_holding_a_nan(tmp_path: Path) -> None:
     path = write_wav(tmp_path / "stem.wav", audio)
 
     with pytest.raises(AudioFileError, match="NaN or infinity"):
-        WavAudioFiles().read(path, FRAMES)
+        WavAudioFiles(native()).read(path, FRAMES)
 
 
 def test_write_leaves_no_temporary_file_when_writing_fails(
@@ -119,19 +120,19 @@ def test_write_leaves_no_temporary_file_when_writing_fails(
         raise OSError("disk full")
 
     monkeypatch.setattr(Path, "replace", fail)
-    audio = WavAudioFiles().read(write_wav(tmp_path / "source.wav", constant(0.1)), FRAMES)
+    audio = WavAudioFiles(native()).read(write_wav(tmp_path / "source.wav", constant(0.1)), FRAMES)
     (tmp_path / "out").mkdir()
 
     with pytest.raises(OSError, match="disk full"):
-        WavAudioFiles().write(tmp_path / "out" / "stem.wav", audio)
+        WavAudioFiles(native()).write(tmp_path / "out" / "stem.wav", audio)
     assert list((tmp_path / "out").iterdir()) == []
 
 
 def test_write_gives_the_file_the_umask_based_mode(tmp_path: Path) -> None:
-    audio = WavAudioFiles().read(write_wav(tmp_path / "source.wav", constant(0.1)), FRAMES)
+    audio = WavAudioFiles(native()).read(write_wav(tmp_path / "source.wav", constant(0.1)), FRAMES)
     umask = os.umask(0o022)
     try:
-        WavAudioFiles().write(tmp_path / "stem.wav", audio)
+        WavAudioFiles(native()).write(tmp_path / "stem.wav", audio)
     finally:
         os.umask(umask)
     assert_mode(tmp_path / "stem.wav", 0o644)

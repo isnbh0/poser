@@ -2,17 +2,18 @@
 
 Each target is linked from a complete temp file, so it either does not exist or holds all of
 its bytes. `.gitignore` is merged by compare-and-replace. A failure inside the process removes
-only what this run wrote, identified by the inode and device of its temp files.
+only what this run wrote, identified by the inode and device of its temp files. Files are
+written, replaced, and removed through the file-system facility.
 """
 
 import contextlib
 import os
 import stat
-import tempfile
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from poser.adapters.filesystem import FileSystem, native, write_file
 from poser.core.names import is_inner_relative
 from poser.core.paths import is_link
 from poser.core.ports import ConfigError
@@ -62,8 +63,8 @@ class _Publication:
     """What one `publish` call has created, so a failure can remove exactly that."""
 
     directory: Path
+    fs: FileSystem
     directories: list[Path] = field(default_factory=list)
-    temps: list[Path] = field(default_factory=list)
     created: list[tuple[Path, int, int]] = field(default_factory=list)
     original: _Original | None = None
 
@@ -79,64 +80,54 @@ class _Publication:
                 continue
             self.directories.append(item)
 
-    def temp(self, directory: Path, data: bytes, mode: int) -> tuple[Path, os.stat_result]:
-        fd, name = tempfile.mkstemp(dir=directory, prefix=TEMP_PREFIX)
-        path = Path(name)
-        self.temps.append(path)
-        with os.fdopen(fd, "wb") as stream:
-            os.fchmod(stream.fileno(), mode)
-            stream.write(data)
-            stream.flush()
-            os.fsync(stream.fileno())
-            return path, os.fstat(stream.fileno())
-
     def create(self, path: Path, data: bytes) -> None:
-        temp, info = self.temp(path.parent, data, CREATED_MODE)
-        # Record before linking, so no instant exists where this run's target is unrecorded.
-        self.created.append((path, info.st_ino, info.st_dev))
+        def fill(temp: Path) -> None:
+            temp.write_bytes(data)
+            info = temp.stat()
+            # Record before linking, so no instant exists where this run's target is unrecorded.
+            self.created.append((path, info.st_ino, info.st_dev))
+
         try:
-            os.link(temp, path)
+            write_file(self.fs, path, fill, replace=False, mode=CREATED_MODE, prefix=TEMP_PREFIX)
         except FileExistsError:
             raise
         except OSError as error:  # such as a filesystem without hard links
             raise ConfigError(f"{path}: cannot create: {error.strerror}") from error
-        temp.unlink()
-        self.temps.remove(temp)
 
     def replace_ignore(self, path: Path, data: bytes, expected: bytes) -> None:
         before = path.lstat()
         mode = stat.S_IMODE(before.st_mode)
-        temp, info = self.temp(path.parent, data, mode)
-        try:
-            unchanged = _regular(path) and path.read_bytes() == expected
-        except FileNotFoundError:
-            unchanged = False
-        if not unchanged:
-            raise ConfigError(".gitignore changed during initialization; retry")
-        self.original = _Original(
-            expected,
-            mode,
-            before.st_atime_ns,
-            before.st_mtime_ns,
-            info.st_ino,
-            info.st_dev,
-            data,
-        )
-        temp.replace(path)
-        self.temps.remove(temp)
+
+        def fill(temp: Path) -> None:
+            temp.write_bytes(data)
+            try:
+                unchanged = _regular(path) and path.read_bytes() == expected
+            except FileNotFoundError:
+                unchanged = False
+            if not unchanged:
+                raise ConfigError(".gitignore changed during initialization; retry")
+            info = temp.stat()
+            self.original = _Original(
+                expected,
+                mode,
+                before.st_atime_ns,
+                before.st_mtime_ns,
+                info.st_ino,
+                info.st_dev,
+                data,
+            )
+
+        write_file(self.fs, path, fill, mode=mode, prefix=TEMP_PREFIX)
 
     def rollback(self) -> None:
         for path, inode, device in reversed(self.created):
             with contextlib.suppress(OSError):
                 info = path.lstat()
                 if (info.st_ino, info.st_dev) == (inode, device):
-                    path.unlink()
+                    self.fs.remove_file(path)
         if self.original is not None:
             with contextlib.suppress(OSError):
                 self._restore_ignore(self.original)
-        for temp in self.temps:
-            with contextlib.suppress(OSError):
-                temp.unlink(missing_ok=True)
         for directory in reversed(self.directories):
             with contextlib.suppress(OSError):
                 directory.rmdir()
@@ -148,15 +139,18 @@ class _Publication:
             return
         if path.read_bytes() != original.written:
             return
-        temp, _info = self.temp(path.parent, original.data, original.mode)
-        os.utime(temp, ns=(original.atime, original.mtime))
-        temp.replace(path)
-        self.temps.remove(temp)
+
+        def fill(temp: Path) -> None:
+            temp.write_bytes(original.data)
+            os.utime(temp, ns=(original.atime, original.mtime))
+
+        write_file(self.fs, path, fill, mode=original.mode, prefix=TEMP_PREFIX)
 
 
 class WorkspaceInitializer:
-    def __init__(self, directory: Path) -> None:
+    def __init__(self, directory: Path, fs: FileSystem) -> None:
         self.directory = directory
+        self.fs = fs
 
     def _target(self, name: str) -> Path:
         relative = Path(name)
@@ -203,19 +197,19 @@ class WorkspaceInitializer:
             if not path.exists(follow_symlinks=False):
                 continue
             if _leftover(path, data):
-                path.unlink()
+                self.fs.remove_file(path)
                 removed.append(name)
             else:
                 changed.append(path)
         for temp in self._temps(outputs):
-            temp.unlink()
+            self.fs.remove_file(temp)
         if changed:
             raise ConfigError(f"{changed[0]}: changed; not removed")
         return tuple(removed)
 
     def publish(self, outputs: Mapping[str, bytes], *, expected_ignore: bytes | None) -> None:
         paths = {name: self._target(name) for name in outputs}
-        publication = _Publication(self.directory)
+        publication = _Publication(self.directory, self.fs)
         try:
             publication.ensure_directory(self.directory)
             for name, data in outputs.items():
@@ -234,4 +228,6 @@ class WorkspaceInitializer:
 
 
 def create(directory: Path) -> WorkspaceInitializer:
-    return WorkspaceInitializer(directory)
+    """Raises UnsupportedPlatformError on a platform the file-system facility has no backend
+    for."""
+    return WorkspaceInitializer(directory, native())

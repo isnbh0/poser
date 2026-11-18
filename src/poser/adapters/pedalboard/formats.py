@@ -9,13 +9,12 @@ Serum 2's `.SerumPreset` format is deferred: whether a `.SerumPreset` file can b
 """
 
 import json
-import os
-import tempfile
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
+from poser.adapters.filesystem import FileSystem, write_text_file
 from poser.adapters.pedalboard.state import build_state, decode_state, encode_state
 from poser.core.jsonvalue import json_object
 from poser.core.names import Suffix
@@ -123,21 +122,11 @@ class SavedFormat:
             raise PresetError(str(error)) from error
         return SavedSound(description, state)
 
-    def write_sound(self, path: Path, sound: SavedSound) -> None:
-        """Write a sound file through a temporary file, so a reader never sees a partial one."""
+    def write_sound(self, fs: FileSystem, path: Path, sound: SavedSound) -> None:
+        """Replace or create a sound file in one step through `fs`, so a reader never sees a
+        partial one."""
         text = json.dumps({"description": sound.description, "state": encode_state(sound.state)})
-        fd, name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.stem}.", suffix=".json")
-        temp = Path(name)
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as output:
-                output.write(text + "\n")
-            # mkstemp creates the file owner-only; give it the usual umask-based mode.
-            umask = os.umask(0)
-            os.umask(umask)
-            temp.chmod(0o666 & ~umask)
-            temp.replace(path)
-        finally:
-            temp.unlink(missing_ok=True)
+        write_text_file(fs, path, text + "\n")
 
     def read_state(self, path: Path) -> bytes:
         return self.read_sound(path).state

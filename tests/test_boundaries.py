@@ -35,6 +35,12 @@ FCNTL_USERS = {"poser/adapters/filesystem_posix.py"}
 CTYPES_USERS = {"poser/adapters/filesystem_posix.py", "poser/adapters/isolation_windows.py"}
 WINDOWS_API_USERS = {"poser/adapters/filesystem_windows.py"}
 LINK_PREDICATE = {"poser/core/paths.py"}
+FILE_SYSTEM_FACILITY = {
+    "poser/adapters/filesystem.py",
+    "poser/adapters/filesystem_posix.py",
+    "poser/adapters/filesystem_windows.py",
+}
+SCSYNTH = Path(__file__).resolve().parent.parent / "packages" / "poser-scsynth" / "src"
 LIBRARY_HOMES = {
     "pyloudnorm": {"poser/adapters/measuring.py"},
     "scipy": {"poser/adapters/measuring.py"},
@@ -459,6 +465,70 @@ def test_only_the_link_predicate_asks_about_symlinks_or_junctions() -> None:
 def test_the_call_check_can_fail(tmp_path: Path) -> None:
     (tmp_path / "bad.py").write_text("p.is_symlink()\n", encoding="utf-8", newline="\n")
     assert calls_to({"is_symlink"}, tmp_path) == {f"{tmp_path.name}/bad.py"}
+
+
+def file_changes(root: Path = POSER) -> set[str]:
+    """Return the files under `root`, relative to its parent, that rename, replace, or remove a
+    file, hard-link one, or make a temporary file themselves.
+
+    Those calls are `rename`, `unlink`, `rmtree`, `mkstemp`, and `hardlink_to` by any receiver,
+    `os.remove`, `os.replace`, and `os.link`, and a `replace` with one argument, which only
+    `Path.replace` takes (`str.replace` takes two).
+    """
+    found: set[str] = set()
+    for path in source_files(root):
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"), filename=str(path))):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            name = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", None)
+            on_os = (
+                isinstance(func, ast.Attribute)
+                and isinstance(func.value, ast.Name)
+                and func.value.id == "os"
+            )
+            if (
+                name in {"rename", "unlink", "rmtree", "mkstemp", "hardlink_to"}
+                or (on_os and name in {"remove", "replace", "link"})
+                or (name == "replace" and len(node.args) == 1 and not node.keywords)
+            ):
+                found.add(path.relative_to(root.parent).as_posix())
+    return found
+
+
+def test_only_the_file_system_facility_renames_replaces_or_removes_files() -> None:
+    """On Windows a read-only mark or a program holding a file open refuses these, and the
+    facility's Windows backend clears the mark and waits briefly, so every call goes through
+    the facility. `write_file` is the one way to publish a file whole."""
+    assert file_changes() == FILE_SYSTEM_FACILITY
+    assert file_changes(SCSYNTH) == set()
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        "path.rename(other)",
+        "path.unlink()",
+        "shutil.rmtree(path)",
+        "tempfile.mkstemp()",
+        "path.hardlink_to(other)",
+        "os.remove(path)",
+        "os.replace(path, other)",
+        "os.link(path, other)",
+        "path.replace(other)",
+    ],
+)
+def test_the_file_change_check_can_fail(tmp_path: Path, call: str) -> None:
+    (tmp_path / "bad.py").write_text(f"{call}\n", encoding="utf-8", newline="\n")
+    assert file_changes(tmp_path) == {f"{tmp_path.name}/bad.py"}
+
+
+@pytest.mark.parametrize(
+    "call", ["text.replace('a', 'b')", "dataclasses.replace(song, marks=())", "items.remove(x)"]
+)
+def test_the_file_change_check_passes_other_calls(tmp_path: Path, call: str) -> None:
+    (tmp_path / "good.py").write_text(f"{call}\n", encoding="utf-8", newline="\n")
+    assert file_changes(tmp_path) == set()
 
 
 def test_only_the_wav_adapter_reads_audio_files() -> None:

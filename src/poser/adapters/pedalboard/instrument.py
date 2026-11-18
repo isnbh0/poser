@@ -344,7 +344,7 @@ class PedalboardInstrument:
             target = self._target(name, replace=replace)
             if isinstance(target, str):
                 return target
-            SavedFormat().write_sound(target, sound)
+            SavedFormat().write_sound(self._fs, target, sound)
         self._refresh_saved()
         return self._ref(f"{SAVED_SOURCE}/{name}")
 

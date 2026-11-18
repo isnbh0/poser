@@ -1,18 +1,25 @@
 """Standalone drawing and checked, atomic directory-entry publication."""
 
 import os
+import tempfile
 import tomllib
 from pathlib import Path
 
 import pytest
+from helpers import assert_mode
 from workspaces import write_script_song, write_song
 
 from poser.cli import piano_roll
-from poser.compose import Composition
+from poser.compose import Composition, file_writer
 from poser.core.piano_roll import PianoRoll
 from poser.core.ports import PianoRollDrawer
 
 PNG = b"\x89PNG\r\n\x1a\n"
+WRITER = file_writer()
+
+
+def draw_png(path: Path) -> None:
+    path.write_bytes(PNG)
 
 
 @pytest.fixture
@@ -107,9 +114,32 @@ def test_publish_modes(tmp_path: Path, *, replace: bool) -> None:
             assert output.read_bytes() == b"old"
         path.write_bytes(PNG)
 
-    assert piano_roll._publish(song, output, draw, replace=replace) == output
+    assert piano_roll._publish(WRITER, song, output, draw, replace=replace) == output
     assert output.read_bytes() == PNG
     assert sorted(p.name for p in tmp_path.iterdir()) == ["roll.png", "song.py"]
+
+
+def test_new_png_gets_umask_permissions(tmp_path: Path) -> None:
+    song = tmp_path / "song.py"
+    song.write_text("input", encoding="utf-8", newline="\n")
+    old = os.umask(0o022)
+    try:
+        piano_roll._publish(WRITER, song, tmp_path / "roll.png", draw_png, replace=False)
+    finally:
+        os.umask(old)
+    assert_mode(tmp_path / "roll.png", 0o644)
+
+
+@pytest.mark.parametrize("mode", [0o640, 0o444])
+def test_replaced_png_keeps_its_mode(tmp_path: Path, mode: int) -> None:
+    song = tmp_path / "song.py"
+    song.write_text("input", encoding="utf-8", newline="\n")
+    output = tmp_path / "roll.png"
+    output.write_bytes(b"old")
+    output.chmod(mode)
+    piano_roll._publish(WRITER, song, output, draw_png, replace=True)
+    assert output.read_bytes() == PNG
+    assert_mode(output, mode)
 
 
 @pytest.mark.parametrize("replace", [False, True])
@@ -147,7 +177,7 @@ def test_precommit_failures(
                 output.mkdir()
 
     with pytest.raises((OSError, ValueError, RuntimeError)):
-        piano_roll._publish(song, output, draw, replace=replace)
+        piano_roll._publish(WRITER, song, output, draw, replace=replace)
     assert not list(tmp_path.glob(".roll.png.*"))
     assert song.read_bytes() == b"input"
     if failure in {"draw", "commit"}:
@@ -178,10 +208,10 @@ def test_cleanup_never_changes_outcome(
 
     if fail_draw:
         with pytest.raises(RuntimeError, match="primary drawing error"):
-            piano_roll._publish(song, output, draw, replace=False)
+            piano_roll._publish(WRITER, song, output, draw, replace=False)
         assert not output.exists()
     else:
-        piano_roll._publish(song, output, draw, replace=False)
+        piano_roll._publish(WRITER, song, output, draw, replace=False)
         assert output.read_bytes() == PNG
     (residual,) = tmp_path.glob(".roll.png.*")
     assert str(residual) in capsys.readouterr().err
@@ -216,7 +246,7 @@ def test_command_errors(
         def denied(*args: object, **kwargs: object) -> tuple[int, str]:
             raise PermissionError("unwritable parent")
 
-        monkeypatch.setattr(piano_roll.tempfile, "mkstemp", denied)
+        monkeypatch.setattr(tempfile, "mkstemp", denied)
     assert piano_roll.main([str(song), "--output", str(output)]) == 2
     error = capsys.readouterr().err
     assert "piano-roll:" in error
@@ -272,7 +302,7 @@ def test_competing_regular_file(tmp_path: Path) -> None:
         output.write_bytes(b"competitor")
 
     with pytest.raises(FileExistsError):
-        piano_roll._publish(song, output, draw, replace=False)
+        piano_roll._publish(WRITER, song, output, draw, replace=False)
     assert output.read_bytes() == b"competitor"
     assert not list(tmp_path.glob(".roll.png.*"))
 
@@ -293,7 +323,7 @@ def test_exclusive_commit_race(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
         path.write_bytes(PNG)
 
     with pytest.raises(FileExistsError):
-        piano_roll._publish(song, output, draw, replace=False)
+        piano_roll._publish(WRITER, song, output, draw, replace=False)
     assert output.read_bytes() == b"competitor"
     assert not list(tmp_path.glob(".roll.png.*"))
 

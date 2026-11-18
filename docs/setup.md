@@ -144,6 +144,11 @@ run if `AGENTS.md`, `POSER.md`, `CLAUDE.md`, `poser.toml`, or `songs/demo.yaml` 
 other content, and merges its required entries into an existing `.gitignore`; if it refuses, follow
 the diagnostic, which names the conflicting path.
 
+On Windows, a program holding a studio file open, such as a media player playing a render,
+Explorer's preview pane, or a virus scanner, stops poser from replacing or removing that file.
+poser waits briefly for the program to let go. If it keeps the file open, the command names the
+file and says another program may hold it; close that program and run the command again.
+
 If initialization succeeds but `check-instruments` fails, read the diagnostic.
 Failures include load errors, crashes, timeouts, non-finite output, silence, and missing notes.
 Correct the installation or `poser.toml`, run `uv run update-guide` if its inputs changed, and

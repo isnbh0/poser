@@ -6,7 +6,7 @@ adapter-owned payloads as `Json`, names as name types, and failure statuses as e
 every collection is a tuple, so nothing a receiver does to a value can change what another sees.
 """
 
-from collections.abc import Collection, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from pathlib import Path
@@ -63,6 +63,7 @@ def _tuple_of[T](owner: str, field: str, value: object, kind: type[T]) -> tuple[
     return cast("tuple[T, ...]", items)
 
 
+@runtime_checkable
 class WorkspaceInitializer(Protocol):
     """No-clobber publication with in-process rollback."""
 
@@ -151,9 +152,10 @@ class AudioFiles(Protocol):
     def write(self, path: Path, audio: Audio) -> None:
         """Write audio in the stem format.
 
-        Writes through a temporary file with a unique name (tempfile.mkstemp) in the same
-        directory, then replaces `path`, so a reader never sees a partial file and two writers
-        never share a temporary file. Removes the temporary file and raises OSError on failure.
+        Writes through a temporary file with a unique name in the same directory, then replaces
+        `path`, even a read-only file there, so a reader never sees a partial file and two
+        writers never share a temporary file. Raises OSError on failure, after removing the
+        temporary file when the platform allows.
         """
         ...
 
@@ -804,6 +806,36 @@ class DeliveryWriter(Protocol):
     def stage(
         self, destination: Path, files: Mapping[Path, bytes]
     ) -> AbstractContextManager[StagedDelivery]: ...
+
+
+@runtime_checkable
+class FileWriter(Protocol):
+    """Publish one file whole, so a reader of its path finds the old file or the complete new
+    one, never part of one."""
+
+    def write(
+        self,
+        path: Path,
+        fill: Callable[[Path], object],
+        *,
+        replace: bool,
+        suffix: str = ".tmp",
+        leftover: Callable[[Path, OSError], object] | None = None,
+    ) -> None:
+        """Publish at `path` the file `fill` writes into a fresh, empty temporary file in `path`'s
+        directory, whose name ends in `suffix`. An exception from `fill` propagates, and nothing
+        is published.
+
+        With `replace`, a file at `path` is replaced, even a read-only one, and keeps its
+        permission bits; a symbolic link at `path` is kept and the file it leads to replaced.
+        Without `replace`, FileExistsError is raised when anything, a link included, is at
+        `path`. A new file gets the umask-based permission bits.
+
+        Failing to remove the temporary file never changes the outcome: `leftover`, when given,
+        receives its path and the error. Without `leftover`, that failure is raised after the
+        file is published, or added as a note to the exception of a failed write.
+        """
+        ...
 
 
 # The render store

@@ -14,8 +14,8 @@ A unit or record is written in a `.tmp-<random>` directory beside its final plac
 into place when complete, so a reader sees each complete or not at all. `latest` is removed
 before a record is published and linked to it afterward, so whenever it exists it leads to the
 newest record. `sweep` deletes the drafts an interrupted run left. Node names never appear in a
-path. Locking, syncing, and links go through the `FileSystem` facility the store is built with,
-and every walk of the store enters no link.
+path. Locking, syncing, links, writing files, and renaming and removing entries go through the
+`FileSystem` facility the store is built with, and every walk of the store enters no link.
 
 Every run takes the lock, so every song directory that holds anything holds `.lock`, and
 `song` refuses an id whose directory would be inside another song's, or hold one. `lock` checks
@@ -24,17 +24,15 @@ it does, so two handles taken before either locked cannot nest. Links under the 
 are followed as the filesystem follows them, and `protected_roots` names where they lead.
 """
 
-import errno
 import json
 import os
 import re
-import shutil
 import tempfile
 from collections.abc import Collection, Generator, Mapping
-from contextlib import ExitStack, contextmanager
+from contextlib import ExitStack, contextmanager, suppress
 from pathlib import Path, PurePath
 
-from poser.adapters.filesystem import FileSystem, native
+from poser.adapters.filesystem import FileSystem, native, write_text_file
 from poser.adapters.loading import refuse_options
 from poser.core.jsonvalue import JsonValue, json_object
 from poser.core.names import Identifier, SongId, Suffix, is_inner_relative
@@ -76,24 +74,6 @@ Each song's results are under `renders/<song path>/`, such as `renders/songs/dem
 """
 
 
-def _write_atomic(path: Path, text: str) -> None:
-    """Write text through a temporary file and `os.replace`, so a reader never sees part of it."""
-    fd, name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
-    temp = Path(name)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as output:
-            output.write(text)
-            output.flush()
-            os.fsync(output.fileno())
-        # mkstemp creates the file owner-only; give it the usual umask-based mode.
-        umask = os.umask(0)
-        os.umask(umask)
-        temp.chmod(0o666 & ~umask)
-        temp.replace(path)
-    finally:
-        temp.unlink(missing_ok=True)
-
-
 def _sync_tree(fs: FileSystem, directory: Path) -> None:
     """Flush every file and directory under `directory`, and `directory` itself, to disk, so a
     rename publishes complete contents."""
@@ -103,15 +83,21 @@ def _sync_tree(fs: FileSystem, directory: Path) -> None:
     fs.sync(directory)
 
 
-def _remove_tree(directory: Path) -> None:
+def _discard(fs: FileSystem, directory: Path) -> None:
+    """Delete `directory` if it exists, leaving whatever cannot be deleted for `sweep`."""
+    with suppress(OSError):
+        fs.remove_tree(directory)
+
+
+def _remove_tree(fs: FileSystem, directory: Path) -> None:
     """Delete `directory`, first renaming it to a draft name, so it is whole or gone under its
     own name and an interrupted deletion leaves only a draft for `sweep`."""
     doomed = directory.parent / f"{DRAFT_PREFIX}{os.urandom(8).hex()}"
     try:
-        directory.rename(doomed)
+        fs.rename_directory(directory, doomed)
     except FileNotFoundError:
         return
-    shutil.rmtree(doomed, ignore_errors=True)
+    _discard(fs, doomed)
 
 
 def _draft_dir(parent: Path) -> Path:
@@ -289,7 +275,7 @@ class FileSongStore:
             if parent.is_dir():
                 for entry in parent.iterdir():
                     if entry.name.startswith(DRAFT_PREFIX):
-                        shutil.rmtree(entry, ignore_errors=True)
+                        _discard(self._fs, entry)
         if self._directory.is_dir():
             # Earlier versions built `latest` at a draft name; an interruption could leave one.
             for entry in self._directory.glob(f"{LATEST_NAME}{DRAFT_PREFIX}*"):
@@ -319,31 +305,30 @@ class FileSongStore:
         draft = FileUnitDraft(_draft_dir(objects), self._stem_suffix)
         try:
             yield draft
-            _write_atomic(draft.directory / META_NAME, draft.meta_text())
+            write_text_file(self._fs, draft.directory / META_NAME, draft.meta_text())
             _sync_tree(self._fs, draft.directory)
             self._publish(draft.directory, objects / key, replace=replace)
         finally:
-            shutil.rmtree(draft.directory, ignore_errors=True)
+            _discard(self._fs, draft.directory)
 
     def _publish(self, draft: Path, target: Path, *, replace: bool) -> None:
         """Rename the draft to `target`. An existing complete unit there is kept unless
         `replace`; anything else there is swapped out and deleted."""
         try:
-            draft.rename(target)
-        except OSError as error:
-            if error.errno not in (errno.EEXIST, errno.ENOTEMPTY):
-                raise
+            self._fs.rename_directory(draft, target)
+        except FileExistsError:
+            pass
         else:
             self._fs.sync(target.parent)
             return
         if not replace and self.find(target.name) is not None:
             return
         old = target.parent / f"{DRAFT_PREFIX}{os.urandom(8).hex()}"
-        target.rename(old)
+        self._fs.rename_directory(target, old)
         try:
-            draft.rename(target)
+            self._fs.rename_directory(draft, target)
         finally:
-            shutil.rmtree(old, ignore_errors=True)
+            _discard(self._fs, old)
             self._fs.sync(target.parent)
 
     def keep_units(self, keys: Collection[str]) -> None:
@@ -353,11 +338,11 @@ class FileSongStore:
         kept = set(keys)
         for entry in objects.iterdir():
             if not entry.name.startswith(DRAFT_PREFIX) and entry.name not in kept:
-                _remove_tree(entry)
+                _remove_tree(self._fs, entry)
 
     def remove_unit(self, key: str) -> None:
         _check_key(key)
-        _remove_tree(self._directory / OBJECTS_DIR / key)
+        _remove_tree(self._fs, self._directory / OBJECTS_DIR / key)
 
     @contextmanager
     def write_record(
@@ -369,15 +354,15 @@ class FileSongStore:
         run = max(taken, default=0) + 1
         draft = FileRecordDraft(_draft_dir(history), run)
         try:
-            _write_atomic(draft.path(f"{SONG_NAME}{suffix}"), song_text)
+            write_text_file(self._fs, draft.path(f"{SONG_NAME}{suffix}"), song_text)
             yield draft
             _sync_tree(self._fs, draft.directory)
             # Before the rename, so `latest`, whenever it exists, names the newest record.
             self.clear_latest()
-            draft.directory.rename(self.record_path(run))
+            self._fs.rename_directory(draft.directory, self.record_path(run))
             self._fs.sync(history)
         finally:
-            shutil.rmtree(draft.directory, ignore_errors=True)
+            _discard(self._fs, draft.directory)
         if latest:
             self._point_latest(f"{HISTORY_DIR}/{run}")
 
@@ -395,9 +380,9 @@ class FileSongStore:
         if is_link(link):
             self._fs.remove_link(link)
         elif link.is_file():
-            link.unlink()
+            self._fs.remove_file(link)
         elif link.is_dir():
-            shutil.rmtree(link)  # Anything at `latest` that is not the link is removed.
+            self._fs.remove_tree(link)  # Anything at `latest` that is not the link is removed.
 
 
 class FileRenderStore:

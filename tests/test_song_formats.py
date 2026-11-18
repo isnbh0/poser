@@ -3,7 +3,6 @@
 import hashlib
 import os
 from pathlib import Path
-from typing import Self
 
 import numpy as np
 import pytest
@@ -19,7 +18,6 @@ from test_song import (
     valid_song,
 )
 
-from poser.adapters import song_formats
 from poser.adapters.song_formats import (
     SONG_FORMATS,
     ScriptSongFormat,
@@ -114,23 +112,13 @@ def test_failed_replace_keeps_the_old_file_and_leaves_no_temp_file(
 
 def test_failed_write_leaves_no_temp_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     path = tmp_path / "song.yaml"
-    real_fdopen = song_formats.os.fdopen
+    real_write_text = Path.write_text
 
-    class FailingFile:
-        def __init__(self, fd: int, mode: str, *, encoding: str, newline: str) -> None:
-            self.handle = real_fdopen(fd, mode, encoding=encoding, newline=newline)
+    def write_then_fail(self: Path, text: str, encoding: str, newline: str) -> int:
+        real_write_text(self, text, encoding=encoding, newline=newline)
+        raise OSError("flush failed")
 
-        def __enter__(self) -> Self:
-            return self
-
-        def __exit__(self, *args: object) -> None:
-            self.handle.close()
-            raise OSError("flush failed")
-
-        def write(self, text: str) -> int:
-            return self.handle.write(text)
-
-    monkeypatch.setattr(song_formats.os, "fdopen", FailingFile)
+    monkeypatch.setattr(Path, "write_text", write_then_fail)
     with pytest.raises(SongError, match="flush failed"):
         write_yaml_song(helper_song(), path)
 
@@ -145,6 +133,18 @@ def test_written_song_keeps_the_existing_file_mode(tmp_path: Path) -> None:
     write_yaml_song(helper_song(), path)
 
     assert_mode(path, 0o640)
+
+
+def test_written_song_replaces_a_read_only_file_and_keeps_it_read_only(tmp_path: Path) -> None:
+    path = tmp_path / "song.yaml"
+    path.write_text("old\n", encoding="utf-8", newline="\n")
+    path.chmod(0o444)
+
+    write_yaml_song(helper_song(), path)
+
+    assert_mode(path, 0o444)
+    assert loaded(path) == helper_song()
+    assert [entry.name for entry in tmp_path.iterdir()] == ["song.yaml"]
 
 
 def test_new_song_file_gets_umask_permissions(tmp_path: Path) -> None:

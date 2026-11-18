@@ -409,6 +409,19 @@ def test_a_lone_temp_file_is_a_leftover(
     assert snapshot(target) == clean
 
 
+def test_a_read_only_temp_file_is_removed_as_a_leftover(
+    tmp_path: Path, plugin: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Replacing a read-only `.gitignore` gives its temp file that mode, and Windows refuses to
+    delete a read-only file unless the attribute is cleared first."""
+    target, clean = interrupted(tmp_path, plugin)
+    (target / ".poser-tmp-x").chmod(0o444)
+    capsys.readouterr()
+    assert init_workspace.main([*args(target, plugin), "--remove-leftovers"]) == 0
+    assert not list(target.rglob(".poser-tmp-*"))
+    assert snapshot(target) == clean
+
+
 @pytest.mark.parametrize("flag", [[], ["--remove-leftovers"]])
 def test_edited_target_refuses_and_deletes_nothing(
     tmp_path: Path, plugin: Path, capsys: pytest.CaptureFixture[str], flag: list[str]

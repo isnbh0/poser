@@ -48,6 +48,7 @@ from poser.core.ports import (
     ConfigError,
     DeliveryWriter,
     Effect,
+    FileWriter,
     Framework,
     Guided,
     Instrument,
@@ -64,13 +65,27 @@ from poser.core.ports import (
 )
 
 
+def _poser_part[T](target: str, port: type[T], *args: object) -> T:
+    """Build one of poser's own fixed parts, which take no configuration, from the factory at
+    the import path `target`. Raises ConfigError when the factory is missing, is not callable,
+    or makes something that is not a `port`, and UnsupportedPlatformError from the factory."""
+    factory = load_object(target)
+    if not callable(factory):
+        raise ConfigError(f"{target} is not a factory")
+    made = factory(*args)
+    if not isinstance(made, port):
+        raise ConfigError(f"{target} made a {type(made).__name__}, not a {port.__name__}")
+    return made
+
+
 def workspace_initializer(directory: Path) -> WorkspaceInitializer:
     """Build the filesystem transaction owner without performing I/O."""
-    factory = cast(
-        "Callable[[Path], WorkspaceInitializer]",
-        load_object("poser.adapters.workspace_init:create"),
-    )
-    return factory(directory)
+    return _poser_part("poser.adapters.workspace_init:create", WorkspaceInitializer, directory)
+
+
+def file_writer() -> FileWriter:
+    """Build the writer that publishes one file whole, without performing filesystem work."""
+    return _poser_part("poser.adapters.filesystem:create_file_writer", FileWriter)
 
 
 INSTRUMENT = "instrument"
@@ -684,13 +699,7 @@ class Composition:
 
 def delivery_writer() -> DeliveryWriter:
     """Build the default delivery publisher without performing filesystem work."""
-    factory = load_object("poser.adapters.delivery:create")
-    if not callable(factory):
-        raise ConfigError("delivery writer factory is not callable")
-    writer = factory()
-    if not isinstance(writer, DeliveryWriter):
-        raise ConfigError("delivery writer does not implement DeliveryWriter")
-    return writer
+    return _poser_part("poser.adapters.delivery:create", DeliveryWriter)
 
 
 def load(path: Path, sounds_dir: Path, renders_dir: Path) -> Composition:
