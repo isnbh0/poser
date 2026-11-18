@@ -18,8 +18,9 @@ from poser.adapters.filestore import (
     FileSongStore,
 )
 from poser.adapters.filesystem import native
+from poser.cli.workspace import Workspace
 from poser.core.names import Identifier, SongId, Suffix
-from poser.core.paths import PathLimit, is_link
+from poser.core.paths import PathLimit, PathUnit, is_link
 from poser.core.ports import SongBusyError, StemMeta
 from poser.core.statuses import StemStatus
 
@@ -398,6 +399,7 @@ def test_lock_refuses_a_song_nested_after_its_handle_was_taken(tmp_path: Path) -
 
 SONG = SongId("songs/a.yaml")
 LIFT = "turn on long paths"
+UNITS = PathUnit.UTF16_UNITS  # The temporary paths are ASCII, so either unit counts the same.
 
 
 def limited(
@@ -417,7 +419,9 @@ def test_a_song_whose_results_fit_the_path_limit_exactly_is_kept(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     unit = deepest(tmp_path, KEY_A)
-    store = limited(monkeypatch, tmp_path, PathLimit(len(str(unit)), len(str(unit / "meta.json"))))
+    store = limited(
+        monkeypatch, tmp_path, PathLimit(len(str(unit)), len(str(unit / "meta.json")), UNITS)
+    )
     publish(store.song(SONG), KEY_A, b"stem")
     assert (unit / "meta.json").is_file()
     assert (unit / "0.wav").is_file()
@@ -430,9 +434,9 @@ def test_a_song_whose_results_would_pass_the_path_limit_is_refused(
     unit = deepest(tmp_path)
     path = unit if kind == "directory" else unit / "meta.json"
     limit = (
-        PathLimit(len(str(unit)) - 1, len(str(unit / "meta.json")))
+        PathLimit(len(str(unit)) - 1, len(str(unit / "meta.json")), UNITS)
         if kind == "directory"
-        else PathLimit(len(str(unit)), len(str(unit / "meta.json")) - 1, LIFT)
+        else PathLimit(len(str(unit)), len(str(unit / "meta.json")) - 1, UNITS, LIFT)
     )
     remedy = "move the studio or the song to a shorter path"
     with pytest.raises(ValueError, match="cannot keep its results") as refused:
@@ -449,7 +453,7 @@ def test_a_stem_name_longer_than_meta_json_sets_the_song_s_limit(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     unit = deepest(tmp_path)
-    limit = PathLimit(len(str(unit)), len(str(unit / "meta.json")))
+    limit = PathLimit(len(str(unit)), len(str(unit / "meta.json")), UNITS)
     store = limited(monkeypatch, tmp_path, limit, Suffix(".longsuffix"))
     with pytest.raises(ValueError, match="cannot keep its results") as refused:
         store.song(SONG)
@@ -461,7 +465,9 @@ def test_a_stem_past_the_path_limit_is_refused_by_its_published_path(
 ) -> None:
     """`meta.json` and `99999.wav` are the same length; `100000.wav` is one more."""
     unit = deepest(tmp_path, KEY_A)
-    store = limited(monkeypatch, tmp_path, PathLimit(len(str(unit)), len(str(unit / "meta.json"))))
+    store = limited(
+        monkeypatch, tmp_path, PathLimit(len(str(unit)), len(str(unit / "meta.json")), UNITS)
+    )
     with store.song(SONG).write_unit(KEY_A) as draft:
         assert draft.stem_path(99999).name == "99999.wav"
         with pytest.raises(ValueError, match="cannot be kept") as refused:
@@ -472,12 +478,34 @@ def test_a_stem_past_the_path_limit_is_refused_by_its_published_path(
     assert (unit / "0.wav").is_file()
 
 
+def test_a_record_file_past_the_path_limit_is_refused_by_its_longer_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A record's draft, `history/.tmp-<8 characters>`, is longer than its published path,
+    `history/1`, so the draft sets the limit."""
+    unit = deepest(tmp_path)
+    limit = PathLimit(len(str(unit)), len(str(unit / "meta.json")), UNITS)
+    song = limited(monkeypatch, tmp_path, limit).song(SONG)
+    with song.write_record("song", YAML, latest=False) as record:
+        images = record.directory.absolute() / "images"
+        room = limit.file - len(str(images)) - 1
+        assert record.path(f"images/{'x' * room}").name == "x" * room
+        with pytest.raises(ValueError, match="cannot be kept") as refused:
+            record.path(f"images/{'x' * (room + 1)}")
+    assert str(refused.value).startswith(
+        f"the record's images/{'x' * (room + 1)} cannot be kept: its file "
+        f"{images / ('x' * (room + 1))} would be"
+    )
+
+
 def test_a_preview_past_the_path_limit_is_refused(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     directory = (tmp_path / "renders" / ".sound-previews" / "serum").absolute()
     file = directory / "pad.wav"
-    tight = limited(monkeypatch, tmp_path, PathLimit(len(str(directory)), len(str(file)) - 1))
+    tight = limited(
+        monkeypatch, tmp_path, PathLimit(len(str(directory)), len(str(file)) - 1, UNITS)
+    )
     with pytest.raises(ValueError, match="cannot be kept") as refused:
         tight.preview_path(Identifier("serum"), Identifier("pad"))
     assert str(refused.value) == (
@@ -486,15 +514,17 @@ def test_a_preview_past_the_path_limit_is_refused(
         "studio to a shorter path"
     )
     assert not (tmp_path / "renders").exists()
-    exact = limited(monkeypatch, tmp_path, PathLimit(len(str(directory)), len(str(file))))
+    exact = limited(monkeypatch, tmp_path, PathLimit(len(str(directory)), len(str(file)), UNITS))
     assert exact.preview_path(Identifier("serum"), Identifier("pad")) == file
     assert directory.is_dir()
 
 
 def test_the_setup_guide_states_the_windows_budget_for_a_song() -> None:
-    """Windows' directory limit without long paths, 247 characters, less the store's path below
-    the studio: `renders/`, the song's path, and the deepest directory under it."""
-    budget = 247 - len("/renders/") - len(f"/{DEEPEST_DIRECTORY.as_posix()}")
+    """Windows' directory limit without long paths, MAX_PATH less room for an 8.3 name and the
+    null, less the store's path below the studio: its renders folder, the song's path, and the
+    deepest directory under it."""
+    below = f"/{Workspace(Path('studio')).renders_dir.name}/"
+    budget = 260 - 12 - 1 - len(below) - len(f"/{DEEPEST_DIRECTORY.as_posix()}")
     guide = (Path(__file__).parents[1] / "docs" / "setup.md").read_text(encoding="utf-8")
     assert f"together hold at most {budget} characters" in " ".join(guide.split())
 

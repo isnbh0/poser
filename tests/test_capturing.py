@@ -54,6 +54,18 @@ class OrderedAudioFiles(NpyAudioFiles):
         super().write(path, audio)
 
 
+class RefusingRenderStore(FakeRenderStore):
+    """A render store whose `preview_path` raises `error`."""
+
+    def __init__(self, root: Path, error: Exception) -> None:
+        super().__init__(root)
+        self.error = error
+
+    @override
+    def preview_path(self, instrument: Identifier, name: Identifier) -> Path:
+        raise self.error
+
+
 class Setup:
     def __init__(self, tmp_path: Path) -> None:
         failure = SoundFailure(SoundFailureStatus.LOAD_FAILED, "the preset is corrupt")
@@ -179,6 +191,25 @@ def test_store_raising_os_error_is_not_saved_and_writes_no_preview(tmp_path: Pat
 
     assert setup.save() == NotSaved("disk full")
     assert not setup.preview.exists()
+
+
+@pytest.mark.parametrize(
+    ("error", "expected"),
+    [
+        (ValueError("the preview cannot be kept"), Refused("the preview cannot be kept")),
+        (OSError("read-only"), NotSaved("read-only")),
+    ],
+)
+def test_a_preview_the_store_cannot_place_stops_before_the_capture(
+    tmp_path: Path, error: Exception, expected: SaveResult
+) -> None:
+    """The owner shapes no sound that could not keep its preview, and nothing is stored."""
+    setup = Setup(tmp_path)
+    setup.renders = RefusingRenderStore(tmp_path / "renders", error)
+
+    assert setup.save() == expected
+    assert setup.instrument.captures == []
+    assert setup.instrument.stores == []
 
 
 def test_failed_preview_write_names_the_saved_ref(tmp_path: Path) -> None:

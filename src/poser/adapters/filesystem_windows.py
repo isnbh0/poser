@@ -18,7 +18,7 @@ from contextlib import contextmanager, suppress
 from functools import cache
 from pathlib import Path
 
-from poser.core.paths import PathLimit, is_link
+from poser.core.paths import PathLimit, PathUnit, is_link
 from poser.core.ports import PREREQUISITES_URL
 
 assert sys.platform == "win32"  # noqa: S101 - narrows the platform for type checkers.
@@ -45,9 +45,10 @@ MAX_PATH = 260
 SHORT_PATHS = PathLimit(
     directory=MAX_PATH - 12 - 1,
     file=MAX_PATH - 1,
+    unit=PathUnit.UTF16_UNITS,
     lift=f"turn on Windows long paths as {PREREQUISITES_URL} shows",
 )
-LONG_PATHS = PathLimit(32_767 - 1, 32_767 - 1)
+LONG_PATHS = PathLimit(32_767 - 1, 32_767 - 1, PathUnit.UTF16_UNITS)
 
 
 @cache

@@ -138,6 +138,14 @@ def save_sound(
             return Refused(resolved.detail)
         start = resolved
 
+    # Before the owner shapes anything, so a sound that could not keep its preview is not made.
+    try:
+        path = renders.preview_path(name, request.name)
+    except ValueError as error:
+        return Refused(str(error))
+    except OSError as error:
+        return NotSaved(str(error))
+
     with tempfile.TemporaryDirectory() as directory:
         capture = CaptureRequest(
             request.name, start, check_pattern(), Path(directory) / "preview.npy"
@@ -162,7 +170,6 @@ def save_sound(
     # The sound is saved from here on, so nothing below reports it as not saved.
     ref = stored
     try:
-        path = renders.preview_path(name, request.name)
         audio_files.write(path, preview)
         saved = Saved(ref, path, measure_peak_dbfs(preview.samples))
     except OSError as error:

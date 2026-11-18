@@ -14,7 +14,7 @@ from collections.abc import Generator
 from contextlib import contextmanager
 from pathlib import Path
 
-from poser.core.paths import PathLimit
+from poser.core.paths import PathLimit, PathUnit
 
 
 class PosixFileSystem:
@@ -26,9 +26,9 @@ class PosixFileSystem:
     """
 
     def path_limit(self) -> PathLimit:
-        """`PATH_MAX` less its terminating null, 1023 characters on macOS and 4095 on Linux."""
+        """`PATH_MAX` less its terminating null, in bytes: 1023 on macOS and 4095 on Linux."""
         longest = os.pathconf("/", "PC_PATH_MAX") - 1
-        return PathLimit(longest, longest)
+        return PathLimit(longest, longest, PathUnit.BYTES)
 
     @contextmanager
     def lock(self, path: Path, *, wait: bool) -> Generator[None]:

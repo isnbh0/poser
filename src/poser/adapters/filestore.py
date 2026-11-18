@@ -51,13 +51,13 @@ SONG_NAME = "song"
 DRAFT_PREFIX = ".tmp-"
 PREVIEWS_DIR = ".sound-previews"  # The leading dot keeps it apart from every song's directory.
 
-_KEY = re.compile(r"[0-9a-f]{64}")
+KEY_LENGTH = 64
+_KEY = re.compile(rf"[0-9a-f]{{{KEY_LENGTH}}}")
 SHORTEN_SONG = "move the studio or the song to a shorter path"
-# The deepest directory a song's store makes, relative to the song's directory: a unit's. Every
-# unit holds `meta.json` and stem 0; a unit's draft checks each further stem as it names it. A
-# record's deepest file, `history/<n>/images/node-<position><suffix>`, is shallower while its
-# number, position, and suffix together hold fewer than 62 characters.
-DEEPEST_DIRECTORY = PurePath(OBJECTS_DIR, "0" * 64)
+# The deepest directory a song's store makes, relative to the song's directory: a unit's, which
+# holds `meta.json` and stem 0. `song` checks both against the path limit before any work, and
+# each draft checks every path it names, both in the draft and as published.
+DEEPEST_DIRECTORY = PurePath(OBJECTS_DIR, "0" * KEY_LENGTH)
 
 GUIDE = """\
 ## Where results are kept
@@ -118,7 +118,7 @@ def _draft_dir(parent: Path) -> Path:
 
 def _check_key(key: str) -> None:
     if not (isinstance(key, str) and _KEY.fullmatch(key)):
-        raise ValueError(f"a unit key must be 64 lowercase hex digits, got {key!r}")
+        raise ValueError(f"a unit key must be {KEY_LENGTH} lowercase hex digits, got {key!r}")
 
 
 def _inside_another_song(renders_dir: Path, song_id: SongId) -> str | None:
@@ -187,13 +187,14 @@ class FileUnitDraft:
         self.described: dict[int, StemMeta] = {}
 
     def stem_path(self, index: int) -> Path:
-        """The draft path of stem `index`. Raises ValueError when the stem's published path
-        would pass the system's path limit."""
+        """The draft path of stem `index`. Raises ValueError when the stem's path, in the draft or
+        as published, would pass the system's path limit."""
         if isinstance(index, bool) or not isinstance(index, int) or index < 0:
             raise ValueError(f"a stem index must be a non-negative integer, got {index!r}")
         name = f"{index}{self._stem_suffix}"
-        if problem := self._limit.problem(self._published, name, SHORTEN_SONG):
-            raise ValueError(f"stem {index} cannot be kept: {problem}")
+        for directory in (self.directory, self._published):
+            if problem := self._limit.problem(directory, name, SHORTEN_SONG):
+                raise ValueError(f"stem {index} cannot be kept: {problem}")
         return self.directory / name
 
     def describe(self, index: int, status: StemStatus, peak_dbfs: float) -> None:
@@ -218,17 +219,23 @@ class FileUnitDraft:
 
 
 class FileRecordDraft:
-    """A record being written in its draft directory."""
+    """A record being written in its draft directory, which publishes as `published`."""
 
-    def __init__(self, directory: Path, run: int) -> None:
+    def __init__(self, directory: Path, run: int, published: Path, limit: PathLimit) -> None:
         self.directory = directory
         self.run = run
+        self._published = published
+        self._limit = limit
 
     def path(self, relative: str) -> Path:
         # The platform's rules, so on Windows a backslash or a drive cannot leave the record.
         inner = PurePath(relative)
         if not is_inner_relative(inner):
             raise ValueError(f"a record path must stay inside the record, got {relative!r}")
+        for root in (self.directory, self._published):
+            kept = root.joinpath(*inner.parts)
+            if problem := self._limit.problem(kept.parent, kept.name, SHORTEN_SONG):
+                raise ValueError(f"the record's {inner.as_posix()} cannot be kept: {problem}")
         path = self.directory.joinpath(*inner.parts)
         path.parent.mkdir(parents=True, exist_ok=True)
         return path
@@ -369,7 +376,9 @@ class FileSongStore:
         history.mkdir(parents=True, exist_ok=True)
         taken = [int(entry.name) for entry in history.iterdir() if entry.name.isdecimal()]
         run = max(taken, default=0) + 1
-        draft = FileRecordDraft(_draft_dir(history), run)
+        draft = FileRecordDraft(
+            _draft_dir(history), run, self.record_path(run), self._fs.path_limit()
+        )
         try:
             write_text_file(self._fs, draft.path(f"{SONG_NAME}{suffix}"), song_text)
             yield draft

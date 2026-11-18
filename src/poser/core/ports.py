@@ -879,7 +879,9 @@ class UnitDraft(Protocol):
     """A unit being written, invisible to `find` until it publishes."""
 
     def stem_path(self, index: int) -> Path:
-        """Where the stem of the unit's node at `index` goes. Parent exists on return."""
+        """Where the stem of the unit's node at `index` goes. Parent exists on return. Raises
+        ValueError when the stem's path, in the draft or as published, would pass the system's
+        path limit."""
         ...
 
     def describe(self, index: int, status: StemStatus, peak_dbfs: float) -> None:
@@ -899,7 +901,8 @@ class RecordDraft(Protocol):
     def path(self, relative: str) -> Path:
         """Where the record's file at the relative path `relative` goes, inside the draft. `/`
         separates on every platform, and `\\` on Windows. Parent exists on return. Raises
-        ValueError for a path that leaves the record."""
+        ValueError for a path that leaves the record, or one that, in the draft or as published,
+        would pass the system's path limit."""
         ...
 
     def relative(self, path: Path) -> str:
@@ -971,12 +974,14 @@ class RenderStore(Protocol):
         ...
 
     def song(self, song_id: SongId) -> SongStore:
-        """The store for one song. No two song ids' stores share a file. Raises ValueError for
-        an id whose store would overlap another song's."""
+        """The store for one song. No two song ids' stores share a file. Raises ValueError,
+        before writing anything, for an id the store keeps for itself, one whose store would
+        overlap another song's, or one whose results would pass the system's path limit."""
         ...
 
     def preview_path(self, instrument: Identifier, name: Identifier) -> Path:
-        """Where a saved sound's preview goes. Parent exists on return."""
+        """Where a saved sound's preview goes. Parent exists on return. Raises ValueError,
+        before creating anything, when the path would pass the system's path limit."""
         ...
 
     def protected_roots(self) -> tuple[Path, ...]:

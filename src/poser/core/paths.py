@@ -10,17 +10,35 @@ leave its tree uses `walk`. To ask whether anything at all is at a path, link or
 import os
 from collections.abc import Iterator
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
+
+
+class PathUnit(Enum):
+    """What a platform's path limit counts. The value names it in a message."""
+
+    BYTES = "bytes"
+    """The path's bytes in the file-system encoding, which POSIX's `PATH_MAX` counts."""
+    UTF16_UNITS = "characters"
+    """The path's UTF-16 code units, which Windows counts and calls characters: one for most
+    characters, two for one past U+FFFF."""
+
+    def length(self, path: str) -> int:
+        """How many of this unit `path` holds."""
+        if self is PathUnit.BYTES:
+            return len(os.fsencode(path))
+        return len(path.encode("utf-16-le", "surrogatepass")) // 2
 
 
 @dataclass(frozen=True)
 class PathLimit:
-    """The most characters a platform lets a program's paths hold, counted on the absolute path:
+    """The most a platform lets a program's paths hold, counted in `unit` on the absolute path:
     a directory's and a file's, and what lifts the limit, if anything does, phrased as an
     instruction."""
 
     directory: int
     file: int
+    unit: PathUnit
     lift: str | None = None
 
     def problem(self, directory: Path, file_name: str, shorten: str) -> str | None:
@@ -31,10 +49,10 @@ class PathLimit:
             ("directory", absolute, self.directory),
             ("file", absolute / file_name, self.file),
         ):
-            if len(str(path)) > limit:
+            if (length := self.unit.length(str(path))) > limit:
                 remedy = f"{self.lift}, or {shorten}" if self.lift else shorten
                 return (
-                    f"its {kind} {path} would be {len(str(path))} characters, past the {limit} "
+                    f"its {kind} {path} would be {length} {self.unit.value}, past the {limit} "
                     f"this system allows; to fix it, {remedy}"
                 )
         return None

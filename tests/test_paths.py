@@ -1,4 +1,5 @@
-"""`poser.core.paths`: link detection that knows junctions, and a walk that enters no link."""
+"""`poser.core.paths`: link detection that knows junctions, a walk that enters no link, and the
+limit on a path's length."""
 
 import sys
 from pathlib import Path
@@ -6,7 +7,7 @@ from pathlib import Path
 import pytest
 from links import LINK_KINDS, make_dangling_link, make_link
 
-from poser.core.paths import PathLimit, is_link, walk
+from poser.core.paths import PathLimit, PathUnit, is_link, walk
 
 
 def test_is_link_is_false_for_a_directory_a_file_and_a_missing_path(tmp_path: Path) -> None:
@@ -71,17 +72,33 @@ def test_a_path_limit_measures_the_absolute_path(
     monkeypatch.chdir(tmp_path)
     directory = Path.cwd() / "dir"
     file = directory / "name"
-    fits = PathLimit(len(str(directory)), len(str(file)))
+    units = PathUnit.UTF16_UNITS
+    fits = PathLimit(len(str(directory)), len(str(file)), units)
     assert fits.problem(Path("dir"), "name", "shorten it") is None
-    assert PathLimit(len(str(directory)) - 1, len(str(file))).problem(
+    assert PathLimit(len(str(directory)) - 1, len(str(file)), units).problem(
         Path("dir"), "name", "shorten it"
     ) == (
         f"its directory {directory} would be {len(str(directory))} characters, past the "
         f"{len(str(directory)) - 1} this system allows; to fix it, shorten it"
     )
-    assert PathLimit(len(str(directory)), len(str(file)) - 1, "lift it").problem(
+    assert PathLimit(len(str(directory)), len(str(file)) - 1, units, "lift it").problem(
         Path("dir"), "name", "shorten it"
     ) == (
         f"its file {file} would be {len(str(file))} characters, past the {len(str(file)) - 1} "
         "this system allows; to fix it, lift it, or shorten it"
     )
+
+
+def test_a_path_limit_counts_in_its_unit(tmp_path: Path) -> None:
+    """`€` is three bytes and one UTF-16 unit, and `𝄞` four bytes and two units."""
+    directory = tmp_path.absolute()
+    name = "\u20ac\U0001d11e"
+    file = str(directory / name)
+    ascii_part = len(str(directory)) + 1
+    for unit, length in ((PathUnit.BYTES, ascii_part + 7), (PathUnit.UTF16_UNITS, ascii_part + 3)):
+        assert unit.length(file) == length, unit
+        assert PathLimit(length, length, unit).problem(directory, name, "shorten it") is None
+        assert PathLimit(length, length - 1, unit).problem(directory, name, "shorten it") == (
+            f"its file {file} would be {length} {unit.value}, past the {length - 1} this system "
+            "allows; to fix it, shorten it"
+        )

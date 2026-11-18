@@ -13,7 +13,7 @@ import pytest
 from helpers import assert_mode
 from interpreter import start_python
 from links import LINK_KINDS, make_link
-from paths import longest_created, make_directory, make_file
+from paths import longest_created, make_directory, make_file, path_of_length
 
 from poser.adapters.filesystem import FileSystem, native
 from poser.core.paths import is_link
@@ -336,14 +336,26 @@ def test_remove_tree_of_nothing_raises_file_not_found(fs: FileSystem, tmp_path: 
         fs.remove_tree(tmp_path / "missing")
 
 
-def test_the_path_limit_is_where_the_system_refuses(fs: FileSystem, tmp_path: Path) -> None:
-    """The longest directory and file paths this process creates are the reported limits. The
-    Windows workflow sets POSER_EXPECT_LONG_PATHS to the long-paths switch it set."""
+@pytest.mark.parametrize("fill", ["d", "\u20ac", "\U0001d11e"], ids=["ascii", "euro", "g-clef"])
+def test_the_path_limit_is_where_the_system_refuses(
+    fs: FileSystem, tmp_path: Path, fill: str
+) -> None:
+    """The longest directory and file paths this process creates, of `fill` characters, fit the
+    reported limit, and one character more passes it. `d` is one byte and one UTF-16 unit, `€`
+    three bytes and one unit, and `𝄞` four bytes and two units, so a limit counted in the wrong
+    unit fails. The Windows workflow sets POSER_EXPECT_LONG_PATHS to the long-paths switch it
+    set."""
     limit = fs.path_limit()
     if (expected := os.environ.get("POSER_EXPECT_LONG_PATHS")) is not None:
         assert (limit.lift is None) == (expected == "1"), limit
-    found = (
-        longest_created(tmp_path / "d", make_directory, limit.directory + 100),
-        longest_created(tmp_path / "f", make_file, limit.file + 100),
-    )
-    assert found == (limit.directory, limit.file)
+    for name, create, most in (
+        ("d", make_directory, limit.directory),
+        ("f", make_file, limit.file),
+    ):
+        base = tmp_path / name
+        longest = longest_created(base, create, most + 100, fill)
+        lengths = [
+            limit.unit.length(str(path_of_length(base, length, fill)))
+            for length in (longest, longest + 1)
+        ]
+        assert lengths[0] <= most < lengths[1], (name, lengths, most)
