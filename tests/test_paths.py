@@ -1,5 +1,6 @@
 """`poser.core.paths`: link detection that knows junctions, and a walk that enters no link."""
 
+import sys
 from pathlib import Path
 
 import pytest
@@ -24,6 +25,20 @@ def test_is_link_is_true_for_a_link_and_a_dangling_link(tmp_path: Path, kind: st
     assert is_link(tmp_path / "link")
     assert is_link(tmp_path / "dangling")
     assert (tmp_path / "dangling").exists(follow_symlinks=False)
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="junctions are Windows'")
+def test_a_junction_resolves_to_its_target_s_plain_path(tmp_path: Path) -> None:
+    """A junction's stored target, which `readlink` returns, carries the `\\\\?\\` prefix;
+    `resolve()` drops it, so a resolved junction equals the plain paths poser holds."""
+    target = tmp_path / "target"
+    target.mkdir()
+    make_link("junction", tmp_path / "link", target)
+    assert str((tmp_path / "link").readlink()).startswith("\\\\?\\")
+    resolved = (tmp_path / "link").resolve()
+    assert resolved == target.resolve()
+    assert not str(resolved).startswith("\\\\?\\")
+    assert (tmp_path / "link" / "inner").resolve() == target.resolve() / "inner"
 
 
 def test_walk_yields_every_entry_at_every_depth(tmp_path: Path) -> None:

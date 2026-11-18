@@ -462,6 +462,13 @@ def test_only_the_link_predicate_asks_about_symlinks_or_junctions() -> None:
     assert calls_to({"is_symlink", "is_junction", "islink", "isjunction"}) == LINK_PREDICATE
 
 
+def test_no_code_reads_a_link_s_target() -> None:
+    """On Windows a junction's target reads back as a `\\\\?\\` path, which differs from the
+    plain paths poser compares it with; poser follows links only through `resolve()`."""
+    assert calls_to({"readlink"}) == set()
+    assert calls_to({"readlink"}, SCSYNTH / "poser_scsynth") == set()
+
+
 def test_the_call_check_can_fail(tmp_path: Path) -> None:
     (tmp_path / "bad.py").write_text("p.is_symlink()\n", encoding="utf-8", newline="\n")
     assert calls_to({"is_symlink"}, tmp_path) == {f"{tmp_path.name}/bad.py"}
