@@ -77,8 +77,13 @@ def test_invalid_tempo(tempo: object) -> None:
 
 @pytest.mark.parametrize("name", ["", "bad name", "../bad", 123])
 def test_invalid_panel_name(name: object) -> None:
-    with pytest.raises(ValueError, match="panel name"):
+    with pytest.raises(ValueError, match="panel name must contain only"):
         PianoRollPanel(cast("str", name), ())
+
+
+def test_a_panel_name_windows_reserves_says_why() -> None:
+    with pytest.raises(ValueError, match="panel name must not be 'aux': Windows reserves it"):
+        PianoRollPanel("aux", ())
 
 
 def test_invalid_collections_and_duplicate_names() -> None:

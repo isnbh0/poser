@@ -1,29 +1,27 @@
 """Names: text values whose constructors check their form."""
 
+import ntpath
 import re
 from pathlib import PurePath
 from typing import ClassVar, Self
 
-# The device names Windows reserves in every folder, alone or before an extension, compared
-# without regard to case: https://learn.microsoft.com/windows/win32/fileio/naming-a-file
-WINDOWS_DEVICE_NAMES = frozenset(
-    ["con", "prn", "aux", "nul"]
-    + [f"{device}{digit}" for device in ("com", "lpt") for digit in "123456789\u00b9\u00b2\u00b3"]
-)
+# https://learn.microsoft.com/windows/win32/fileio/naming-a-file
 WINDOWS_FORBIDDEN = frozenset('<>:"/\\|?*') | {chr(code) for code in range(32)}
 
 
 def name_problem(name: str) -> str | None:
     """Why `name`, one path component, would not name the same file on Windows as on macOS, or
-    None when it would. Windows forbids some characters, reserves device names such as `nul`, even
-    as `nul.txt`, and trims a trailing dot or space, so the name would fail or name another file.
+    None when it would. Windows forbids some characters, trims a trailing dot or space, and
+    reserves device names such as `nul` and `conin$`, even as `nul.txt`, so the name would fail or
+    name another file. `ntpath.isreserved` decides which names are devices; it reads a path, so
+    the characters that separate one, and a drive's colon, are checked first.
     """
     if forbidden := sorted(set(name) & WINDOWS_FORBIDDEN):
         return f"Windows forbids {', '.join(map(repr, forbidden))} in a name"
-    if name.split(".", 1)[0].rstrip(" ").lower() in WINDOWS_DEVICE_NAMES:
-        return "Windows reserves it as a device name"
     if name.endswith((".", " ")):
         return "Windows drops a trailing dot or space"
+    if ntpath.isreserved(name):
+        return "Windows reserves it as a device name"
     return None
 
 

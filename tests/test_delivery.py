@@ -416,7 +416,7 @@ def test_includes_another_platform_cannot_hold_are_refused(harness: Harness, inc
     if sys.platform != "win32":
         (harness.root / include).write_text("x = 1\n", encoding="utf-8", newline="\n")
     harness.includes = (Path(include),)
-    with pytest.raises(ValueError, match=r"include .* inside the source root: .*Windows"):
+    with pytest.raises(ValueError, match=r"include .* on every platform: .*Windows"):
         harness.run()
     assert not harness.instrument.renders
 

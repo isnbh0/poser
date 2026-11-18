@@ -157,7 +157,14 @@ def test_song_id() -> None:
     for value in ("", "/a", "a/../b", "a//b", "a\\b", "./a", "a/", "..", "C:a", "c:", True):
         _bad(SongId, value)
     # Windows reads a colon after the first part as a stream: `a/C:b` writes the stream `b` of `C`.
-    for value in ("a/C:b", "songs/con.yaml", "nul/demo.yaml", "songs/demo.yaml.", "a /b"):
+    for value in (
+        "a/C:b",
+        "songs/con.yaml",
+        "songs/CONIN$.yaml",
+        "nul/demo.yaml",
+        "songs/demo.yaml.",
+        "a /b",
+    ):
         _bad(SongId, value)
 
 
@@ -170,6 +177,8 @@ def test_song_id() -> None:
         ("aux .txt", "device"),
         ("COM\u00b9", "device"),
         ("lpt9.wav", "device"),
+        ("CONIN$", "device"),
+        ("conout$.txt", "device"),
         ("a.", "trailing"),
         ("a ", "trailing"),
         ("a:b", "forbids ':'"),

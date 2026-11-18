@@ -146,7 +146,8 @@ def capture_inputs(
     for include in includes:
         if problem := inner_relative_problem(include):
             raise ValueError(
-                f"include {include} must name a file inside the source root: {problem}"
+                f"include {include} must name the same file inside the source root on every "
+                f"platform: {problem}"
             )
         item = source(source_root / include, preserve_name=True)
         if item.path != captured_song.path and item not in captured_includes:

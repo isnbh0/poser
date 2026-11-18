@@ -40,6 +40,20 @@ fix. A change listed here applies to every studio that last ran a poser from bef
 note searches with `grep -rn <pattern> <path>`, PowerShell's
 `Get-ChildItem <path> -Recurse -File | Select-String <pattern>` does the same.
 
+## Names Windows cannot hold
+
+- **Symptom:** a song or `poser.toml` that loaded before now fails on every platform with a
+  message such as `TrackName must not be 'aux': Windows reserves it as a device name`,
+  `Windows drops a trailing dot or space`, or `Windows forbids ':' in a name`.
+  **Cause:** poser uses these names as file and folder names: tracks, instruments, preset
+  sources, saved sounds, effect recipes, and each part of a song's or an include's path. Each must
+  name the same file on every platform, so poser refuses a name Windows cannot hold: a device
+  name, which is `con`, `prn`, `aux`, `nul`, `conin$`, `conout$`, `com1` to `com9`, or `lpt1` to
+  `lpt9` in any case, alone or before a dot, as in `aux.txt`; a name that ends in a dot or a
+  space; or one holding `<`, `>`, `:`, `"`, `/`, `\`, `|`, `?`, `*`, or a control character.
+  **Fix:** rename it, such as the track `aux` to `aux-bus`, and rename what refers to it.
+  `grep -rniwE 'con|prn|aux|nul|com[1-9]|lpt[1-9]' songs poser.toml` finds the device names.
+
 ## Song meter
 
 - **New:** a song may carry an optional `meter` key: spans that each give the length of a bar in

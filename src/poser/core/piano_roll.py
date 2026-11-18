@@ -22,8 +22,8 @@ class PianoRollPanel:
     notes: tuple[Note, ...]
 
     def __post_init__(self) -> None:
-        if NodeName.problem(self.name) is not None:
-            raise ValueError(f"Invalid panel name: {self.name!r}")
+        if (problem := NodeName.problem(self.name)) is not None:
+            raise ValueError(f"the panel name {problem}")
         if not isinstance(self.notes, list | tuple):
             raise ValueError("Panel notes must be a list or tuple of Note values")
         for note in self.notes:
