@@ -21,6 +21,7 @@ from doc_blocks import (
     ONBOARDING,
     SCENARIOS,
     Scenario,
+    console_output_encoding_command,
     corpus_paths,
     discover_document,
     discover_examples,
@@ -138,6 +139,84 @@ def test_all_runnable_doc_fences_have_powershell_mirrors() -> None:
         encoding="utf-8",
     )
     assert json.loads(result.stdout) == json.loads(json.dumps([asdict(e) for e in examples]))
+
+
+def test_inline_console_encoding_command_is_exact_and_unambiguous(tmp_path: Path) -> None:
+    approved = "[Console]::OutputEncoding = [Text.UTF8Encoding]::new()"
+    source = (REPO_DIR / "docs/setup.md").read_text(encoding="utf-8")
+    assert f"`{approved}`" in source
+    assert console_output_encoding_command(source) == approved
+    assert console_output_encoding_command(f"Use `{approved}` before piping.") == approved
+    assert console_output_encoding_command(f"Use ``{approved}`` before piping.") == approved
+    # Property mentions/getters are not assignments and cannot supply a missing setter.
+    mention = "Read `[Console]::OutputEncoding` and `$encoding = [Console]::OutputEncoding`."
+    assert console_output_encoding_command(mention + f"\n`{approved}`") == approved
+    wrong = "[Console]::OutputEncoding = [Text.Encoding]::GetEncoding(1252)"
+    duplicates = (
+        f"`{approved}`\n`{approved}`",  # Identical duplicates are still ambiguous.
+        f"`{approved}`\n`{wrong}`",  # Discover changed values before exact validation.
+        f"`{wrong}`\n`{approved}`",  # Order cannot hide a conflicting assignment.
+        f"`{approved}`\n`{approved.lower()}`",
+        f"`{approved}`\n`{wrong.replace('[Console]', '[System.Console]')}`",
+        f"`{approved}`\n`{wrong.replace('[Console]', '[system.console]')}`",
+        f"`{approved}`\n`[ System . Console ] :: OutputEncoding = $other`",
+        f"`{approved}; {wrong}`",  # Two assignments inside a single inline span.
+        f"`{approved}`\n``{wrong}``",
+        f"`{approved}`\n`[Console]::OutputEncoding =\n[Text.Encoding]::GetEncoding(1252)`",
+        f"`{approved}`\r\n``[System.Console]::OutputEncoding =\r\n[Text.Encoding]::ASCII``",
+    )
+    for text in ("", mention, *duplicates):
+        with pytest.raises(ValueError, match="expected exactly one inline"):
+            console_output_encoding_command(text)
+    changed = (
+        wrong,
+        approved.replace("new()", "new($true)"),
+        approved.lower(),
+        approved.replace("[Console]", "[System.Console]"),
+        approved.replace(" = ", "="),
+        " " + approved,
+        approved + "; Write-Output 'extra'",
+    )
+    for command in changed:
+        with pytest.raises(ValueError, match="changed from approved text"):
+            console_output_encoding_command(f"`{command}`")
+
+    cli = [sys.executable, str(REPO_DIR / "tests/doc_blocks.py")]
+    mode = "--console-output-encoding"
+    result = subprocess.run(
+        [*cli, "--root", str(REPO_DIR), mode],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=True,
+    )
+    assert result.stdout == approved + "\n"
+    assert not result.stderr
+    # The CLI must read the supplied root, not use a literal or the checkout's valid docs.
+    setup = tmp_path / "docs/setup.md"
+    setup.parent.mkdir()
+    for text in (f"`{approved}`", "", *duplicates, *(f"`{c}`" for c in changed)):
+        setup.write_text(text, encoding="utf-8", newline="\n")
+        result = subprocess.run(
+            [*cli, "--root", str(tmp_path), mode],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            check=False,
+        )
+        if text == f"`{approved}`":
+            assert result.returncode == 0, result.stderr
+            assert result.stdout == approved + "\n"
+        else:
+            assert result.returncode == 1, (text, result.stderr)
+            assert not result.stdout
+            assert "inline Console.OutputEncoding" in result.stderr
+    for args in ([mode], ["--root", str(REPO_DIR)], ["--root", str(REPO_DIR), "--json", mode]):
+        result = subprocess.run(
+            [*cli, *args], capture_output=True, text=True, encoding="utf-8", check=False
+        )
+        assert result.returncode == 2, result.stderr
+        assert not result.stdout
 
 
 def test_doc_fence_discovery_is_total() -> None:
@@ -370,6 +449,80 @@ def test_doc_search_mirrors_preserve_search_semantics(tmp_path: Path, search: st
                 path, number, _ = line.split(":", 2)
                 actual.add((Path(path).as_posix(), int(number)))
         assert actual == (expected if positive else set())
+
+
+def test_windows_console_pipeline_uses_the_documented_setting() -> None:
+    workflow = yaml.safe_load(
+        (REPO_DIR / ".github/workflows/check.yml").read_text(encoding="utf-8")
+    )
+    (step,) = [
+        step
+        for step in workflow["jobs"]["windows"]["steps"]
+        if step.get("name") == "UTF-8 output through the documented PowerShell setting (required)"
+    ]
+    assert step["shell"] == "powershell"  # Windows PowerShell 5.1, not pwsh.
+    assert not step.get("continue-on-error", False)
+    assert step.get("if") == "${{ !cancelled() }}"
+    script = step["run"]
+    assert script.isascii(), "the expected Unicode text must come from the shared fixture"
+    assert "from test_cli_output import MARK, write_reading_fixture" in script
+    assert "song, config = write_reading_fixture(Path(sys.argv[1]))" in script
+    assert "ensure_ascii=True" in script
+    assert '"mark": MARK' in script or "'mark': MARK" in script
+    assert "ConvertFrom-Json -InputObject ($fixture -join" in script
+    assert '$expectedLine = "  beats 0-1: $($info.mark)"' in script
+    # The source command is extracted and executed, never replaced by a literal UTF-8 setter.
+    assert re.findall(r"(?m)^\s*\$encodingCommand = (.+)$", script) == [
+        "uv run python tests/doc_blocks.py --root $env:GITHUB_WORKSPACE --console-output-encoding",
+        '$encodingCommand -join "`n"',
+    ]
+    assert "Invoke-Expression $encodingCommand" in script
+    assert "--json" not in script
+    assert "UTF8Encoding" not in script
+    assert not re.search(r"(?<![\w:])\$OutputEncoding\b", script, re.IGNORECASE)
+    assert re.findall(r"(?m)^\s*\[Console\]::OutputEncoding = (.+)$", script) == [
+        "[Text.Encoding]::GetEncoding(1252)",
+        "$originalEncoding",
+    ]
+    assert "function Test-ExpectedLine([object[]]$Lines, [string]$Expected)" in script
+    assert "return ($Lines.Count -eq 1 -and $Lines[0].Line -ceq $Expected)" in script
+    for name in ("wrong", "right"):
+        # Capture native status immediately after the actual native/cmdlet pipeline, not $?.
+        assert re.search(
+            rf"\${name} = @\(uv run read-song \$info.song --config \$info.config \|\s*"
+            r"Select-String -SimpleMatch \$expectedLine -CaseSensitive\)\n"
+            r"\s*\$status = \$LASTEXITCODE\n"
+            r"\s*if \(\$status -ne 0\) \{ throw ",
+            script,
+        )
+    negative = "if (Test-ExpectedLine -Lines $wrong -Expected $expectedLine)"
+    positive = "if (-not (Test-ExpectedLine -Lines $right -Expected $expectedLine))"
+    assert (
+        script.index("try {")
+        < script.index("$env:PYTHONIOENCODING = 'cp1252'")
+        < script.index("[Console]::OutputEncoding = [Text.Encoding]::GetEncoding(1252)")
+        < script.index("[Console]::OutputEncoding.CodePage -ne 1252")
+        < script.index("$wrong = @(")
+        < script.index(negative)
+        < script.index("Invoke-Expression $encodingCommand")
+        < script.index("[Console]::OutputEncoding.CodePage -ne 65001")
+        < script.index("$right = @(")
+        < script.index(positive)
+        < script.index("} finally {")
+    )
+    assert re.search(re.escape(negative) + r'\s*\{\s*throw "', script)
+    assert re.search(re.escape(positive) + r'\s*\{\s*throw "', script)
+    before, body = script.split("try {", 1)
+    assert "$originalEncoding = [Console]::OutputEncoding" in before
+    assert (
+        "$originalPythonEncoding = "
+        "[Environment]::GetEnvironmentVariable('PYTHONIOENCODING', 'Process')" in before
+    )
+    finally_body = body.split("} finally {", 1)[1]
+    assert "[Console]::OutputEncoding = $originalEncoding" in finally_body
+    assert "if ($null -eq $originalPythonEncoding)" in finally_body
+    assert "Remove-Item Env:PYTHONIOENCODING -ErrorAction SilentlyContinue" in finally_body
+    assert "$env:PYTHONIOENCODING = $originalPythonEncoding" in finally_body
 
 
 def test_windows_doc_execution_covers_discovered_examples() -> None:

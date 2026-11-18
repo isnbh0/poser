@@ -311,16 +311,45 @@ def discover_examples(root: Path) -> tuple[Example, ...]:
     return validate_fences(fences)
 
 
+def console_output_encoding_command(text: str) -> str:
+    """Extract only the reviewed, single-line inline setup setter, failing closed on drift."""
+    assignment = re.compile(
+        r"\[\s*(?:System\s*\.\s*)?Console\s*\]\s*::\s*OutputEncoding\s*=(?!=)",
+        re.IGNORECASE,
+    )
+    # Discover assignments before checking approved spelling: aliases or changed values must
+    # still count as duplicates. Multiple assignments in one code span count separately too.
+    candidates = [
+        span[2]
+        for span in re.finditer(r"(?<!`)(`+)([^`]*)\1(?!`)", text)
+        for _ in assignment.finditer(span[2])
+    ]
+    if len(candidates) != 1:
+        raise ValueError(
+            f"expected exactly one inline Console.OutputEncoding assignment, got {len(candidates)}"
+        )
+    (candidate,) = candidates
+    if candidate != "[Console]::OutputEncoding = [Text.UTF8Encoding]::new()":
+        raise ValueError("inline Console.OutputEncoding command changed from approved text")
+    return candidate
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", required=True, type=Path)
-    parser.add_argument("--json", action="store_true", required=True)
+    mode = parser.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--json", action="store_true")
+    mode.add_argument("--console-output-encoding", action="store_true")
     args = parser.parse_args()
+    root = args.root.resolve()
     try:
-        examples = discover_examples(args.root.resolve())
+        if args.console_output_encoding:
+            output = console_output_encoding_command((root / SETUP).read_text(encoding="utf-8"))
+        else:
+            output = json.dumps([asdict(example) for example in discover_examples(root)])
     except ValueError as error:
         parser.exit(1, f"{error}\n")
-    print(json.dumps([asdict(example) for example in examples]))
+    print(output)
 
 
 if __name__ == "__main__":

@@ -112,6 +112,71 @@ jobs:
         if: ${{ !cancelled() }}
         timeout-minutes: 30
         run: uv run pytest -q -rs
+      - name: UTF-8 output through the documented PowerShell setting (required)
+        if: ${{ !cancelled() }}
+        timeout-minutes: 10
+        shell: powershell
+        run: |
+          # uv's successful build progress may use stderr; check each native exit code explicitly.
+          $ErrorActionPreference = "Continue"
+          if ($PSVersionTable.PSVersion.Major -ne 5 -or $PSVersionTable.PSVersion.Minor -ne 1) {
+            throw "this decoding exercise requires Windows PowerShell 5.1"
+          }
+          Write-Host "PowerShell $($PSVersionTable.PSVersion): native UTF-8 pipeline exercise"
+          $fixtureRoot = Join-Path $env:RUNNER_TEMP 'poser utf8 pipeline'
+          $code = @'
+          import json, sys
+          from pathlib import Path
+          sys.path.insert(0, 'tests')
+          from test_cli_output import MARK, write_reading_fixture
+          song, config = write_reading_fixture(Path(sys.argv[1]))
+          print(json.dumps({'song': str(song), 'config': str(config), 'mark': MARK}, ensure_ascii=True))
+          '@
+          $fixture = uv run python -c $code $fixtureRoot
+          $status = $LASTEXITCODE
+          if ($status -ne 0) { throw "could not prepare Unicode song fixture: $status" }
+          $info = ConvertFrom-Json -InputObject ($fixture -join "`n")
+          $expectedLine = "  beats 0-1: $($info.mark)"
+          $encodingCommand = uv run python tests/doc_blocks.py --root $env:GITHUB_WORKSPACE --console-output-encoding
+          $status = $LASTEXITCODE
+          if ($status -ne 0) { throw "documented console command is invalid: $status" }
+          $encodingCommand = $encodingCommand -join "`n"
+          function Test-ExpectedLine([object[]]$Lines, [string]$Expected) {
+            return ($Lines.Count -eq 1 -and $Lines[0].Line -ceq $Expected)
+          }
+          $originalEncoding = [Console]::OutputEncoding
+          $originalPythonEncoding = [Environment]::GetEnvironmentVariable('PYTHONIOENCODING', 'Process')
+          try {
+            $env:PYTHONIOENCODING = 'cp1252'
+            [Console]::OutputEncoding = [Text.Encoding]::GetEncoding(1252)
+            if ([Console]::OutputEncoding.CodePage -ne 1252) { throw "narrow decoder was not set" }
+            $wrong = @(uv run read-song $info.song --config $info.config |
+              Select-String -SimpleMatch $expectedLine -CaseSensitive)
+            $status = $LASTEXITCODE
+            if ($status -ne 0) { throw "negative-control command failed: $status" }
+            if (Test-ExpectedLine -Lines $wrong -Expected $expectedLine) {
+              throw "wrong-code-page control unexpectedly preserved the Unicode line"
+            }
+            Write-Host 'negative decoding control rejected the Unicode line'
+            Invoke-Expression $encodingCommand
+            if (-not $?) { throw "the documented console command failed" }
+            if ([Console]::OutputEncoding.CodePage -ne 65001) { throw "UTF-8 decoder was not set" }
+            $right = @(uv run read-song $info.song --config $info.config |
+              Select-String -SimpleMatch $expectedLine -CaseSensitive)
+            $status = $LASTEXITCODE
+            if ($status -ne 0) { throw "UTF-8 command failed: $status" }
+            if (-not (Test-ExpectedLine -Lines $right -Expected $expectedLine)) {
+              throw "the documented setting did not preserve the exact Unicode line"
+            }
+            Write-Host 'documented setting preserved the exact Unicode line through Select-String'
+          } finally {
+            [Console]::OutputEncoding = $originalEncoding
+            if ($null -eq $originalPythonEncoding) {
+              Remove-Item Env:PYTHONIOENCODING -ErrorAction SilentlyContinue
+            } else {
+              $env:PYTHONIOENCODING = $originalPythonEncoding
+            }
+          }
       # Shared discovery validates every documented shell example. Scenarios provide only the
       # declared working directories, fixtures, and placeholder substitutions, never new commands.
       - name: A Surge XT studio through the documented PowerShell (required)
