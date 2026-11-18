@@ -16,6 +16,8 @@ from pathlib import Path
 
 from poser.core.paths import PathLimit, PathUnit
 
+assert sys.platform != "win32"  # noqa: S101 - narrows the platform for type checkers.
+
 
 class PosixFileSystem:
     """Advisory `flock` locks, `fsync` through read-only descriptors, symbolic links, the C

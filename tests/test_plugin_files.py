@@ -49,8 +49,9 @@ def test_pe_version_is_none_for_a_file_that_is_no_pe_image(tmp_path: Path) -> No
     assert pe_version(tmp_path / "Nul\0.vst3") is None
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="Windows has no FIFOs in the file system")
 def test_pe_version_never_opens_a_fifo(tmp_path: Path) -> None:
+    if sys.platform == "win32":
+        pytest.skip("Windows has no FIFOs in the file system")
     fifo = tmp_path / "Plugin.vst3"
     os.mkfifo(fifo)
     versions: list[str | None] = []
