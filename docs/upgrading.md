@@ -33,6 +33,10 @@ In PowerShell:
 Get-ChildItem songs -Recurse -File | Where-Object { $_.Extension -in '.yaml', '.yml', '.py' } | ForEach-Object { uv run read-song $_.FullName > $null }
 ```
 
+A studio that also uses the `poser_scsynth` adapter upgrades it with poser in one lock step, as
+[its README](../packages/poser-scsynth/README.md#add-the-adapter-to-a-studio) shows, in place of
+the first line above.
+
 `update-guide` rewrites `POSER.md` for the new poser; until then, `update-guide --check` reports
 `POSER.md is out of date`. `AGENTS.md`, `poser.toml`, and songs are yours and are never rewritten.
 If a command fails after the upgrade, find its message below, newest change first, and apply the

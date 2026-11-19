@@ -82,6 +82,7 @@ class Example:
 
 SETUP = "docs/setup.md"
 UPGRADE = "docs/upgrading.md"
+SCSYNTH = "packages/poser-scsynth/README.md"
 SCENARIOS = (
     Scenario("registry", SETUP, ("Create a studio", "Prerequisites"), runner="long-paths"),
     Scenario("setup-create", SETUP, ("Create a studio", "Create and verify")),
@@ -98,6 +99,10 @@ SCENARIOS = (
     Scenario("search-modes", UPGRADE, ("Upgrade a studio", "Mark checks and key modes")),
     Scenario(
         "showcase-export", "docs/showcase.md", ("Surge showcase", "Instrument and reproduction")
+    ),
+    Scenario("scsynth-add", SCSYNTH, ("poser-scsynth", "Add the adapter to a studio")),
+    Scenario(
+        "scsynth-upgrade", SCSYNTH, ("poser-scsynth", "Add the adapter to a studio"), ordinal=2
     ),
     Scenario(
         "custom-path",

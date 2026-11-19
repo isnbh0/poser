@@ -11,18 +11,29 @@ To have an agent help, paste the one-line prompt from the
 
 ## Prerequisites
 
-You need Git, [uv](https://docs.astral.sh/uv/), and Python 3.13 or later available to uv. On
-Windows, `winget install --id Git.Git -e --source winget` and `winget install --id=astral-sh.uv -e`
-install Git and uv; open a new PowerShell window afterwards so it finds them.
-Install or locate Surge XT before initializing; the
+You need Git and [uv](https://docs.astral.sh/uv/). Git is required because poser installs from a
+Git URL. uv downloads Python 3.13 or later itself, so Python needs no separate install; the studio
+records only `requires-python = ">=3.13"`, so it may run a newer Python. On Windows,
+`winget install --id Git.Git -e --source winget` and `winget install --id=astral-sh.uv -e` install
+Git and uv; without winget, use the [Git for Windows installer](https://git-scm.com/downloads/win)
+and [uv's PowerShell installer](https://docs.astral.sh/uv/getting-started/installation/). Open a
+new PowerShell window afterwards so it finds them. Install or locate Surge XT before initializing; the
 [Surge guide](../src/poser/reference_setups/surge/README.md) covers installation, searched
 locations, and custom paths.
 
 poser is tested on macOS and on Windows x64, where CI runs Windows Server. Windows on Arm is not
 supported: Pedalboard, which plays VST3 instruments, publishes no build for it, and poser refuses to
-run there even with x64 Python under emulation. Linux has the
-file-system support poser needs but is untested, and the Surge reference setup searches only macOS
-and Windows locations, so on Linux pass `--plugin-path` and `--presets-path` to `init-workspace`.
+run there even with x64 Python under emulation. Linux has the file-system support poser needs but
+is untested, and the Surge reference setup searches only macOS and Windows locations, so on Linux
+pass `--plugin-path` and `--presets-path` to `init-workspace`. Rendering is offline, so it needs no
+audio interface, ASIO driver, or other audio driver.
+
+On Windows, create the studio under a short parent folder such as `C:\studios`, outside
+OneDrive-synced folders. Windows 11 often moves Documents and Desktop into OneDrive, whose longer
+paths spend the path budget below, and sync can lock render files and interfere with the render
+store's links; `init-workspace` warns when the studio is inside OneDrive. Windows Defender's
+real-time scanning can slow the first plugin load, and SmartScreen may ask before running the Surge
+XT and SuperCollider installers.
 
 The studio's filesystem must support directory links and hard links. `init-workspace` checks both
 in the destination before publishing scaffold files. Windows NTFS supports these features;
@@ -33,7 +44,8 @@ on. A song's results fit while the studio folder's path and the song's path toge
 165 characters, such as `C:\Users\me\my-studio` and `songs/demo.yaml`; poser refuses a song
 past that and names the path. To lift the limit, run this once in a PowerShell window opened with
 Run as administrator. Windows applies it to programs started afterwards; restart Windows if poser
-still reports the limit.
+still reports the limit. Without administrator rights, keep the studio under a short parent folder
+instead.
 
 ```powershell
 New-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem' -Name LongPathsEnabled -Value 1 -PropertyType DWORD -Force
@@ -98,7 +110,9 @@ still a pass and needs no repair. Clipping is reported but does not fail the che
 
 The demo mix is `renders/songs/demo.yaml/latest/audio/mix.wav`; its `report.json` is in
 `latest/`, and its spectrograms are in `latest/images/`. Analysis finds technical defects; listen
-to the mix to judge how it sounds.
+to the mix to judge how it sounds. On Windows,
+`Start-Process renders\songs\demo.yaml\latest\audio\mix.wav` opens it in the default player
+without waiting for it to finish. Playback requires permission, so an agent asks before playing it.
 
 ## Composition advice
 

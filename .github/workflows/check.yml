@@ -225,8 +225,10 @@ jobs:
             }
           }
           Set-Location $env:RUNNER_TEMP
-          # The Git dependency is the sole setup-command substitution.
-          Invoke-Example 'setup-create' @{ 'git+https://github.com/isnbh0/poser' = $env:GITHUB_WORKSPACE }
+          # The Git dependency is the sole setup-command substitution. The studio takes poser from
+          # this checkout as a Git source, so the scsynth adapter can come from the same repository.
+          $poserGit = @{ 'git+https://github.com/isnbh0/poser' = 'git+file:///' + $env:GITHUB_WORKSPACE.Replace('\', '/') }
+          Invoke-Example 'setup-create' $poserGit
           $studio = (Get-Location).Path
           Invoke-Example 'upgrade'
           # Count actual loop invocations, first with only the valid demo, then with two broken
@@ -256,6 +258,11 @@ jobs:
           Invoke-Example 'setup-export' @{ '<song-path>' = 'songs/demo.yaml' }
           Copy-Item (Join-Path $env:GITHUB_WORKSPACE src/poser/reference_setups/surge/showcase.py) songs/showcase.py
           Invoke-Example 'showcase-export'
+          # The adapter's examples run after the poser-only upgrade, which is for studios without it.
+          Invoke-Example 'scsynth-add' $poserGit
+          uv run python -c "import poser_scsynth"
+          if ($LASTEXITCODE -ne 0) { throw "the studio cannot import poser_scsynth" }
+          Invoke-Example 'scsynth-upgrade'
 
           # Text fixtures keep the searches independent of actual studio content or validation.
           $search = Join-Path $env:RUNNER_TEMP 'poser search fixtures'

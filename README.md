@@ -82,6 +82,19 @@ guide = "A note about this instrument for the workspace guide."
 presets = "/Library/Application Support/Surge XT/patches_factory"
 ```
 
+On Windows, `init-workspace --setup surge` writes the paths it finds on the machine, in single
+quotes so their backslashes stay as written:
+
+```toml
+[instruments.surge]
+adapter = "pedalboard"
+path = 'C:\Program Files\Common Files\VST3\Surge Synth Team\Surge XT.vst3'
+guide = "A note about this instrument for the workspace guide."
+
+[instruments.surge.sources]
+presets = 'C:\ProgramData\Surge XT\patches_factory'
+```
+
 A song names `surge` for the default patch, `surge:presets/<path without suffix>` for a preset
 in a source, and `surge:saved/<name>` for a sound saved with `save-sound`. The `pedalboard`
 adapter takes `path`, `plugin_name` for a bundle holding several plugins, `sources`, and

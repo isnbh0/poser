@@ -28,7 +28,40 @@ scsynth = 'C:\Program Files\SuperCollider-3.14.1\scsynth.exe'
 
 Use an absolute path; poser does not search `PATH`.
 
-## Install the adapter package
+## Add the adapter to a studio
+
+A studio created by [the setup guide](../../docs/setup.md) depends on poser from Git. From the
+studio directory, add the adapter from the same repository:
+
+```bash
+uv add "git+https://github.com/isnbh0/poser#subdirectory=packages/poser-scsynth"
+```
+
+In PowerShell:
+
+```powershell
+uv add "git+https://github.com/isnbh0/poser#subdirectory=packages/poser-scsynth"
+```
+
+Then select it in `poser.toml` by import path, as the examples above show. The adapter comes from
+the same commit as poser, so upgrade the two together, instead of the single-package upgrade in
+[upgrading](../../docs/upgrading.md):
+
+```bash
+uv lock --upgrade-package poser --upgrade-package poser-scsynth &&
+uv sync
+```
+
+In PowerShell, run these lines in order and stop at the first that fails:
+
+```powershell
+uv lock --upgrade-package poser --upgrade-package poser-scsynth
+uv sync
+```
+
+Then continue with the rest of the upgrade steps in [upgrading](../../docs/upgrading.md).
+
+## Install the adapter package for poser contributors
 
 `uv sync` at the repository root installs both workspace packages. For wheel installation, build
 with `uv build --all-packages --wheel` and install both local wheels together; the `poser` package

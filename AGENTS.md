@@ -62,8 +62,11 @@ advice when `[guidance] advice` is enabled.
 - `make test-real` runs the `real_plugins` tests, which load the instruments in a root
   `poser.toml`, and the `real_scsynth` tests. The test harness finds `scsynth` through
   `SCSYNTH_PATH`, the SuperCollider app bundle, or `PATH`; the adapter itself runs only its
-  configured absolute path. To create the root `poser.toml`, copy
-  `src/poser/reference_setups/surge/poser.toml` and edit its paths.
+  configured absolute path. To create the root `poser.toml`, run
+  `uv --project <this repo> run init-workspace --setup surge` in a scratch directory and copy the
+  generated `poser.toml`, which holds this machine's resolved paths, to the repository root, as CI
+  does. The packaged `src/poser/reference_setups/surge/poser.toml` is the template that setup
+  rewrites; its macOS paths are not a working configuration elsewhere.
 - `make check-instruments` checks that each instrument in the root `poser.toml` loads and sounds.
 - To try the commands, run `uv --project <this repo> run init-workspace --setup surge` in a
   scratch directory outside the repo, then run the other commands there the same way.
