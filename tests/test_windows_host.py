@@ -107,6 +107,62 @@ def test_a_missing_runtime_names_the_missing_dll_and_the_fix() -> None:
     assert refusal.endswith(f"(original error: {DLL_ERROR})")
 
 
+PEDALBOARD_ERROR = ImportError(
+    "Pedalboard failed to load its native code. Hint: try installing the Microsoft Visual C++"
+    " Redistributable."
+)
+
+
+def test_pedalboard_s_own_runtime_hint_is_the_runtime() -> None:
+    refusal = windows_host.missing_runtime(
+        PEDALBOARD_ERROR, platform="win32", loads=lambda name: name != "VCRUNTIME140.dll"
+    )
+
+    assert refusal is not None
+    assert "VCRUNTIME140.dll" in refusal
+    assert refusal.endswith(f"(original error: {PEDALBOARD_ERROR})")
+
+
+def test_an_error_raised_while_handling_the_dll_failure_is_the_runtime() -> None:
+    error = ImportError("cannot import name 'AudioFile'")
+    error.__context__ = DLL_ERROR
+
+    assert windows_host.missing_runtime(error, platform="win32", loads=lambda _: False)
+
+
+REAL_CHAIN = """
+import sys
+from importlib.abc import MetaPathFinder
+
+class Refuse(MetaPathFinder):
+    def find_spec(self, name, path=None, target=None):
+        if name == "pedalboard_native":
+            raise ImportError({message!r})
+        return None
+
+sys.meta_path.insert(0, Refuse())
+from poser.adapters.windows_host import missing_runtime
+try:
+    {statement}
+except ImportError as error:
+    print(missing_runtime(error, platform="win32", loads=lambda name: False) is not None)
+"""
+
+
+@pytest.mark.parametrize(
+    "statement",
+    ["from pedalboard.io import AudioFile", "from pedalboard import load_plugin"],
+)
+def test_the_runtime_is_named_through_pedalboard_s_real_import(statement: str) -> None:
+    """The native module fails as Windows fails it without the runtime; pedalboard's package
+    rewrites that error, and the refusal must still fire for the imports poser makes."""
+    code = REAL_CHAIN.format(message=str(DLL_ERROR), statement=statement)
+    result = subprocess.run(
+        [sys.executable, "-c", code], capture_output=True, text=True, encoding="utf-8", check=True
+    )
+    assert result.stdout.strip() == "True", result.stderr
+
+
 def test_a_present_runtime_leaves_the_original_error() -> None:
     assert windows_host.missing_runtime(DLL_ERROR, platform="win32", loads=lambda _: True) is None
 

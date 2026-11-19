@@ -93,6 +93,18 @@ def _loads(name: str) -> bool:
     return True
 
 
+PEDALBOARD_HINT = "Pedalboard failed to load its native code"
+"""The start of the ImportError pedalboard raises from a "DLL load failed" importing its native
+module (pedalboard 0.9.26 `pedalboard/__init__.py`). Re-check it when bumping pedalboard."""
+
+
+def _is_runtime_failure(error: BaseException) -> bool:
+    message = str(error)
+    return message.startswith(PEDALBOARD_HINT) or (
+        "DLL load failed" in message and "pedalboard" in message
+    )
+
+
 def missing_runtime(
     error: ImportError,
     *,
@@ -101,14 +113,21 @@ def missing_runtime(
 ) -> str | None:
     """Return the refusal for an import that failed because the VC++ runtime is missing, or None.
 
-    The refusal applies only on win32, to an error whose message has CPython's "DLL load failed"
-    prefix and names pedalboard, and only when `loads` reports at least one of `RUNTIME_DLLS`
-    missing. Anything else (application control, a quarantined module, a plugin's own DLL) returns
-    None, so the original error stands. The tail of CPython's message is localized by Windows, so
-    only the prefix is matched. Starts no process and writes no file.
+    The refusal applies only on win32, to an error that is, or was raised while handling, either
+    pedalboard's own native-load error or one with CPython's "DLL load failed" prefix naming
+    pedalboard, and only when `loads` reports at least one of `RUNTIME_DLLS` missing. Anything else
+    (application control, a quarantined module, a plugin's own DLL) returns None, so the original
+    error stands. The tail of CPython's message is localized by Windows, so only the prefix is
+    matched. Starts no process and writes no file.
     """
-    message = str(error)
-    if platform != "win32" or "DLL load failed" not in message or "pedalboard" not in message:
+    if platform != "win32":
+        return None
+    chain: list[BaseException] = []
+    link: BaseException | None = error
+    while link is not None and link not in chain:
+        chain.append(link)
+        link = link.__cause__ or link.__context__
+    if not any(_is_runtime_failure(link) for link in chain):
         return None
     missing = [name for name in RUNTIME_DLLS if not loads(name)]
     if not missing:
@@ -117,5 +136,5 @@ def missing_runtime(
         f"pedalboard needs the Microsoft Visual C++ Redistributable (x64), and this machine lacks "
         f"{', '.join(missing)}. Install it from {VC_REDIST_URL} or with "
         f"`winget install --id Microsoft.VCRedist.2015+.x64 -e`, then rerun the command. "
-        f"(original error: {message})"
+        f"(original error: {error})"
     )
