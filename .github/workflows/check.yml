@@ -227,7 +227,9 @@ jobs:
           Set-Location $env:RUNNER_TEMP
           # The Git dependency is the sole setup-command substitution. The studio takes poser from
           # this checkout as a Git source, so the scsynth adapter can come from the same repository.
-          $poserGit = @{ 'git+https://github.com/isnbh0/poser' = 'git+file:///' + $env:GITHUB_WORKSPACE.Replace('\', '/') }
+          # The URL names the commit under test: uv cannot find a default branch in the shallow
+          # checkout.
+          $poserGit = @{ 'git+https://github.com/isnbh0/poser' = 'git+file:///' + $env:GITHUB_WORKSPACE.Replace('\', '/') + '@' + $env:GITHUB_SHA }
           Invoke-Example 'setup-create' $poserGit
           $studio = (Get-Location).Path
           Invoke-Example 'upgrade'
