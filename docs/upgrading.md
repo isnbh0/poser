@@ -35,7 +35,7 @@ Get-ChildItem songs -Recurse -File | Where-Object { $_.Extension -in '.yaml', '.
 
 A studio that also uses the `poser_scsynth` adapter upgrades it with poser in one lock step, as
 [its README](../packages/poser-scsynth/README.md#add-the-adapter-to-a-studio) shows, in place of
-the first line above.
+`uv lock --upgrade-package poser`.
 
 `update-guide` rewrites `POSER.md` for the new poser; until then, `update-guide --check` reports
 `POSER.md is out of date`. `AGENTS.md`, `poser.toml`, and songs are yours and are never rewritten.

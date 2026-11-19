@@ -12,13 +12,13 @@ To have an agent help, paste the one-line prompt from the
 ## Prerequisites
 
 You need Git and [uv](https://docs.astral.sh/uv/). Git is required because poser installs from a
-Git URL. uv downloads Python 3.13 or later itself, so Python needs no separate install; the studio
-records only `requires-python = ">=3.13"`, so it may run a newer Python. On Windows,
+Git URL. uv finds or downloads Python 3.13 or later itself, so Python needs no separate install;
+the studio records only `requires-python = ">=3.13"`, so it may run a newer Python. On Windows,
 `winget install --id Git.Git -e --source winget` and `winget install --id=astral-sh.uv -e` install
 Git and uv; without winget, use the [Git for Windows installer](https://git-scm.com/downloads/win)
 and [uv's PowerShell installer](https://docs.astral.sh/uv/getting-started/installation/). Open a
-new PowerShell window afterwards so it finds them. Install or locate Surge XT before initializing; the
-[Surge guide](../src/poser/reference_setups/surge/README.md) covers installation, searched
+new PowerShell window afterwards so it finds them. Install or locate Surge XT before initializing;
+the [Surge guide](../src/poser/reference_setups/surge/README.md) covers installation, searched
 locations, and custom paths.
 
 poser is tested on macOS and on Windows x64, where CI runs Windows Server. Windows on Arm is not
