@@ -19,14 +19,21 @@ scsynth = "/Applications/SuperCollider.app/Contents/Resources/scsynth"
 ```
 
 On Windows, the installer puts the engine in a folder named for its version, such as
-`C:\Program Files\SuperCollider-3.14.1\scsynth.exe`. Write a Windows path in a TOML literal
-string, in single quotes, so its backslashes stay as they are:
+`C:\Program Files\SuperCollider-3.14.1\scsynth.exe`; in PowerShell,
+`Get-ChildItem "$env:ProgramFiles\SuperCollider-*\scsynth.exe"` lists the installed engines. Write
+a Windows path in a TOML literal string, in single quotes, so its backslashes stay as they are:
 
 ```toml
+[instruments.sc]
+adapter = "poser_scsynth.instrument:create"
 scsynth = 'C:\Program Files\SuperCollider-3.14.1\scsynth.exe'
 ```
 
-Use an absolute path; poser does not search `PATH`.
+Use an absolute path; poser does not search `PATH`. On Windows, each SuperCollider version installs
+into its own folder, so after an upgrade the configured path names the old engine, or nothing once
+the old version is uninstalled. Point `scsynth` at the new engine and run
+`uv run check-instruments`, which reports a missing engine as `scsynth binary <path> is missing`.
+Sounds the old engine rendered stay cached until `uv run render-song <song> --force`.
 
 ## Add the adapter to a studio
 

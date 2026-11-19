@@ -36,7 +36,11 @@ adapter = "poser_scsynth.instrument:create"
 scsynth = "/Applications/SuperCollider.app/Contents/Resources/scsynth"
 ```
 
-On Windows the path names the installer's versioned folder, in a TOML literal string so its
-backslashes stay as they are: `scsynth = 'C:\Program Files\SuperCollider-3.14.1\scsynth.exe'`.
+On Windows the table is the same with the path to the installer's versioned folder, in a TOML
+literal string so its backslashes stay as they are:
+`scsynth = 'C:\Program Files\SuperCollider-3.14.1\scsynth.exe'`. In PowerShell,
+`Get-ChildItem "$env:ProgramFiles\SuperCollider-*\scsynth.exe"` lists the installed engines. Each
+SuperCollider version installs into its own folder, so after an upgrade point `scsynth` at the new
+folder's engine.
 
 scsynth and Pedalboard tracks can share a song; each renders its own stem.

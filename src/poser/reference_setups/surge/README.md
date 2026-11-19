@@ -71,8 +71,10 @@ uv run init-workspace --setup surge --plugin-path 'D:\Plugins\Surge XT.vst3'
 ```
 
 For factory patches in another location, add `--presets-path '/path/to/patches_factory'` to the
-initialization command. Explicit paths must be existing directories. If no patches are found and
-none are specified, initialization continues without a preset source.
+initialization command, or on Windows `--presets-path 'C:\ProgramData\Surge XT\patches_factory'`,
+which is where the Surge XT installer puts the factory patches. Explicit paths must be existing
+directories. If no patches are found and none are specified, initialization continues without a
+preset source.
 
 ## Demo sounds
 

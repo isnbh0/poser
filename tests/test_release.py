@@ -920,8 +920,11 @@ def test_scsynth_readme_config_supplies_engine_path(tmp_path: Path) -> None:
     config = from_options("sc", options, tmp_path)
     assert config.scsynth is not None
     assert config.scsynth.name == "scsynth"
-    # The Windows line keeps its backslashes and names an absolute path there.
-    engine = PureWindowsPath(tomllib.loads(windows)["scsynth"])
+    # The Windows table selects the same adapter, and its path keeps its backslashes and names an
+    # absolute path there.
+    windows_options = tomllib.loads(windows)["instruments"]["sc"]
+    assert windows_options["adapter"] == "poser_scsynth.instrument:create"
+    engine = PureWindowsPath(windows_options["scsynth"])
     assert engine.is_absolute()
     assert engine.parts[-2:] == ("SuperCollider-3.14.1", "scsynth.exe")
 
