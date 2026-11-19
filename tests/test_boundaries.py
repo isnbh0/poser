@@ -32,7 +32,11 @@ CLI = POSER / "cli"
 COMPOSE = POSER / "compose.py"
 PLUGIN_LOADERS = {"poser/adapters/pedalboard/worker.py"}
 FCNTL_USERS = {"poser/adapters/filesystem_posix.py"}
-CTYPES_USERS = {"poser/adapters/filesystem_posix.py", "poser/adapters/isolation_windows.py"}
+CTYPES_USERS = {
+    "poser/adapters/filesystem_posix.py",
+    "poser/adapters/isolation_windows.py",
+    "poser/adapters/windows_host.py",
+}
 WINDOWS_API_USERS = {"poser/adapters/filesystem_windows.py"}
 LINK_PREDICATE = {"poser/core/paths.py"}
 FILE_SYSTEM_FACILITY = {

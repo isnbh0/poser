@@ -18,6 +18,7 @@ from contextlib import AbstractContextManager
 from pathlib import Path
 from typing import Protocol
 
+from poser.adapters.windows_host import check_windows_host
 from poser.core.paths import PathLimit, is_link
 from poser.core.ports import PREREQUISITES_URL, ConfigError, UnsupportedPlatformError
 
@@ -113,8 +114,10 @@ class FileSystem(Protocol):
 def native() -> FileSystem:
     """Return the running platform's backend, or raise UnsupportedPlatformError if it has none.
 
-    Reads only `sys.platform` and imports the backend's module, so an adapter's factory may call
-    it. A new backend adds its platform test here and its name to the message.
+    Reads `sys.platform`, on Windows the host machine type through one Win32 call about the
+    current process (`windows_host.check_windows_host`, which refuses Windows on Arm), and imports
+    the backend's module, so an adapter's factory may call it. A new backend adds its platform test
+    here and its name to the message.
     """
     platform = sys.platform
     if platform == "darwin" or platform.startswith("linux"):
@@ -122,6 +125,7 @@ def native() -> FileSystem:
 
         return PosixFileSystem()
     if platform == "win32":
+        check_windows_host()
         from poser.adapters.filesystem_windows import WindowsFileSystem
 
         return WindowsFileSystem()

@@ -10,6 +10,8 @@ import struct
 from pathlib import Path
 from typing import BinaryIO
 
+# Windows hosts other than x64 are refused by `poser.adapters.windows_host.check_windows_host`,
+# so the x64 bundle folder is the only one poser looks in.
 WINDOWS_BINARY_DIR = ("Contents", "x86_64-win")
 PE_HEADER_OFFSET = 0x3C
 PE_SIGNATURE = b"PE\0\0"

@@ -20,6 +20,7 @@ from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import TypeGuard
 
+from poser.adapters.windows_host import check_windows_host
 from poser.core.jsonvalue import JsonValue, is_json_value, json_object
 from poser.core.paths import child_cwd
 from poser.core.ports import PREREQUISITES_URL, UnsupportedPlatformError
@@ -57,10 +58,15 @@ def check_platform() -> None:
     """Raise UnsupportedPlatformError unless the running platform has worker isolation.
 
     An adapter that runs work through `run_isolated` calls this when built, so the platform gate
-    refuses it at build instead of at its first render. Reads only `sys.platform`.
+    refuses it at build instead of at its first render. Reads `sys.platform` and, on Windows, the
+    host machine type through one Win32 call about the current process
+    (`windows_host.check_windows_host`), which refuses Windows on Arm.
     """
     platform = sys.platform
-    if platform in {"darwin", "win32"} or platform.startswith("linux"):
+    if platform == "win32":
+        check_windows_host()
+        return
+    if platform == "darwin" or platform.startswith("linux"):
         return
     raise UnsupportedPlatformError(
         f"poser's plugin worker isolation does not cover this platform ({platform}); it covers "

@@ -18,8 +18,9 @@ Set up poser for me by following https://raw.githubusercontent.com/isnbh0/poser/
 ```
 
 Both use the free Surge XT reference setup on macOS or Windows and can continue to your first song.
-poser is tested on macOS and Windows x64; Windows on Arm is not supported, and Linux has the
-file-system support poser needs but is untested (see [Prerequisites](docs/setup.md#prerequisites)).
+poser is tested on macOS and Windows x64. Windows on Arm is not supported, and poser refuses to run
+there even with x64 Python under emulation. Linux has the file-system support poser needs but is
+untested (see [Prerequisites](docs/setup.md#prerequisites)).
 To move an existing studio to a newer poser, follow [upgrading](docs/upgrading.md).
 
 Hear an example and get its source in the [showcase](docs/showcase.md).

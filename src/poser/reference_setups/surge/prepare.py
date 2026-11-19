@@ -67,6 +67,8 @@ def windows_data(plugin: Path, host: Host) -> Path | None:
     override = host.path("SURGE_DATA_HOME")
     if override is not None:
         return override
+    # Windows hosts other than x64 are refused by `poser.adapters.windows_host.check_windows_host`,
+    # so the x64 bundle folder is the only one poser looks in.
     binary_folder = plugin / "Contents" / "x86_64-win"
     for folder in (binary_folder, *binary_folder.parents):
         if folder == folder.parent:
