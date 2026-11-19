@@ -256,7 +256,7 @@ def captured_state(instrument_path: Path, tmp_path: Path) -> bytes:
 def test_a_captured_state_reaches_the_render(tmp_path: Path) -> None:
     sounds_dir = tmp_path / "sounds"
     composition = real_composition(tmp_path)
-    spec = require_instrument(composition, "serum")
+    spec = require_instrument(composition, "surge")
     config = from_options(spec.name, spec.spec.options, composition.context.root)
     state = captured_state(config.path, tmp_path)
 
@@ -269,19 +269,19 @@ def test_a_captured_state_reaches_the_render(tmp_path: Path) -> None:
     presets = tmp_path / "presets"
     (presets / "Test").mkdir(parents=True)
     (presets / "Test" / "low.fxp").write_bytes(fxp_bytes(component_state(state), name="low"))
-    serum = PedalboardInstrument(
+    surge = PedalboardInstrument(
         dataclasses.replace(config, sources={Identifier("test"): presets}),
         sounds_dir,
         REAL_FORMATS,
         native(),
     )
 
-    song = Song(bpm=60, tracks=(Track("lead", "serum", (Note(0, 60, 1.5, 100),)),))
+    song = Song(bpm=60, tracks=(Track("lead", "surge", (Note(0, 60, 1.5, 100),)),))
     performance = perform(song.graph(), song.tracks[0])
-    default = render(serum, SoundRef(config.name), performance, tmp_path / "default.npy")
-    low = render(serum, SoundRef(config.name, "saved/low"), performance, tmp_path / "saved.npy")
+    default = render(surge, SoundRef(config.name), performance, tmp_path / "default.npy")
+    low = render(surge, SoundRef(config.name, "saved/low"), performance, tmp_path / "saved.npy")
     preset_ref = SoundRef(config.name, "test/Test/low")
-    preset = render(serum, preset_ref, performance, tmp_path / "preset.npy")
+    preset = render(surge, preset_ref, performance, tmp_path / "preset.npy")
 
     assert strongest_hz(default.samples) == pytest.approx(262, abs=5)
     assert strongest_hz(low.samples) == pytest.approx(33, abs=3)
@@ -292,6 +292,10 @@ def test_a_captured_state_reaches_the_render(tmp_path: Path) -> None:
     "preset", ["presets/Bass/BA Ampology [CFA]", "presets/Leads/LD A Bit of Luck [SD]"]
 )
 def test_a_long_release_preset_is_silent_until_its_note(tmp_path: Path, preset: str) -> None:
+    """A long-release preset stays silent until its first note.
+
+    Surge never plays the stray note this test guards against, so only Serum reproduces it.
+    """
     composition = real_composition(tmp_path)
     spec = require_instrument(composition, "serum")
     config = from_options(spec.name, spec.spec.options, composition.context.root)

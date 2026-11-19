@@ -366,7 +366,10 @@ jobs:
             "tests/test_checking_real.py::test_each_instrument_returns_a_known_status_with_finite_numbers" `
             "tests/test_songs_real.py::test_song_renders_without_defects[demo.yaml]" `
             "tests/test_render_real.py::test_demo_song_renders_from_a_non_ascii_directory" `
-            "tests/test_pedalboard_real.py::test_a_plugin_loads_from_a_non_ascii_path" 2>&1 |
+            "tests/test_pedalboard_real.py::test_a_plugin_loads_from_a_non_ascii_path" `
+            "tests/test_pedalboard_real.py::test_a_captured_state_reaches_the_render" `
+            "tests/test_render_real.py::test_mod_wheel_changes_a_preset_that_maps_it" `
+            "tests/test_render_real.py::test_controller_change_lands_within_a_block_of_its_time" 2>&1 |
             Tee-Object -Variable output
           $status = $LASTEXITCODE
           if ($status -ne 0) { throw "the real-plugin tests failed" }
@@ -567,7 +570,10 @@ jobs:
             "tests/test_checking_real.py::test_each_instrument_returns_a_known_status_with_finite_numbers" `
             "tests/test_songs_real.py::test_song_renders_without_defects[demo.yaml]" `
             "tests/test_render_real.py::test_demo_song_renders_from_a_non_ascii_directory" `
-            "tests/test_pedalboard_real.py::test_a_plugin_loads_from_a_non_ascii_path" 2>&1 |
+            "tests/test_pedalboard_real.py::test_a_plugin_loads_from_a_non_ascii_path" `
+            "tests/test_pedalboard_real.py::test_a_captured_state_reaches_the_render" `
+            "tests/test_render_real.py::test_mod_wheel_changes_a_preset_that_maps_it" `
+            "tests/test_render_real.py::test_controller_change_lands_within_a_block_of_its_time" 2>&1 |
             Tee-Object -Variable output
           $status = $LASTEXITCODE
           if ($status -ne 0) { throw "the real-plugin tests failed" }

@@ -39,7 +39,7 @@ if TYPE_CHECKING:
     from pedalboard import AudioUnitPlugin, VST3Plugin
     from pedalboard_native import MIDIMessageLike
 
-# Serum applies a controller change at the start of the processing block that contains it, so
+# A plugin applies a controller change at the start of the processing block that contains it, so
 # the block size bounds controller timing. The size itself is `BUFFER_SIZE` in `poser.core.graph`,
 # where the feedback regime's one-block bound on in-cycle delays is enforced next to it.
 SETTLE_S = 0.1

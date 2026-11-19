@@ -544,6 +544,9 @@ REQUIRED_REAL_NODES = [
     "tests/test_songs_real.py::test_song_renders_without_defects[demo.yaml]",
     "tests/test_render_real.py::test_demo_song_renders_from_a_non_ascii_directory",
     "tests/test_pedalboard_real.py::test_a_plugin_loads_from_a_non_ascii_path",
+    "tests/test_pedalboard_real.py::test_a_captured_state_reaches_the_render",
+    "tests/test_render_real.py::test_mod_wheel_changes_a_preset_that_maps_it",
+    "tests/test_render_real.py::test_controller_change_lands_within_a_block_of_its_time",
 ]
 
 

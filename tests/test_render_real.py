@@ -62,11 +62,11 @@ def assert_demo_song_renders_aligned_audible_stems(directory: Path) -> None:
         assert measure_peak_dbfs(audio) > SILENCE_DBFS
 
 
-SOUND = "serum:presets/Leads/LD A Bit of Luck [SD]"
+SOUND = "surge:presets/Leads/Saw Octaves"
 
 
 def render_cc_song(tmp_path: Path, name: str, beats: float, *changes: ControlChange) -> np.ndarray:
-    require_instrument(real_composition(tmp_path), "serum")
+    require_instrument(real_composition(tmp_path), "surge")
     track = Track("lead", SOUND, (Note(0, 60, beats, 100),), cc=changes)
     (result,) = real_render(tmp_path, Song(120, (track,)), f"songs/{name}.yaml")
     assert isinstance(result, Rendered), result
@@ -91,5 +91,5 @@ def test_controller_change_lands_within_a_block_of_its_time(tmp_path: Path) -> N
         tmp_path, "stepped", 5, ControlChange(0, 1, 0), ControlChange(2.6, 1, 127)
     )
 
-    # The step is at 1.30 seconds. In 8192-sample blocks it took effect at about 1.21 seconds.
+    # The step is at 1.30 seconds; it must take effect within one processing block of it.
     assert 1.27 <= change_time_s(held, stepped) <= 1.35

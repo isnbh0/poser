@@ -157,7 +157,7 @@ from pedalboard import load_plugin
 from poser.adapters.pedalboard.state import encode_state
 from poser.adapters.pedalboard.worker import capture_state
 plugin = load_plugin(sys.argv[1])
-plugin.parameters["a_octave_oct"].raw_value = 0.1
+plugin.parameters["a_octave"].raw_value = 0.0
 open(sys.argv[2], "w").write(encode_state(capture_state(plugin)))
 """
 
@@ -247,7 +247,7 @@ def render_without_restoring_state(job: JsonValue) -> JsonValue:
 
 
 def fxp_bytes(chunk: bytes, name: str = "test", kind: bytes = b"FPCh") -> bytes:
-    """Build an opaque-chunk `.fxp` program for Serum around `chunk`."""
+    """Build an opaque-chunk `.fxp` program around `chunk`."""
     body = (
         kind
         + (1).to_bytes(4, "big")
