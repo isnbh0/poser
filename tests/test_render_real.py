@@ -10,7 +10,9 @@ from helpers import (
     band_spectrum_db,
     change_time_s,
     read_stem,
+    real_composition,
     real_render,
+    require_instrument,
 )
 from pedalboard.io import ReadableAudioFile
 
@@ -64,6 +66,7 @@ SOUND = "serum:presets/Leads/LD A Bit of Luck [SD]"
 
 
 def render_cc_song(tmp_path: Path, name: str, beats: float, *changes: ControlChange) -> np.ndarray:
+    require_instrument(real_composition(tmp_path), "serum")
     track = Track("lead", SOUND, (Note(0, 60, beats, 100),), cc=changes)
     (result,) = real_render(tmp_path, Song(120, (track,)), f"songs/{name}.yaml")
     assert isinstance(result, Rendered), result

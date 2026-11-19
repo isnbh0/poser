@@ -20,7 +20,7 @@ from poser.adapters.pedalboard.formats import PRESET_FORMATS
 from poser.adapters.pedalboard.instrument import PedalboardInstrument
 from poser.adapters.pedalboard.state import decode_state
 from poser.cli.common import RENDER_TIMEOUT_S
-from poser.compose import Composition, load
+from poser.compose import Composition, InstrumentSpec, load
 from poser.core.analysis import analyze_song
 from poser.core.audio import SAMPLE_RATE, SILENCE_DBFS, measure_peak_dbfs
 from poser.core.graph import Graph
@@ -79,10 +79,23 @@ def real_composition(tmp_path: Path) -> Composition:
     """Load the repository's local `poser.toml`, keeping sounds and results under `tmp_path`."""
     if not REAL_CONFIG.is_file():
         pytest.fail(
-            "real-plugin tests read poser.toml at the repository root; "
-            "copy src/poser/reference_setups/surge/poser.toml there and edit its paths"
+            "real-plugin tests read poser.toml at the repository root; run "
+            "`uv --project <this repo> run init-workspace --setup surge` in a scratch directory "
+            "and copy the generated poser.toml to the repository root"
         )
     return load(REAL_CONFIG, tmp_path / "sounds", tmp_path / "renders")
+
+
+def require_instrument(composition: Composition, name: str) -> InstrumentSpec:
+    """Return the composition's instrument entry named `name`, or skip the test without one.
+
+    Tests of one licensed plugin skip on the Surge-only root `poser.toml` that `AGENTS.md` has
+    contributors create.
+    """
+    for item in composition.config.instruments:
+        if item.name == name:
+            return item
+    pytest.skip(f"the root poser.toml defines no {name!r} instrument")
 
 
 def loaded_song(song: LoadedSong | Song | Graph) -> LoadedSong:

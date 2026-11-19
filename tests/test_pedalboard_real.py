@@ -23,6 +23,7 @@ from helpers import (
     real_composition,
     real_pedalboard_instruments,
     render_without_restoring_state,
+    require_instrument,
     strongest_hz,
 )
 
@@ -117,10 +118,7 @@ def test_a_plugin_loads_from_a_non_ascii_path(tmp_path: Path) -> None:
     """A copy of the `surge` bundle in a folder named in Hangul and a Latin accent loads and
     sounds. Only Surge is copied: a licensed or Audio Unit plugin may refuse to load from a copy."""
     composition = real_composition(tmp_path)
-    items = [item for item in composition.config.instruments if item.name == "surge"]
-    if not items:
-        pytest.skip("the root poser.toml defines no 'surge' instrument")
-    (item,) = items
+    item = require_instrument(composition, "surge")
     config = from_options(item.name, item.spec.options, composition.context.root)
     if not (config.path.is_dir() and config.path.suffix == ".vst3"):
         pytest.skip(f"the 'surge' instrument's path {config.path} is not a .vst3 bundle")
@@ -258,7 +256,7 @@ def captured_state(instrument_path: Path, tmp_path: Path) -> bytes:
 def test_a_captured_state_reaches_the_render(tmp_path: Path) -> None:
     sounds_dir = tmp_path / "sounds"
     composition = real_composition(tmp_path)
-    (spec,) = [item for item in composition.config.instruments if item.name == "serum"]
+    spec = require_instrument(composition, "serum")
     config = from_options(spec.name, spec.spec.options, composition.context.root)
     state = captured_state(config.path, tmp_path)
 
@@ -295,7 +293,7 @@ def test_a_captured_state_reaches_the_render(tmp_path: Path) -> None:
 )
 def test_a_long_release_preset_is_silent_until_its_note(tmp_path: Path, preset: str) -> None:
     composition = real_composition(tmp_path)
-    (spec,) = [item for item in composition.config.instruments if item.name == "serum"]
+    spec = require_instrument(composition, "serum")
     config = from_options(spec.name, spec.spec.options, composition.context.root)
     serum = PedalboardInstrument(config, tmp_path / "sounds", REAL_FORMATS, native())
     note_on = NoteOn(SAMPLE_RATE // 2, 48, 100)
