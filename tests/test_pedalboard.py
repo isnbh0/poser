@@ -1376,6 +1376,36 @@ def test_loadable_path_refuses_a_windows_bundle_without_a_binary(
     assert str(raised.value) == f"{bundle} has no Windows x64 binary at {binary}"
 
 
+def test_loadable_path_names_the_fix_for_a_renamed_windows_bundle(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bundle = tmp_path / "Surge XT (1).vst3"
+    write_pe(bundle / "Contents" / "x86_64-win" / "Surge XT.vst3")
+    binary = bundle / "Contents" / "x86_64-win" / "Surge XT (1).vst3"
+    monkeypatch.setattr(sys, "platform", "win32")
+
+    with pytest.raises(FileNotFoundError) as raised:
+        loadable_path(str(bundle))
+    assert str(raised.value) == (
+        f"{bundle} has no Windows x64 binary at {binary}; on Windows poser loads the binary "
+        "named after its bundle, and this bundle holds 'Surge XT.vst3'. Rename the bundle folder "
+        "to match, or set the instrument's or effect's path to the binary itself."
+    )
+
+
+def test_loadable_path_counts_no_directory_as_a_renamed_binary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bundle = tmp_path / "Surge XT (1).vst3"
+    (bundle / "Contents" / "x86_64-win" / "Other.vst3").mkdir(parents=True)
+    binary = bundle / "Contents" / "x86_64-win" / "Surge XT (1).vst3"
+    monkeypatch.setattr(sys, "platform", "win32")
+
+    with pytest.raises(FileNotFoundError) as raised:
+        loadable_path(str(bundle))
+    assert str(raised.value) == f"{bundle} has no Windows x64 binary at {binary}"
+
+
 @pytest.mark.parametrize("platform", ["darwin", "linux"])
 def test_loadable_path_keeps_the_path_off_windows(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, platform: str

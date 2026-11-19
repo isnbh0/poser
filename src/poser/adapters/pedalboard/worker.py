@@ -129,15 +129,38 @@ def loadable_path(path: str) -> str:
 
     On Windows, Pedalboard loads a VST3 only from its binary, so a bundle directory resolves to
     `Contents\\x86_64-win\\<bundle name>`. Any other path, on any platform, comes back exactly as
-    given: Pedalboard loads a macOS bundle directly and maps a Linux bundle itself. Raises
-    FileNotFoundError for a Windows bundle without an x64 binary.
+    given: Pedalboard loads a macOS bundle directly and maps a Linux bundle itself.
+
+    Raises FileNotFoundError for a Windows bundle without that binary. When the bundle's
+    `x86_64-win` folder holds `.vst3` files under other names, as in a copied or renamed bundle
+    such as `Surge XT (1).vst3`, the message names them and both fixes; otherwise it says the
+    bundle has no x64 binary. No other name is loaded in its place: with several, that would be a
+    guess.
     """
     if sys.platform != "win32" or not Path(path).is_dir():
         return path
     binary = windows_binary(Path(path))
-    if not binary.is_file():
-        raise FileNotFoundError(f"{path} has no Windows x64 binary at {binary}")
-    return str(binary)
+    if binary.is_file():
+        return str(binary)
+    message = f"{path} has no Windows x64 binary at {binary}"
+    # Only files count: a directory there cannot be named as the path, which would load it as a
+    # bundle.
+    try:
+        names = sorted(
+            item.name
+            for item in binary.parent.iterdir()
+            if item.name.lower().endswith(".vst3") and item.is_file()
+        )
+    except OSError:  # No such folder, or one that cannot be listed: the plain message stands.
+        names = []
+    if names:
+        found = ", ".join(repr(name) for name in names)
+        message += (
+            f"; on Windows poser loads the binary named after its bundle, and this bundle holds "
+            f"{found}. Rename the bundle folder to match, or set the instrument's or effect's "
+            "path to the binary itself."
+        )
+    raise FileNotFoundError(message)
 
 
 def load_external(path: str, plugin_name: str | None) -> "VST3Plugin | AudioUnitPlugin":
