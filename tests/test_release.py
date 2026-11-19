@@ -542,6 +542,8 @@ REQUIRED_REAL_NODES = [
     "tests/test_analyze_real.py::test_demo_song_mixes_and_analyzes",
     "tests/test_checking_real.py::test_each_instrument_returns_a_known_status_with_finite_numbers",
     "tests/test_songs_real.py::test_song_renders_without_defects[demo.yaml]",
+    "tests/test_render_real.py::test_demo_song_renders_from_a_non_ascii_directory",
+    "tests/test_pedalboard_real.py::test_a_plugin_loads_from_a_non_ascii_path",
 ]
 
 

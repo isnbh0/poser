@@ -38,6 +38,10 @@ REPO_DIR = Path(__file__).resolve().parents[1]
 SCAFFOLD_DIR = Path(str(files("poser").joinpath("scaffold")))
 SURGE_DIR = Path(str(files("poser.reference_setups.surge")))
 REAL_CONFIG = REPO_DIR / "poser.toml"
+# A directory name for real renders from non-ASCII paths. Hangul has no character in cp1252, the
+# ANSI code page of Windows CI; `é` is a different byte in UTF-8 than in any ANSI code page, so a
+# narrow `fopen` of a UTF-8 path misreads it everywhere; the space covers quoting.
+NON_ASCII_DIR = "스튜디오 é"
 # `chmod(0)` leaves a folder readable on Windows, where access control lists decide.
 needs_posix_permissions = pytest.mark.skipif(
     sys.platform == "win32", reason="chmod cannot make a folder unreadable on Windows"

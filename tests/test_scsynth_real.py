@@ -11,12 +11,15 @@ import os
 import re
 import shutil
 import sys
+import tempfile
 import time
+from collections.abc import Iterator
 from pathlib import Path
 
 import numpy as np
 import pytest
-from poser_scsynth.instrument import ScsynthInstrument, create
+from helpers import NON_ASCII_DIR
+from poser_scsynth.instrument import ScsynthInstrument, create, scratch
 from poser_scsynth.synthdefs import VOICE_BYTES
 
 from poser.cli.check import EXIT_ALL_PASS
@@ -130,6 +133,49 @@ def test_real_render_needs_no_supercollider_folder(
 def test_real_render_peaks_audibly(instrument: ScsynthInstrument, tmp_path: Path) -> None:
     audio = render_song(instrument, tmp_path, two_note_song(), "loud.npy")
     assert float(np.abs(audio.samples).max()) > 0.05, "the demo voice rendered silence"
+
+
+def assert_audible(audio: Audio) -> None:
+    assert np.isfinite(audio.samples).all()
+    assert float(np.abs(audio.samples).max()) > 0.05, "the demo voice rendered silence"
+
+
+def test_real_render_from_a_non_ascii_renders_directory(tmp_path: Path) -> None:
+    """The engine's command file and output sound sit in a renders directory named in Hangul and
+    a Latin accent, as in a studio a non-English user named."""
+    root = tmp_path / NON_ASCII_DIR
+    context = AdapterContext(root, root / "sounds", root / "renders")
+    instrument = create(Identifier("sc"), {"scsynth": str(real_scsynth())}, context)
+    assert_audible(render_song(instrument, tmp_path, two_note_song(), "non-ascii.npy"))
+
+
+@pytest.fixture
+def non_ascii_temp(monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]:
+    """A non-ASCII system temporary directory, as under a profile with a Korean account name.
+
+    It is made under the real temporary directory, which stays short when `--basetemp` is long.
+    """
+    temp = Path(tempfile.mkdtemp(prefix=NON_ASCII_DIR, dir=tempfile.gettempdir()))
+    monkeypatch.setattr(tempfile, "tempdir", str(temp))
+    try:
+        yield temp
+    finally:
+        shutil.rmtree(temp, ignore_errors=True)
+
+
+def test_real_render_from_a_non_ascii_temp_directory(tmp_path: Path, non_ascii_temp: Path) -> None:
+    """On Windows a renders directory too long for the engine's paths falls back to the system's
+    temporary directory, which lies under the user's profile."""
+    renders = tmp_path / "renders"
+    if sys.platform == "win32" and len(str(tmp_path)) <= 230:
+        # 240 characters: past the fallback's threshold, short enough to create with long
+        # paths off.
+        renders = tmp_path / ("p" * (239 - len(str(tmp_path))))
+    context = AdapterContext(tmp_path, tmp_path / "sounds", renders)
+    instrument = create(Identifier("sc"), {"scsynth": str(real_scsynth())}, context)
+    if sys.platform == "win32":
+        assert scratch(renders) == non_ascii_temp
+    assert_audible(render_song(instrument, tmp_path, two_note_song(), "non-ascii-temp.npy"))
 
 
 def test_real_voice_has_the_requested_pitch_and_releases(

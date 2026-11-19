@@ -4,7 +4,14 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-from helpers import SURGE_DIR, band_spectrum_db, change_time_s, read_stem, real_render
+from helpers import (
+    NON_ASCII_DIR,
+    SURGE_DIR,
+    band_spectrum_db,
+    change_time_s,
+    read_stem,
+    real_render,
+)
 from pedalboard.io import ReadableAudioFile
 
 from poser.adapters.song_formats import SONG_FORMATS
@@ -23,11 +30,23 @@ from poser.core.statuses import StemStatus
 
 @pytest.mark.real_plugins
 def test_demo_song_renders_aligned_audible_stems(tmp_path: Path) -> None:
+    assert_demo_song_renders_aligned_audible_stems(tmp_path)
+
+
+@pytest.mark.real_plugins
+def test_demo_song_renders_from_a_non_ascii_directory(tmp_path: Path) -> None:
+    """Sounds and renders sit in a folder named in Hangul and a Latin accent."""
+    directory = tmp_path / NON_ASCII_DIR
+    directory.mkdir()
+    assert_demo_song_renders_aligned_audible_stems(directory)
+
+
+def assert_demo_song_renders_aligned_audible_stems(directory: Path) -> None:
     song = load_song(SURGE_DIR / "demo.yaml", SONG_FORMATS)
     assert isinstance(song.source, Song)
     expected_samples = stem_samples(song.graph)
 
-    results = real_render(tmp_path, song, "songs/demo.yaml")
+    results = real_render(directory, song, "songs/demo.yaml")
 
     # Render order is the graph's topological order, not the report's song order.
     assert [result.track for result in results] == [node.name for node in song.graph.topological()]

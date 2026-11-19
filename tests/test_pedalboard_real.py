@@ -3,6 +3,7 @@
 import base64
 import dataclasses
 import os
+import shutil
 import subprocess
 import sys
 from importlib import metadata
@@ -13,6 +14,7 @@ import pytest
 from contracts import check_instrument_contract
 from helpers import (
     CAPTURE_STATE,
+    NON_ASCII_DIR,
     REAL_FORMATS,
     HarmonicMetrics,
     assert_sine_saw_pair,
@@ -109,6 +111,30 @@ def test_a_windows_plugin_loads_from_its_binary_as_from_its_bundle(tmp_path: Pat
             assert audio.frames == performance.samples
             assert measure_peak_dbfs(audio.samples) > SILENCE_DBFS, path
     assert bundles, "no Pedalboard instrument names a bundle directory"
+
+
+def test_a_plugin_loads_from_a_non_ascii_path(tmp_path: Path) -> None:
+    """A copy of the `surge` bundle in a folder named in Hangul and a Latin accent loads and
+    sounds. Only Surge is copied: a licensed or Audio Unit plugin may refuse to load from a copy."""
+    composition = real_composition(tmp_path)
+    items = [item for item in composition.config.instruments if item.name == "surge"]
+    if not items:
+        pytest.skip("the root poser.toml defines no 'surge' instrument")
+    (item,) = items
+    config = from_options(item.name, item.spec.options, composition.context.root)
+    if not (config.path.is_dir() and config.path.suffix == ".vst3"):
+        pytest.skip(f"the 'surge' instrument's path {config.path} is not a .vst3 bundle")
+    # Windows loads the binary named after the bundle, so the copy keeps the bundle's name.
+    copy = tmp_path / NON_ASCII_DIR / config.path.name
+    shutil.copytree(config.path, copy, symlinks=True)
+    instrument = PedalboardInstrument(
+        dataclasses.replace(config, path=copy), tmp_path / "sounds", REAL_FORMATS, native()
+    )
+    # Long enough for a plugin's latency to pass, unlike SHORT.
+    performance = Performance(SAMPLE_RATE // 2, (NoteOn(0, 60, 100), NoteOff(SAMPLE_RATE // 4, 60)))
+    audio = render(instrument, SoundRef(Identifier("surge")), performance, tmp_path / "copy.npy")
+    assert audio.frames == performance.samples
+    assert measure_peak_dbfs(audio.samples) > SILENCE_DBFS
 
 
 @pytest.mark.parametrize(

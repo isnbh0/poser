@@ -30,7 +30,6 @@ from scipy.io import wavfile
 from poser.core.audio import NUM_CHANNELS, SAMPLE_RATE, write_raw_audio
 from poser.core.jsonvalue import Json, JsonValue
 from poser.core.names import Identifier
-from poser.core.paths import child_cwd
 from poser.core.performance import PitchSupport
 from poser.core.ports import (
     AdapterContext,
@@ -191,7 +190,9 @@ def scratch(renders_dir: Path) -> Path:
     `ENGINE_PATH_LIMIT` characters, as on macOS and Linux always, since the names inside add
     "/.scsynth-xxxxxxxx/score.osc" to the directory's path. On Windows past the limit, the
     system's temporary directory stands in, because scsynth opens no deeper path however long
-    poser's own paths may be; the render deletes both files when it ends.
+    poser's own paths may be; the render deletes both files when it ends. The engine runs in the
+    render's directory under it, so under the renders directory that directory stays within
+    Windows' limit for a working directory.
     """
     if sys.platform == "win32" and (
         len(str(renders_dir)) + len("/.scsynth-xxxxxxxx/score.osc") > ENGINE_PATH_LIMIT
@@ -326,13 +327,14 @@ class ScsynthInstrument:
     ) -> RenderFailure | None:
         """Run one `scsynth -N` subprocess and return why it failed, or None when it finished.
 
-        Windows starts no child in a working directory of more than
-        `poser.core.paths.CREATE_PROCESS_CWD_LIMIT` characters, so a render poser runs from a
-        longer directory runs scsynth in the system's temporary directory; the command carries
-        every path scsynth reads and writes.
+        scsynth runs in `directory` and receives only the relative names `score.osc` and
+        `output.wav`, because on Windows it opens its command file with a narrow `fopen`, which
+        reads a UTF-8 path in the ANSI code page; a working directory reaches the engine as
+        UTF-16, so a non-ASCII renders or temporary directory never passes through that `fopen`.
+        `scratch` keeps `directory` within `poser.core.paths.CREATE_PROCESS_CWD_LIMIT` characters
+        when it is under the renders directory.
         """
-        score_path = directory / "score.osc"
-        score_path.write_bytes(score)
+        (directory / "score.osc").write_bytes(score)
         output_path = directory / "output.wav"
         # `-D 0` skips loading the account's synthdef folder at startup: the score sends every
         # synthdef, and on an account that never ran SuperCollider the folder is missing and
@@ -342,9 +344,9 @@ class ScsynthInstrument:
             "-D",
             "0",
             "-N",
-            str(score_path),
+            "score.osc",
             "_",  # No input file.
-            str(output_path),
+            "output.wav",
             str(SAMPLE_RATE),
             "WAV",
             "float",
@@ -358,7 +360,7 @@ class ScsynthInstrument:
                 timeout=timeout_s,
                 capture_output=True,
                 check=False,
-                cwd=child_cwd(Path(tempfile.gettempdir())),
+                cwd=str(directory),
             )
         except subprocess.TimeoutExpired as error:
             return RenderFailure(RenderFailureStatus.TIMED_OUT, f"scsynth: {error}")

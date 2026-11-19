@@ -451,21 +451,31 @@ def test_short_output_is_padded(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
     assert audio.frames == SAMPLE_RATE
 
 
-def test_a_render_runs_scsynth_where_child_cwd_says(
+def test_a_render_runs_scsynth_in_its_scratch_directory_with_relative_names(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """`_run` passes `child_cwd`'s directory to scsynth. On Windows, a render poser runs from a
-    working directory past CreateProcess's limit runs scsynth in the system's temporary
-    directory; the command carries every path scsynth reads and writes. The macOS run here
-    injects the directory and reads back where the engine ran."""
-    ran_in = tmp_path / "ran-in"
-    ran_in.mkdir()
-    reported = tmp_path / "cwd.txt"
-    monkeypatch.setenv("SCSTUB_CWD", str(reported))
-    monkeypatch.setattr("poser_scsynth.instrument.child_cwd", lambda fallback: str(ran_in))
+    """scsynth opens its command file with a narrow `fopen` on Windows, so it runs in the
+    render's directory and receives only relative file names; the stub still renders."""
+    calls: list[tuple[list[str], str]] = []
+    run = subprocess.run
+
+    def recording_run(
+        command: list[str], *, timeout: float, capture_output: bool, check: bool, cwd: str
+    ) -> subprocess.CompletedProcess[bytes]:
+        assert (Path(cwd) / "score.osc").is_file()
+        calls.append((command, cwd))
+        return run(command, timeout=timeout, capture_output=capture_output, check=check, cwd=cwd)
+
+    monkeypatch.setattr("poser_scsynth.instrument.subprocess.run", recording_run)
     instrument = make_instrument(tmp_path, make_stub(tmp_path), {"demo": make_source(tmp_path)})
     assert render_ok(instrument, tmp_path).frames > 0
-    assert reported.read_text(encoding="utf-8") == str(ran_in)
+
+    ((command, cwd),) = calls
+    assert command[command.index("-N") + 1] == "score.osc"
+    assert command[command.index("-N") + 3] == "output.wav"
+    assert Path(cwd).parent == scratch(tmp_path / "renders")
+    assert Path(cwd).name.startswith(".scsynth-")
+    assert not any(Path(argument).is_absolute() for argument in command[1:])
 
 
 def test_the_engine_s_scratch_is_the_render_s_directory(tmp_path: Path) -> None:

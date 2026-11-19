@@ -13,8 +13,6 @@ and does not do:
   its kill.
 - `SCSTUB_SHORT=1` — write one block instead of the score's full length (padding exercise).
 - `SCSTUB_NAN=1` — write NaN into the first block (the adapter owns finiteness).
-- `SCSTUB_CWD=<path>` — write the stub's working directory into that file (where a child
-  starts).
 - `SCSTUB_STDOUT=<message>` — print that message to stdout and exit 1 (an engine whose
   diagnosis lands on stdout).
 
@@ -118,8 +116,6 @@ def main(argv: list[str]) -> int:
     frames = round(timetags[-1] * int(rate) / BLOCK) * BLOCK + BLOCK
     if os.environ.get("SCSTUB_SHORT") == "1":
         frames = BLOCK
-    if cwd_path := os.environ.get("SCSTUB_CWD"):
-        Path(cwd_path).write_text(str(Path.cwd()), encoding="utf-8", newline="\n")
     Path(output_path).write_bytes(wav_bytes(int(rate), 2, frames))
     return 0
 

@@ -361,7 +361,9 @@ jobs:
             "tests/test_render_real.py::test_demo_song_renders_aligned_audible_stems" `
             "tests/test_analyze_real.py::test_demo_song_mixes_and_analyzes" `
             "tests/test_checking_real.py::test_each_instrument_returns_a_known_status_with_finite_numbers" `
-            "tests/test_songs_real.py::test_song_renders_without_defects[demo.yaml]" 2>&1 |
+            "tests/test_songs_real.py::test_song_renders_without_defects[demo.yaml]" `
+            "tests/test_render_real.py::test_demo_song_renders_from_a_non_ascii_directory" `
+            "tests/test_pedalboard_real.py::test_a_plugin_loads_from_a_non_ascii_path" 2>&1 |
             Tee-Object -Variable output
           $status = $LASTEXITCODE
           if ($status -ne 0) { throw "the real-plugin tests failed" }
@@ -560,7 +562,9 @@ jobs:
             "tests/test_render_real.py::test_demo_song_renders_aligned_audible_stems" `
             "tests/test_analyze_real.py::test_demo_song_mixes_and_analyzes" `
             "tests/test_checking_real.py::test_each_instrument_returns_a_known_status_with_finite_numbers" `
-            "tests/test_songs_real.py::test_song_renders_without_defects[demo.yaml]" 2>&1 |
+            "tests/test_songs_real.py::test_song_renders_without_defects[demo.yaml]" `
+            "tests/test_render_real.py::test_demo_song_renders_from_a_non_ascii_directory" `
+            "tests/test_pedalboard_real.py::test_a_plugin_loads_from_a_non_ascii_path" 2>&1 |
             Tee-Object -Variable output
           $status = $LASTEXITCODE
           if ($status -ne 0) { throw "the real-plugin tests failed" }
