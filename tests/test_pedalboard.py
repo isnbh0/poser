@@ -20,6 +20,7 @@ from typing import NoReturn, cast
 import numpy as np
 import pytest
 from contracts import check_instrument_contract, check_sound_capture_contract
+from fakes import TempScratch, adapter_context
 from helpers import (
     assert_sine_saw_pair,
     fxp_bytes,
@@ -81,7 +82,6 @@ from poser.core.performance import (
     performance_to_data,
 )
 from poser.core.ports import (
-    AdapterContext,
     Captured,
     CaptureFailure,
     CaptureRequest,
@@ -1287,7 +1287,7 @@ def create_serum(tmp_path: Path, formats: list[JsonValue]) -> PedalboardInstrume
         "sources": {"presets": "presets"},
         "formats": formats,
     }
-    context = AdapterContext(tmp_path, tmp_path / "sounds", tmp_path / "renders")
+    context = adapter_context(tmp_path, tmp_path / "sounds", tmp_path / "renders")
     return instrument_module.create(SERUM, options, context)
 
 
@@ -2257,8 +2257,12 @@ def test_render_effect_lets_a_frame_mismatch_raise(loader: FakeLoader, tmp_path:
         render_effect(effect_job(tmp_path, path="/Drive.vst3", builtin=None))
 
 
-def make_effect(tmp_path: Path, options: dict[str, JsonValue] | None = None) -> PedalboardEffect:
-    context = AdapterContext(tmp_path, tmp_path / "sounds", tmp_path / "renders")
+def make_effect(
+    tmp_path: Path,
+    options: dict[str, JsonValue] | None = None,
+    scratch: TempScratch | None = None,
+) -> PedalboardEffect:
+    context = adapter_context(tmp_path, tmp_path / "sounds", tmp_path / "renders", scratch)
     return instrument_module.create_effect(
         Identifier("drive"), options or {"builtin": "Gain", "parameters": {"gain_db": -6}}, context
     )
@@ -2742,3 +2746,18 @@ def test_a_group_member_load_reports_the_missing_runtime(
     detail = str(result["detail"])
     assert detail.startswith("member '")
     assert detail.endswith(": install the runtime")
+
+
+def test_the_effect_s_job_inputs_come_from_the_context_s_scratch(tmp_path: Path) -> None:
+    port = TempScratch()
+    effect = make_effect(tmp_path, scratch=port)
+    audio = Audio(np.full((2, 2400), 0.5, dtype=np.float32))
+
+    assert (
+        effect.render(EffectRenderRequest(audio, resolved_recipe(effect), tmp_path / "o.npy"), 60)
+        is None
+    )
+    assert effect.render_group(group_request(tmp_path), 60) is None
+
+    assert len(port.made) == 2
+    assert not any(made.exists() for made in port.made)

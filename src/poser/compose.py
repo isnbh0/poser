@@ -28,7 +28,8 @@ import copy
 import inspect
 import re
 import tomllib
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Generator, Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import MappingProxyType
@@ -57,6 +58,7 @@ from poser.core.ports import (
     PianoRollDrawer,
     RecordWriter,
     RenderStore,
+    Scratch,
     SongFormat,
     UnsupportedPlatformError,
     Visualizer,
@@ -704,6 +706,30 @@ def delivery_writer() -> DeliveryWriter:
     return _poser_part("poser.adapters.delivery:create", DeliveryWriter)
 
 
+SCRATCH = "poser.adapters.filesystem:create_scratch"
+"""The scratch port's factory, which takes no arguments."""
+
+
+class _LazyScratch:
+    """The scratch port, built from `SCRATCH` when a directory is first requested, so building a
+    context imports no adapter and runs no platform check."""
+
+    def __init__(self) -> None:
+        self._scratch: Scratch | None = None
+
+    @contextmanager
+    def directory(self, *, parent: Path | None = None, prefix: str = "poser-") -> Generator[Path]:
+        if self._scratch is None:
+            self._scratch = _poser_part(SCRATCH, Scratch)
+        with self._scratch.directory(parent=parent, prefix=prefix) as path:
+            yield path
+
+
+def adapter_context(root: Path, sounds_dir: Path, renders_dir: Path) -> AdapterContext:
+    """The context factories receive, holding a scratch port that imports nothing until used."""
+    return AdapterContext(root, sounds_dir, renders_dir, _LazyScratch())
+
+
 def load(path: Path, sounds_dir: Path, renders_dir: Path) -> Composition:
     """Read a workspace config and return its composition, which builds adapters on first use.
 
@@ -711,5 +737,5 @@ def load(path: Path, sounds_dir: Path, renders_dir: Path) -> Composition:
     uses. Raises ConfigError for a config it cannot use; imports no adapter.
     """
     config = read_config(path)
-    context = AdapterContext(path.absolute().parent, sounds_dir, renders_dir)
+    context = adapter_context(path.absolute().parent, sounds_dir, renders_dir)
     return Composition(config, context)

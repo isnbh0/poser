@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Never
 
 import pytest
+from fakes import adapter_context
 from poser_scsynth import instrument as instrument_module
 from poser_scsynth.instrument import create
 from poser_scsynth.scores import build_score
@@ -27,7 +28,6 @@ from poser.core.jsonvalue import Json
 from poser.core.names import Identifier
 from poser.core.performance import Control, NoteOff, NoteOn
 from poser.core.ports import (
-    AdapterContext,
     ConfigError,
     RenderFailure,
     RenderRequest,
@@ -223,14 +223,14 @@ def test_controllers_broadcast_and_latch_across_overlaps_and_silence() -> None:
 
 @pytest.mark.parametrize("value", [None, "", "  ", False, 42, 1.5, [], {}])
 def test_explicit_invalid_scsynth_option_is_rejected(tmp_path: Path, value: "JsonValue") -> None:
-    context = AdapterContext(tmp_path, tmp_path / "sounds", tmp_path / "renders")
+    context = adapter_context(tmp_path, tmp_path / "sounds", tmp_path / "renders")
     with pytest.raises(ConfigError, match="scsynth"):
         create(Identifier("sc"), {"scsynth": value}, context)
 
 
 @pytest.mark.parametrize("source", ["builtin", "saved"])
 def test_reserved_source_names_are_rejected(tmp_path: Path, source: str) -> None:
-    context = AdapterContext(tmp_path, tmp_path / "sounds", tmp_path / "renders")
+    context = adapter_context(tmp_path, tmp_path / "sounds", tmp_path / "renders")
     with pytest.raises(ConfigError, match="reserved"):
         create(Identifier("sc"), {"sources": {source: "missing-source"}}, context)
 
@@ -241,7 +241,7 @@ def test_build_and_guide_need_no_engine_or_workspace_files(
     assert instrument_module.__file__ is not None
     expected = Path(instrument_module.__file__).with_name("guide.md").read_text(encoding="utf-8")
     root = tmp_path / "missing-workspace"
-    context = AdapterContext(root, root / "missing-sounds", root / "missing-renders")
+    context = adapter_context(root, root / "missing-sounds", root / "missing-renders")
     options: dict[str, JsonValue] = {
         "scsynth": "missing-engine/scsynth",
         "sources": {"demo": "missing-source"},

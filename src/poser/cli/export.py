@@ -7,7 +7,7 @@ from pathlib import Path
 
 from poser.cli.common import RENDER_TIMEOUT_S, command, fail, progress
 from poser.cli.workspace import WorkspaceError, fill_path_options, song_id
-from poser.compose import Composition, delivery_writer, parse_config
+from poser.compose import Composition, adapter_context, delivery_writer, parse_config
 from poser.core.delivery import (
     DeliveryFailure,
     DeliveryIOFailed,
@@ -20,7 +20,7 @@ from poser.core.delivery import (
     export_song,
     result_to_data,
 )
-from poser.core.ports import AdapterContext, ConfigError
+from poser.core.ports import ConfigError
 from poser.core.text import AUTHORED_ENCODING
 
 PROG = "export-song"
@@ -34,7 +34,7 @@ def _run(args: argparse.Namespace) -> DeliveryResult:
         if snapshot.data is None:
             return InvalidInput(f"missing configuration: {config_path}")
         config = parse_config(snapshot.data.decode(AUTHORED_ENCODING), config_path)
-        context = AdapterContext(
+        context = adapter_context(
             config_path.parent, args.sounds_dir.resolve(), args.output_dir.resolve()
         )
         composition = Composition(config, context)

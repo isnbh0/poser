@@ -440,3 +440,24 @@ def test_check_platform_accepts_macos_linux_and_windows(
 ) -> None:
     monkeypatch.setattr(sys, "platform", platform)
     check_platform()
+
+
+def test_a_job_directory_that_cannot_be_removed_keeps_the_result(
+    workers: ModuleType, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import shutil
+
+    left: list[Path] = []
+
+    def held(path: Path) -> NoReturn:
+        left.append(Path(path))
+        raise PermissionError(13, "held by a helper", str(path))
+
+    monkeypatch.setattr(shutil, "rmtree", held)
+
+    assert run_isolated(target(workers, "done"), {}, 30) == {"done": True}
+    assert len(left) == 1
+    assert left[0].is_dir()
+    assert str(left[0]) in capsys.readouterr().err
+    monkeypatch.undo()
+    shutil.rmtree(left[0])

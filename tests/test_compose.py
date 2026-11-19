@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, NoReturn
 from unittest.mock import Mock
 
 import pytest
+from fakes import adapter_context
 from helpers import SURGE_DIR
 
 from poser.adapters.chords import GUIDE as CHORDS_GUIDE
@@ -284,7 +285,7 @@ def test_text_config_anchors_relative_paths_to_future_workspace(tmp_path: Path) 
     root = tmp_path / "future"
     path = root / "poser.toml"
     config = parse_config(SERUM, path)
-    context = AdapterContext(root, root / "sounds", root / "renders")
+    context = adapter_context(root, root / "sounds", root / "renders")
     instrument = Composition(config, context).instruments()[Identifier("serum")]
     assert isinstance(instrument, PedalboardInstrument)
     assert instrument._config.path == root / "Missing.vst3"
@@ -540,7 +541,7 @@ def test_the_context_carries_the_command_s_directories(
 
     load_composition(args).instruments()
 
-    assert context_seen(module) == AdapterContext(tmp_path, Path("s"), Path("/r"))
+    assert context_seen(module) == adapter_context(tmp_path, Path("s"), Path("/r"))
 
 
 def test_the_context_defaults_to_the_root_s_directories(
@@ -552,7 +553,7 @@ def test_the_context_defaults_to_the_root_s_directories(
 
     load_composition(argparse.Namespace(config=path)).instruments()
 
-    assert context_seen(module) == AdapterContext(
+    assert context_seen(module) == adapter_context(
         tmp_path, tmp_path / "sounds", tmp_path / "renders"
     )
 
@@ -816,6 +817,27 @@ def test_load_imports_no_adapter_module(tmp_path: Path) -> None:
     )
 
     assert result.stdout.strip() == "['poser.adapters', 'poser.adapters.loading']"
+
+
+def test_the_context_s_scratch_imports_the_facility_only_when_first_used(tmp_path: Path) -> None:
+    script = (
+        "import sys\nfrom pathlib import Path\n"
+        "from poser.compose import adapter_context\n"
+        "from poser.core.ports import Scratch\n"
+        f"root = Path({str(tmp_path)!r})\n"
+        "context = adapter_context(root, root / 's', root / 'r')\n"
+        "print(isinstance(context.scratch, Scratch), sorted(root.iterdir()) == [],"
+        " 'poser.adapters.filesystem' in sys.modules)\n"
+        "with context.scratch.directory(parent=root) as directory:\n"
+        "    print(directory.parent == root, 'poser.adapters.filesystem' in sys.modules)\n"
+        "print(directory.exists())\n"
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True, check=True, encoding="utf-8"
+    )
+
+    assert result.stdout.split("\n")[:3] == ["True True False", "True True", "False"]
 
 
 def test_each_method_builds_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

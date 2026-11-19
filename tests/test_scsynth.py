@@ -19,6 +19,7 @@ import numpy as np
 import pytest
 from contracts import check_instrument_contract
 from distlib.scripts import ScriptMaker, enquote_executable
+from fakes import TempScratch, adapter_context
 from interpreter import BASE_PYTHON
 from poser_scsynth.instrument import ENGINE_PATH_LIMIT, ScsynthInstrument, create, scratch
 from poser_scsynth.scores import build_score, hz
@@ -27,7 +28,6 @@ from poser.core.audio import NUM_CHANNELS, SAMPLE_RATE, Audio, read_raw_audio
 from poser.core.names import Identifier
 from poser.core.performance import Control, NoteOff, NoteOn, Performance, PitchSupport
 from poser.core.ports import (
-    AdapterContext,
     RenderFailure,
     RenderRequest,
     ResolvedSound,
@@ -76,14 +76,17 @@ def make_stub(directory: Path) -> Path:
 
 
 def make_instrument(
-    tmp_path: Path, scsynth: Path | None, sources: dict[str, Path] | None = None
+    tmp_path: Path,
+    scsynth: Path | None,
+    sources: dict[str, Path] | None = None,
+    scratch_port: TempScratch | None = None,
 ) -> ScsynthInstrument:
     options: dict[str, JsonValue] = {}
     if scsynth is not None:
         options["scsynth"] = str(scsynth)
     if sources:
         options["sources"] = {name: str(path) for name, path in sources.items()}
-    context = AdapterContext(tmp_path, tmp_path / "sounds", tmp_path / "renders")
+    context = adapter_context(tmp_path, tmp_path / "sounds", tmp_path / "renders", scratch_port)
     return create(Identifier("sc"), options, context)
 
 
@@ -476,6 +479,29 @@ def test_a_render_runs_scsynth_in_its_scratch_directory_with_relative_names(
     assert Path(cwd).parent == scratch(tmp_path / "renders")
     assert Path(cwd).name.startswith(".scsynth-")
     assert not any(Path(argument).is_absolute() for argument in command[1:])
+
+
+def test_a_render_s_directory_comes_from_the_context_s_scratch(tmp_path: Path) -> None:
+    port = TempScratch()
+    source = make_source(tmp_path)
+    instrument = make_instrument(tmp_path, make_stub(tmp_path), {"demo": source}, port)
+
+    render_ok(instrument, tmp_path)
+
+    (made,) = port.made
+    assert made.parent == scratch(tmp_path / "renders")
+    assert made.name.startswith(".scsynth-")
+    assert not made.exists()
+
+
+def test_a_render_directory_left_behind_keeps_the_render(tmp_path: Path) -> None:
+    port = TempScratch(fail_removal=True)
+    source = make_source(tmp_path)
+    instrument = make_instrument(tmp_path, make_stub(tmp_path), {"demo": source}, port)
+
+    assert render_ok(instrument, tmp_path).frames == SAMPLE_RATE
+    (made,) = port.made
+    assert made.is_dir()
 
 
 def test_the_engine_s_scratch_is_the_render_s_directory(tmp_path: Path) -> None:

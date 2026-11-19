@@ -18,6 +18,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+from fakes import adapter_context
 from helpers import NON_ASCII_DIR
 from poser_scsynth.instrument import ScsynthInstrument, create, scratch
 from poser_scsynth.synthdefs import VOICE_BYTES
@@ -29,7 +30,7 @@ from poser.core.audio import SAMPLE_RATE, Audio, read_raw_audio
 from poser.core.loading import LoadedSong
 from poser.core.names import Identifier, SongId
 from poser.core.performance import Control, NoteOff, NoteOn, Performance
-from poser.core.ports import AdapterContext, RenderRequest, ResolvedSound
+from poser.core.ports import RenderRequest, ResolvedSound
 from poser.core.rendering import Rendered, TrackResult
 from poser.core.report import CompleteReport
 from poser.core.song import Note, Song, Track
@@ -74,7 +75,7 @@ def real_scsynth() -> Path:
 
 @pytest.fixture
 def instrument(tmp_path: Path) -> ScsynthInstrument:
-    context = AdapterContext(tmp_path, tmp_path / "sounds", tmp_path / "renders")
+    context = adapter_context(tmp_path, tmp_path / "sounds", tmp_path / "renders")
     return create(Identifier("sc"), {"scsynth": str(real_scsynth())}, context)
 
 
@@ -144,7 +145,7 @@ def test_real_render_from_a_non_ascii_renders_directory(tmp_path: Path) -> None:
     """The engine's command file and output sound sit in a renders directory named in Hangul and
     a Latin accent, as in a studio a non-English user named."""
     root = tmp_path / NON_ASCII_DIR
-    context = AdapterContext(root, root / "sounds", root / "renders")
+    context = adapter_context(root, root / "sounds", root / "renders")
     instrument = create(Identifier("sc"), {"scsynth": str(real_scsynth())}, context)
     assert_audible(render_song(instrument, tmp_path, two_note_song(), "non-ascii.npy"))
 
@@ -171,7 +172,7 @@ def test_real_render_from_a_non_ascii_temp_directory(tmp_path: Path, non_ascii_t
         # 240 characters: past the fallback's threshold, short enough to create with long
         # paths off.
         renders = tmp_path / ("p" * (239 - len(str(tmp_path))))
-    context = AdapterContext(tmp_path, tmp_path / "sounds", renders)
+    context = adapter_context(tmp_path, tmp_path / "sounds", renders)
     instrument = create(Identifier("sc"), {"scsynth": str(real_scsynth())}, context)
     if sys.platform == "win32":
         assert scratch(renders) == non_ascii_temp
@@ -242,7 +243,7 @@ def test_real_controller_reaches_the_voice(tmp_path: Path, monkeypatch: pytest.M
     source.mkdir()
     (source / "voice.scsyndef").write_bytes(VOICE_BYTES)
     (source / "voice.json").write_text('{"cc": {"1": "amp"}}', encoding="utf-8", newline="\n")
-    context = AdapterContext(tmp_path, tmp_path / "sounds", tmp_path / "renders")
+    context = adapter_context(tmp_path, tmp_path / "sounds", tmp_path / "renders")
     instrument = create(
         Identifier("sc"), {"scsynth": str(real_scsynth()), "sources": {"cc": str(source)}}, context
     )
@@ -275,7 +276,7 @@ def test_real_initial_controls_and_polyphonic_broadcast(tmp_path: Path) -> None:
     source.mkdir()
     (source / "voice.scsyndef").write_bytes(VOICE_BYTES)
     (source / "voice.json").write_text('{"cc": {"1": "amp"}}', encoding="utf-8", newline="\n")
-    context = AdapterContext(tmp_path, tmp_path / "sounds", tmp_path / "renders")
+    context = adapter_context(tmp_path, tmp_path / "sounds", tmp_path / "renders")
     instrument = create(
         Identifier("sc"),
         {"scsynth": str(real_scsynth()), "sources": {"demo": str(source)}},

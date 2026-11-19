@@ -288,3 +288,13 @@ search error; the PowerShell pipeline instead succeeds with no output.
   `pitched: false` to stay out of readings; its pitches must then be whole.
 
 Songs whose pitches are all whole render the same audio.
+
+## Adapter context scratch
+
+- **Symptom:** a custom adapter's tests fail with `TypeError` constructing `AdapterContext`, which
+  lacks a `scratch` argument.
+  **Cause:** `AdapterContext` now carries `scratch`, the port adapters use for temporary
+  directories. Its cleanup retries files Windows reports as held and never fails the work.
+  **Fix:** build contexts with `poser.compose.adapter_context(root, sounds_dir, renders_dir)`, or
+  pass any object whose `directory()` satisfies `poser.core.ports.Scratch`. In the adapter,
+  replace `tempfile.TemporaryDirectory()` with `context.scratch.directory()`.

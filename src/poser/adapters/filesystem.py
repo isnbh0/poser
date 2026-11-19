@@ -10,11 +10,12 @@ importing this module loads no platform-specific module and succeeds on every pl
 """
 
 import os
+import shutil
 import stat
 import sys
 import tempfile
-from collections.abc import Callable
-from contextlib import AbstractContextManager
+from collections.abc import Callable, Generator
+from contextlib import AbstractContextManager, contextmanager
 from pathlib import Path
 from typing import Protocol
 
@@ -346,3 +347,40 @@ def create_file_writer() -> AtomicFileWriter:
     """The file writer commands build through `poser.compose.file_writer`. Raises
     UnsupportedPlatformError on a platform the facility has no backend for."""
     return AtomicFileWriter(native())
+
+
+class FileScratch:
+    """The scratch port on the file-system facility.
+
+    With `patient=True`, exit removes the directory through `FileSystem.remove_tree`, which on
+    Windows clears read-only marks and waits briefly for held files. With `patient=False`, exit
+    makes one `shutil.rmtree` attempt, for a caller that expects a holder and must not wait.
+    Either way, a removal that still fails leaves the directory and reports it on standard error,
+    as `Scratch` requires.
+    """
+
+    def __init__(self, fs: FileSystem, *, patient: bool = True) -> None:
+        self._fs = fs
+        self._patient = patient
+
+    @contextmanager
+    def directory(self, *, parent: Path | None = None, prefix: str = "poser-") -> Generator[Path]:
+        path = Path(tempfile.mkdtemp(prefix=prefix, dir=parent))
+        try:
+            yield path
+        finally:
+            try:
+                if self._patient:
+                    self._fs.remove_tree(path)
+                else:
+                    shutil.rmtree(path)
+            except OSError as error:
+                sys.stderr.write(
+                    f"poser: left the scratch directory {path} ({error}); delete it once no "
+                    "program holds it\n"
+                )
+
+
+def create_scratch() -> FileScratch:
+    """The scratch port the composition root gives adapters, on the native file system."""
+    return FileScratch(native())

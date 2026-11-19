@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import cast
 
 import pytest
+from fakes import adapter_context
 from generated_songs import random_song
 
 from poser.adapters.tonal import create_tonal
@@ -17,7 +18,7 @@ from poser.core.interpreting import interpret_marks, read_song
 from poser.core.jsonvalue import JsonValue
 from poser.core.marks import Mark, Marks
 from poser.core.names import Identifier, NodeName
-from poser.core.ports import AdapterContext, Framework, Vocabulary
+from poser.core.ports import Framework, Vocabulary
 from poser.core.reading import (
     Agrees,
     Ambiguous,
@@ -335,7 +336,7 @@ MARKS = Marks(
 def test_marks_never_change_a_reading_of_a_generated_song() -> None:
     """A smoke test over real songs; `test_frameworks_never_see_marks` is the guard."""
     root = Path()
-    tonal = cast("Framework", create_tonal({}, AdapterContext(root, root, root)))
+    tonal = cast("Framework", create_tonal({}, adapter_context(root, root, root)))
     for seed in range(300):
         song = random_song(seed)
         marked = replace(song, marks=MARKS)

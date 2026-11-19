@@ -20,6 +20,7 @@ from poser.core.jsonvalue import Json, JsonValue, json_object
 from poser.core.names import Identifier, SongId, Suffix
 from poser.core.performance import NoteOff, PitchSupport
 from poser.core.ports import (
+    AdapterContext,
     AudioFileError,
     Captured,
     CaptureFailure,
@@ -697,3 +698,29 @@ class FakeSongFormat(FakeRecordWriter):
         except (OSError, ValueError) as error:
             raise SongError([f"cannot read {path}: {error}"]) from error
         return parse_song(data)
+
+
+class TempScratch:
+    """A scratch port for tests: `mkdtemp` directories removed with `shutil.rmtree`, recording
+    each directory it made. `fail_removal` leaves them, reporting as the port requires."""
+
+    def __init__(self, *, fail_removal: bool = False) -> None:
+        self.made: list[Path] = []
+        self.fail_removal = fail_removal
+
+    @contextmanager
+    def directory(self, *, parent: Path | None = None, prefix: str = "poser-") -> Generator[Path]:
+        path = Path(tempfile.mkdtemp(prefix=prefix, dir=parent))
+        self.made.append(path)
+        try:
+            yield path
+        finally:
+            if not self.fail_removal:
+                shutil.rmtree(path, ignore_errors=True)
+
+
+def adapter_context(
+    root: Path, sounds_dir: Path, renders_dir: Path, scratch: TempScratch | None = None
+) -> AdapterContext:
+    """An `AdapterContext` for tests, with a `TempScratch` unless `scratch` is given."""
+    return AdapterContext(root, sounds_dir, renders_dir, scratch or TempScratch())

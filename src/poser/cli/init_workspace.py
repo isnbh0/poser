@@ -11,9 +11,9 @@ from typing import Never, override
 from poser.cli.common import command
 from poser.cli.guide import GUIDE_NAME, workspace_guide
 from poser.cli.workspace import CONFIG_NAME, Workspace
-from poser.compose import Composition, parse_config, workspace_initializer
+from poser.compose import Composition, adapter_context, parse_config, workspace_initializer
 from poser.core.paths import is_link
-from poser.core.ports import AdapterContext, ConfigError, WorkspaceInitializer
+from poser.core.ports import ConfigError, WorkspaceInitializer
 from poser.core.text import BYTE_ORDER_MARK
 from poser.reference_setups.dispatch import SETUPS, prepare
 from poser.reference_setups.host import Host
@@ -141,7 +141,7 @@ def main(argv: list[str] | None = None) -> int:
             setup.config + "\n[guidance]\nadvice = " + str(args.advice == "on").lower() + "\n"
         )
         config = parse_config(config_text, workspace.config)
-        context = AdapterContext(directory, workspace.sounds_dir, workspace.renders_dir)
+        context = adapter_context(directory, workspace.sounds_dir, workspace.renders_dir)
         guide = workspace_guide(Composition(config, context))
         outputs = {
             "AGENTS.md": _scaffold("agents.md"),

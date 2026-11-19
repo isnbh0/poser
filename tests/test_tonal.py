@@ -6,6 +6,7 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
+from fakes import adapter_context
 from generated_songs import noise_cluster, random_song, tonal_song
 from helpers import SURGE_DIR
 
@@ -36,7 +37,7 @@ from poser.core.loading import load_song
 from poser.core.meter import Meter, MeterSpan
 from poser.core.music import MODES as SCALES
 from poser.core.names import NodeName
-from poser.core.ports import AdapterContext, ConfigError, Vocabulary
+from poser.core.ports import ConfigError, Vocabulary
 from poser.core.reading import (
     Ambiguous,
     Known,
@@ -309,7 +310,7 @@ def test_unpitched_tracks_are_not_read() -> None:
     assert read_keys(request, 16) == read_keys(ScoreRequest.default(one_track(CADENCE).graph()), 16)
 
 
-CONTEXT = AdapterContext(Path("/studio"), Path("/studio"), Path("/studio"))
+CONTEXT = adapter_context(Path("/studio"), Path("/studio"), Path("/studio"))
 
 
 def test_the_adapter_reads_metered_stretches_with_its_window_bars() -> None:
@@ -354,7 +355,7 @@ def test_the_guide_names_both_options_and_their_defaults() -> None:
 
 def test_the_adapter_reads_with_its_window() -> None:
     root = Path("/studio")
-    framework = create_tonal({"window_beats": 8}, AdapterContext(root, root, root))
+    framework = create_tonal({"window_beats": 8}, adapter_context(root, root, root))
     song = one_track([*CADENCE, (12, 60, 4)])
     request = ScoreRequest.default(song.graph())
     assert framework.name == "tonal"
@@ -501,7 +502,7 @@ def test_a_key_mark_accepts_a_mode_a_tonal_key_refuses(mode: str) -> None:
 
 def test_the_key_factory_builds_a_vocabulary_and_takes_no_options() -> None:
     root = Path("/studio")
-    context = AdapterContext(root, root, root)
+    context = adapter_context(root, root, root)
     vocabulary = create_key({}, context)
     assert isinstance(vocabulary, Vocabulary)
     assert vocabulary.name == "key"

@@ -14,12 +14,12 @@ import os
 import signal
 import subprocess
 import sys
-import tempfile
 import time
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import TypeGuard
 
+from poser.adapters.filesystem import FileScratch, native
 from poser.adapters.windows_host import check_windows_host
 from poser.core.jsonvalue import JsonValue, is_json_value, json_object
 from poser.core.paths import child_cwd
@@ -130,8 +130,9 @@ def run_isolated(
     if "." in qualname or "<" in qualname:
         raise ValueError(f"a child process cannot import {module}.{qualname}")
 
-    # On Windows, a helper the worker left running may still hold stderr.txt.
-    with tempfile.TemporaryDirectory(ignore_cleanup_errors=sys.platform == "win32") as directory:
+    # A helper the worker left running may still hold stderr.txt, so cleanup makes one attempt
+    # instead of waiting for it; a held directory is left and reported.
+    with FileScratch(native(), patient=False).directory() as directory:
         job_path = Path(directory) / "job.json"
         result_path = Path(directory) / "result.json"
         stderr_path = Path(directory) / "stderr.txt"

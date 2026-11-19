@@ -7,7 +7,6 @@ Serum's default patch does not repeat between renders, and its stems are still c
 """
 
 import plistlib
-import tempfile
 import threading
 import xml.parsers.expat
 from collections.abc import Mapping
@@ -77,6 +76,7 @@ from poser.core.ports import (
     RenderRequest,
     ResolvedEffect,
     ResolvedSound,
+    Scratch,
     SoundFailure,
     SoundListing,
 )
@@ -357,8 +357,9 @@ class PedalboardEffect:
     for a path recipe; a builtin's recipe is fixed at build time.
     """
 
-    def __init__(self, config: EffectConfig) -> None:
+    def __init__(self, config: EffectConfig, scratch: Scratch) -> None:
         self._config = config
+        self._scratch = scratch
         self._plugin_version: tuple[str | None] | None = None
 
     @property
@@ -427,7 +428,7 @@ class PedalboardEffect:
         }
         try:
             # The input crosses as a file, so plugin-sized audio never crosses as JSON.
-            with tempfile.TemporaryDirectory() as directory:
+            with self._scratch.directory() as directory:
                 input_path = Path(directory) / "input.npy"
                 write_raw_audio(input_path, request.audio.samples)
                 job["audio_path"] = str(input_path)
@@ -493,7 +494,7 @@ class PedalboardEffect:
         }
         try:
             # Every member's input crosses as a file, so plugin-sized audio never crosses as JSON.
-            with tempfile.TemporaryDirectory() as directory:
+            with self._scratch.directory() as directory:
                 for index, member in enumerate(request.members):
                     input_path = Path(directory) / f"{member.name}.input.npy"
                     write_raw_audio(input_path, member.audio.samples)
@@ -568,4 +569,4 @@ def create_effect(
     """
     check_platform()
     config = effect_from_options(name, options, context.root)
-    return PedalboardEffect(config)
+    return PedalboardEffect(config, context.scratch)

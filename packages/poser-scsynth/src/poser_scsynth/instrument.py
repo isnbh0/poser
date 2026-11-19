@@ -36,6 +36,7 @@ from poser.core.ports import (
     RenderFailure,
     RenderRequest,
     ResolvedSound,
+    Scratch,
     SoundFailure,
     SoundListing,
 )
@@ -190,7 +191,8 @@ def scratch(renders_dir: Path) -> Path:
     `ENGINE_PATH_LIMIT` characters, as on macOS and Linux always, since the names inside add
     "/.scsynth-xxxxxxxx/score.osc" to the directory's path. On Windows past the limit, the
     system's temporary directory stands in, because scsynth opens no deeper path however long
-    poser's own paths may be; the render deletes both files when it ends. The engine runs in the
+    poser's own paths may be. The render's scratch port removes both files when it ends, or
+    reports the directory it could not remove. The engine runs in the
     render's directory under it, so under the renders directory that directory stays within
     Windows' limit for a working directory.
     """
@@ -204,10 +206,13 @@ def scratch(renders_dir: Path) -> Path:
 class ScsynthInstrument:
     """A SuperCollider engine, its sound sources, and the sounds saved with save-sound."""
 
-    def __init__(self, config: ScsynthConfig, sounds_dir: Path, renders_dir: Path) -> None:
+    def __init__(
+        self, config: ScsynthConfig, sounds_dir: Path, renders_dir: Path, scratch: Scratch
+    ) -> None:
         self._config = config
         self._sounds_dir = sounds_dir
         self._renders_dir = renders_dir
+        self._scratch = scratch
         self._lock = threading.Lock()
         self._scan: SourceScan | None = None
 
@@ -301,8 +306,8 @@ class ScsynthInstrument:
             )
         score = compile_score(recipe, request.performance, SAMPLE_RATE)
         self._renders_dir.mkdir(parents=True, exist_ok=True)
-        with tempfile.TemporaryDirectory(
-            prefix=".scsynth-", dir=scratch(self._renders_dir)
+        with self._scratch.directory(
+            parent=scratch(self._renders_dir), prefix=".scsynth-"
         ) as directory:
             failure = self._run(scsynth, score, Path(directory), timeout_s)
             if failure is not None:
@@ -414,4 +419,4 @@ def create(
     """The factory for the adapter. Relative option paths resolve against the workspace root,
     and saved sounds live under the command's sounds directory."""
     config = from_options(name, options, context.root)
-    return ScsynthInstrument(config, context.sounds_dir, context.renders_dir)
+    return ScsynthInstrument(config, context.sounds_dir, context.renders_dir, context.scratch)

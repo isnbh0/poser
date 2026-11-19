@@ -4,6 +4,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+from fakes import TempScratch
 
 from poser.core.audio import Audio
 from poser.core.capturing import SaveRequest
@@ -78,7 +79,9 @@ def test_types_refuse_what_their_rules_forbid() -> None:
     with pytest.raises(ValueError, match="description must not be empty"):
         SaveRequest(FAKE, Identifier("pad"), "  ", None, replace=False)
     with pytest.raises(ValueError, match="root"):
-        AdapterContext("root", Path("sounds"), Path("renders"))  # ty: ignore[invalid-argument-type]
+        AdapterContext("root", Path("sounds"), Path("renders"), TempScratch())  # ty: ignore[invalid-argument-type]
+    with pytest.raises(ValueError, match="scratch"):
+        AdapterContext(Path("root"), Path("sounds"), Path("renders"), "tmp")  # ty: ignore[invalid-argument-type]
 
 
 def test_failure_types_take_only_their_own_status_family() -> None:

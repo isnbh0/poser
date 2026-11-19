@@ -4,6 +4,7 @@ import itertools
 from pathlib import Path
 
 import pytest
+from fakes import adapter_context
 
 from poser.adapters import chords
 from poser.adapters.chords import Chord, ChordsVocabulary, create_chords
@@ -41,7 +42,7 @@ VOCABULARY = ChordsVocabulary()
 
 
 def _context(root: Path) -> AdapterContext:
-    return AdapterContext(root, root, root)
+    return adapter_context(root, root, root)
 
 
 def test_suffixes_cover_every_chords_key_once() -> None:

@@ -7,7 +7,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from fakes import FakeInstrument, FakeRenderStore, FakeSound, NpyAudioFiles
+from fakes import FakeInstrument, FakeRenderStore, FakeSound, NpyAudioFiles, adapter_context
 from helpers import REPO_DIR, SCAFFOLD_DIR, SURGE_DIR
 
 from poser import compose
@@ -19,7 +19,7 @@ from poser.core.graph import Graph
 from poser.core.guide import GENERATED, GuideBlock, compose_guide, observed_advice
 from poser.core.loading import load_song
 from poser.core.names import SongId
-from poser.core.ports import AdapterContext, AdviceProvider, ConfigError, Guided
+from poser.core.ports import AdviceProvider, ConfigError, Guided
 from poser.core.rendering import Rendered, TrackResult, render_song
 from poser.core.song import Song
 from poser.core.statuses import StemStatus
@@ -29,7 +29,7 @@ CONFIG = '[instruments.synth]\nadapter = "pedalboard"\npath = "/missing/plugin.v
 
 def composition(tmp_path: Path, setting: str = "") -> Composition:
     config = parse_config(CONFIG + setting, tmp_path / "poser.toml")
-    return Composition(config, AdapterContext(tmp_path, tmp_path / "sounds", tmp_path / "renders"))
+    return Composition(config, adapter_context(tmp_path, tmp_path / "sounds", tmp_path / "renders"))
 
 
 @pytest.mark.parametrize("setting", ["", "\n[guidance]\n", "\n[guidance]\nadvice = true\n"])
@@ -170,7 +170,7 @@ def test_guidance_toggle_preserves_rendered_bytes_keys_and_cache(
             tmp_path / "poser.toml",
         )
         configured = Composition(
-            config, AdapterContext(tmp_path, tmp_path / "sounds", tmp_path / "renders")
+            config, adapter_context(tmp_path, tmp_path / "sounds", tmp_path / "renders")
         )
         assert observed_advice(workspace_guide(configured)) is enabled
         instrument = next(iter(configured.instruments().values()))
@@ -242,7 +242,7 @@ def test_scsynth_guide_is_required_package_data_without_side_effects(
             tmp_path / "poser.toml",
         )
         configured = Composition(
-            config, AdapterContext(tmp_path, tmp_path / "sounds", tmp_path / "renders")
+            config, adapter_context(tmp_path, tmp_path / "sounds", tmp_path / "renders")
         )
         instrument = next(iter(configured.instruments().values()))
         assert isinstance(instrument, Guided)

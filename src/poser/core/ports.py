@@ -8,7 +8,7 @@ every collection is a tuple, so nothing a receiver does to a value can change wh
 
 from collections.abc import Callable, Collection, Mapping, Sequence
 from contextlib import AbstractContextManager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol, cast, runtime_checkable
 
@@ -182,17 +182,41 @@ class UnsupportedPlatformError(ConfigError):
     """
 
 
+@runtime_checkable
+class Scratch(Protocol):
+    """Temporary directories whose cleanup never changes the outcome of the work inside them."""
+
+    def directory(
+        self, *, parent: Path | None = None, prefix: str = "poser-"
+    ) -> AbstractContextManager[Path]:
+        """Create a new empty directory and yield its path.
+
+        The directory is created in `parent`, or in the system temp folder when `parent` is None,
+        and its name starts with `prefix`. On exit, the directory and everything in it are
+        removed. If removal fails with any OSError, the directory stays and one line on standard
+        error names it, the error, and that it may be deleted once nothing holds it; the exit
+        raises nothing, so the body's own exception, if any, propagates unchanged.
+        """
+        ...
+
+
 @dataclass(frozen=True)
 class AdapterContext:
-    """What a factory may know about the workspace it builds an adapter for."""
+    """What a factory may know about the workspace it builds an adapter for.
+
+    A factory may keep `scratch` for the adapter's temporary directories; building the adapter
+    still creates none. Commands build contexts through `poser.compose.adapter_context`.
+    """
 
     root: Path  # The directory holding poser.toml. Relative option paths resolve against it.
     sounds_dir: Path
     renders_dir: Path
+    scratch: Scratch = field(compare=False, repr=False)  # A service, not part of the workspace.
 
     def __post_init__(self) -> None:
-        for field in ("root", "sounds_dir", "renders_dir"):
-            _require("AdapterContext", field, getattr(self, field), Path)
+        for name in ("root", "sounds_dir", "renders_dir"):
+            _require("AdapterContext", name, getattr(self, name), Path)
+        _require("AdapterContext", "scratch", self.scratch, Scratch)
 
 
 @runtime_checkable
