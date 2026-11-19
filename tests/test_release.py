@@ -74,10 +74,12 @@ def test_onboarding_local_links_resolve_to_project_files() -> None:
 
 
 def test_onboarding_commands_are_project_scripts() -> None:
+    # Contributors run the test suite with pytest from the dev dependency group.
+    tools = set(PROJECT["scripts"]) | {"pytest"}
     for name in ONBOARDING:
         document = REPO_DIR / name
         commands = re.findall(r"uv run ([\w-]+)", document.read_text(encoding="utf-8"))
-        assert set(commands) <= set(PROJECT["scripts"]), document
+        assert set(commands) <= tools, document
 
 
 def section(document: Path, heading: str) -> str:

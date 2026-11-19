@@ -22,12 +22,13 @@ PowerShell window afterwards so it finds them. Install or locate Surge XT before
 [Surge guide](../src/poser/reference_setups/surge/README.md) covers installation, searched
 locations, and custom paths.
 
-poser is tested on macOS and on Windows x64, where CI runs Windows Server. Windows on Arm is not
+CI runs poser's tests on macOS and on Windows x64, where CI runs Windows Server, and its real-plugin
+and real-SuperCollider tests on Windows x64; on macOS those run locally. Windows on Arm is not
 supported: Pedalboard, which plays VST3 instruments, publishes no build for it, and poser refuses to
-run there even with x64 Python under emulation. Linux has the file-system support poser needs but
-is untested, and the Surge reference setup searches only macOS and Windows locations, so on Linux
-pass `--plugin-path` and `--presets-path` to `init-workspace`. Rendering is offline, so it needs no
-audio interface, ASIO driver, or other audio driver.
+run there even with x64 Python under emulation. Linux has the file-system support poser needs but is
+untested, and the Surge reference setup searches only macOS and Windows locations, so on Linux pass
+`--plugin-path` and `--presets-path` to `init-workspace`. Rendering is offline, so it needs no audio
+interface, ASIO driver, or other audio driver.
 
 On Windows, pedalboard needs the Microsoft Visual C++ Redistributable (x64), which most machines
 already have; if it is missing, poser names it and how to install it.
@@ -37,7 +38,7 @@ OneDrive-synced folders. Windows 11 often moves Documents and Desktop into OneDr
 paths spend the path budget below, and sync can lock render files and interfere with the render
 store's links; `init-workspace` warns when the studio is inside OneDrive. Windows Defender's
 real-time scanning can slow the first plugin load, and SmartScreen may ask before running the Surge
-XT and SuperCollider installers.
+XT installer.
 
 The studio's filesystem must support directory links and hard links. `init-workspace` checks both
 in the destination before publishing scaffold files. Windows NTFS supports these features;

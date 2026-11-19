@@ -31,7 +31,7 @@ LANGUAGES = {
     "psm1": "powershell",
 }
 # Unknown labels fail closed: an unlisted shell alias must not become an unchecked data block.
-DATA_LANGUAGES = {"json", "python", "toml", "text", "yaml", "yml"}
+DATA_LANGUAGES = {"json", "python", "supercollider", "toml", "text", "yaml", "yml"}
 
 
 @dataclass(frozen=True)

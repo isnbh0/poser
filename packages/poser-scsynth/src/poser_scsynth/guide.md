@@ -8,7 +8,8 @@ non-realtime. A track names one of its sounds as `<instrument>:<source>/<path>`,
   sine partials with a short attack and a gate release. `sc:builtin/additive-voice` names it
   explicitly.
 - A sound in a source folder is a pair of files: `<name>.scsyndef`, containing one SCgf v2
-  definition, and `<name>.json`, its sidecar, whose `cc` table maps controller numbers 0–119
+  definition, which SuperCollider writes with `SynthDef(...).writeDefFile(folder)`, and
+  `<name>.json`, its sidecar, whose `cc` table maps controller numbers 0–119
   to the synthdef's parameter names (`{"cc": {"1": "brightness"}}`). Unmapped controllers do
   nothing. Mapped controls affect all sounding voices, including release tails, and their
   latest values initialize future notes; a controller change on a note's beat applies to that

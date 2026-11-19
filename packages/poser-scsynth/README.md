@@ -68,6 +68,18 @@ uv sync
 
 Then continue with the rest of the upgrade steps in [upgrading](../../docs/upgrading.md).
 
+A sound is a pair of files: `<name>.scsyndef`, a compiled SynthDef, and `<name>.json`, its sidecar
+(`{"cc": {}}` when no controller is mapped). Write the `.scsyndef` from the SuperCollider IDE or
+`sclang`, which the SuperCollider installer ships on macOS and Windows; `sclang` accepts forward
+slashes in Windows paths. This writes `pad.scsyndef` into the named folder:
+
+```supercollider
+SynthDef(\pad, { |out = 0, freq = 440, gate = 1, amp = 0.2|
+    var env = EnvGen.kr(Env.adsr(0.01, 0.2, 0.7, 0.5), gate, doneAction: 2);
+    Out.ar(out, (Saw.ar(freq) * env * amp).dup);
+}).writeDefFile("path/to/sounds/sc");
+```
+
 ## Install the adapter package for poser contributors
 
 `uv sync` at the repository root installs both workspace packages. For wheel installation, build
@@ -77,4 +89,4 @@ on PyPI is an unrelated project, and this adapter requires this repository's pos
 ## Tests
 
 The repository's tests cover the adapter; real-engine tests are marked `real_scsynth` and run with
-`make test-real`.
+`make test-real` (without `make`, as on Windows: `uv run pytest -m real_scsynth`).
