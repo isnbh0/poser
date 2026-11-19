@@ -12,13 +12,14 @@ To have an agent help, paste the one-line prompt from the
 ## Prerequisites
 
 You need Git and [uv](https://docs.astral.sh/uv/). Git is required because poser installs from a
-Git URL. uv finds or downloads Python 3.13 or later itself, so Python needs no separate install;
-the studio records only `requires-python = ">=3.13"`, so it may run a newer Python. On Windows,
-`winget install --id Git.Git -e --source winget` and `winget install --id=astral-sh.uv -e` install
-Git and uv; without winget, use the [Git for Windows installer](https://git-scm.com/downloads/win)
-and [uv's PowerShell installer](https://docs.astral.sh/uv/getting-started/installation/). Open a
-new PowerShell window afterwards so it finds them. Install or locate Surge XT before initializing;
-the [Surge guide](../src/poser/reference_setups/surge/README.md) covers installation, searched
+Git URL. uv finds or downloads Python itself, so Python needs no separate install. The studio pins
+Python 3.13 in `.python-version`, the version poser's Windows CI tests, and uv downloads it if it is
+missing. On Windows, `winget install --id Git.Git -e --source winget` and
+`winget install --id=astral-sh.uv -e` install Git and uv; without winget, use the
+[Git for Windows installer](https://git-scm.com/downloads/win) and
+[uv's PowerShell installer](https://docs.astral.sh/uv/getting-started/installation/). Open a new
+PowerShell window afterwards so it finds them. Install or locate Surge XT before initializing; the
+[Surge guide](../src/poser/reference_setups/surge/README.md) covers installation, searched
 locations, and custom paths.
 
 poser is tested on macOS and on Windows x64, where CI runs Windows Server. Windows on Arm is not
@@ -54,12 +55,13 @@ New-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem' -Name
 ## Create and verify
 
 Choose a parent directory outside any existing project, because the studio is a project of its
-own; `--no-workspace` keeps `uv init` from registering it in an enclosing uv workspace. From that
-directory, run:
+own; `--no-workspace` keeps `uv init` from registering it in an enclosing uv workspace, and
+`uv python pin 3.13` keeps the studio on the Python version CI tests. From that directory, run:
 
 ```bash
 uv init --bare --no-workspace --python 3.13 my-studio &&
 cd my-studio &&
+uv python pin 3.13 &&
 uv add git+https://github.com/isnbh0/poser &&
 uv run init-workspace --setup surge &&
 uv run check-instruments &&
@@ -73,6 +75,7 @@ PowerShell 5.1 has no `&&`:
 ```powershell
 uv init --bare --no-workspace --python 3.13 my-studio
 cd my-studio
+uv python pin 3.13
 uv add git+https://github.com/isnbh0/poser
 uv run init-workspace --setup surge
 uv run check-instruments

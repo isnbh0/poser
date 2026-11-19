@@ -48,6 +48,15 @@ case-sensitive and search `.` and `songs`, respectively. PowerShell's `-Force` i
 files and folders in these searches. When there are no matches, `grep` exits with status 1, not a
 search error; the PowerShell pipeline instead succeeds with no output.
 
+## Python pin
+
+- **Symptom:** the studio has no `.python-version`, and `uv run python -V` prints a Python newer
+  than 3.13.
+  **Cause:** new studios pin Python 3.13, the version poser's CI tests, in `.python-version`. A
+  studio created before that records only `requires-python = ">=3.13"`, so uv may choose a newer
+  interpreter, which poser does not test.
+  **Fix:** run `uv python pin 3.13` once from the studio, then `uv sync`.
+
 ## Names Windows cannot hold
 
 - **Symptom:** a song or `poser.toml` that loaded before now fails on every platform with a

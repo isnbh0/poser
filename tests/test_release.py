@@ -796,6 +796,7 @@ def test_windows_long_paths_command_matches_the_documented_command() -> None:
     [
         "init",
         "cd",
+        "python",
         "add",
         "init-workspace",
         "check-instruments",
@@ -818,7 +819,7 @@ def test_setup_command_chain_stops_and_retains_working_directory(
     fake_uv = """uv() {
     printf 'uv %s\\n' "$*"
     case "$1" in
-        init|add) step=$1 ;;
+        init|python|add) step=$1 ;;
         run) step=$2 ;;
         *) return 99 ;;
     esac
@@ -843,16 +844,25 @@ cd() {
         encoding="utf-8",
     )
     lines = result.stdout.splitlines()
-    steps = ["init", "add", "init-workspace", "check-instruments", "render-song", "analyze-song"]
+    steps = [
+        "init",
+        "python",
+        "add",
+        "init-workspace",
+        "check-instruments",
+        "render-song",
+        "analyze-song",
+    ]
     stop = {
         "init": 1,
         "cd": 1,
-        "add": 2,
-        "init-workspace": 3,
-        "check-instruments": 4,
-        "render-song": 5,
-        "analyze-song": 6,
-        "none": 6,
+        "python": 2,
+        "add": 3,
+        "init-workspace": 4,
+        "check-instruments": 5,
+        "render-song": 6,
+        "analyze-song": 7,
+        "none": 7,
     }[failure]
     words = [line.split() for line in lines[:-2]]
     assert [w[2] if w[1] == "run" else w[1] for w in words] == steps[:stop]
