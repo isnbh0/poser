@@ -151,12 +151,12 @@ def real_pedalboard_instruments(tmp_path: Path) -> dict[str, PedalboardInstrumen
 # Runs in a subprocess, so plugin code stays out of the test process. Serum's oscillator A octave
 # at raw value 0.1 is -3 octaves, which moves middle C from about 262 Hz to about 33 Hz. The state
 # is captured as `save-sound` captures it after the window closes.
+# Loads through the worker's `load_external`, which resolves a Windows VST3 bundle to its binary.
 CAPTURE_STATE = """
 import sys
-from pedalboard import load_plugin
 from poser.adapters.pedalboard.state import encode_state
-from poser.adapters.pedalboard.worker import capture_state
-plugin = load_plugin(sys.argv[1])
+from poser.adapters.pedalboard.worker import capture_state, load_external
+plugin = load_external(sys.argv[1], None)
 plugin.parameters["a_octave"].raw_value = 0.0
 open(sys.argv[2], "w").write(encode_state(capture_state(plugin)))
 """
