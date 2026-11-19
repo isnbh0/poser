@@ -22,8 +22,8 @@ PowerShell window afterwards so it finds them. Install or locate Surge XT before
 [Surge guide](../src/poser/reference_setups/surge/README.md) covers installation, searched
 locations, and custom paths.
 
-CI runs poser's tests on macOS and on Windows x64, where CI runs Windows Server, and its real-plugin
-and real-SuperCollider tests on Windows x64; on macOS those run locally. Windows on Arm is not
+CI runs poser's tests on macOS and on Windows x64 (Windows Server), and its real-plugin and
+real-SuperCollider tests on Windows x64; on macOS those run locally. Windows on Arm is not
 supported: Pedalboard, which plays VST3 instruments, publishes no build for it, and poser refuses to
 run there even with x64 Python under emulation. Linux has the file-system support poser needs but is
 untested, and the Surge reference setup searches only macOS and Windows locations, so on Linux pass

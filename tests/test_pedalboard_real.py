@@ -294,7 +294,8 @@ def test_a_captured_state_reaches_the_render(tmp_path: Path) -> None:
 def test_a_long_release_preset_is_silent_until_its_note(tmp_path: Path, preset: str) -> None:
     """A long-release preset stays silent until its first note.
 
-    Surge never plays the stray note this test guards against, so only Serum reproduces it.
+    Surge never plays the stray note this test guards against, so only Serum reproduces it;
+    `test_surge_restored_preset_keeps_its_first_note` covers Surge's silence before the note.
     """
     composition = real_composition(tmp_path)
     spec = require_instrument(composition, "serum")

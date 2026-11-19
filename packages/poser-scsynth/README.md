@@ -68,6 +68,8 @@ uv sync
 
 Then continue with the rest of the upgrade steps in [upgrading](../../docs/upgrading.md).
 
+### Write a sound
+
 A sound is a pair of files: `<name>.scsyndef`, a compiled SynthDef, and `<name>.json`, its sidecar
 (`{"cc": {}}` when no controller is mapped). Write the `.scsyndef` from the SuperCollider IDE or
 `sclang`, which the SuperCollider installer ships on macOS and Windows; `sclang` accepts forward

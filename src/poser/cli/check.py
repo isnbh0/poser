@@ -23,7 +23,7 @@ from poser.cli.workspace import WorkspaceError, fill_path_options
 from poser.core.checking import CheckResult, check_instrument
 from poser.core.checks import CheckAnalysis, CheckFailure, MeasuredStatus
 from poser.core.jsonvalue import JsonValue
-from poser.core.ports import ConfigError
+from poser.core.ports import ConfigError, UnsupportedPlatformError
 
 PROG = "check-instruments"
 YES_NO = {True: "yes", False: "no"}
@@ -95,10 +95,16 @@ def main(argv: list[str] | None = None) -> int:
         fail(PROG, error)
         return EXIT_BAD_CONFIG
 
-    results = [
-        check_instrument(instrument, name, RENDER_TIMEOUT_S, scratch=composition.context.scratch)
-        for name, instrument in instruments.items()
-    ]
+    try:
+        results = [
+            check_instrument(
+                instrument, name, RENDER_TIMEOUT_S, scratch=composition.context.scratch
+            )
+            for name, instrument in instruments.items()
+        ]
+    except UnsupportedPlatformError as error:  # The scratch port refuses on its first use.
+        fail(PROG, error)
+        return EXIT_BAD_CONFIG
     if args.json:
         print(json.dumps([result_to_data(result) for result in results], indent=2))
     else:
