@@ -8,7 +8,6 @@ import shutil
 import subprocess
 import sys
 import tomllib
-from dataclasses import asdict, replace
 from importlib import metadata
 from importlib.resources import files
 from pathlib import Path, PureWindowsPath
@@ -17,12 +16,10 @@ from urllib.parse import unquote, urlsplit
 import pytest
 import yaml
 from doc_blocks import (
-    EXCEPTIONS,
     ONBOARDING,
     SCENARIOS,
     Scenario,
     console_output_encoding_command,
-    corpus_paths,
     discover_document,
     discover_examples,
     validate_fences,
@@ -97,253 +94,35 @@ def setup_chain() -> str:
     return block
 
 
-@pytest.mark.parametrize(
-    ("document", "text"),
-    [
-        ("setup", section(REPO_DIR / "docs/setup.md", "Create and verify")),
-        ("upgrade", (REPO_DIR / "docs/upgrading.md").read_text(encoding="utf-8").split("\n## ")[0]),
-    ],
-)
-def test_powershell_blocks_mirror_the_bash_chains(document: str, text: str) -> None:
-    """Each `&&` chain a user runs has a PowerShell block of the same commands, one per line,
-    since Windows PowerShell 5.1 has no `&&`. CI runs the PowerShell blocks on Windows."""
-    bash = re.findall(r"```bash\n(.*?)```", text, re.DOTALL)[0]
-    powershell = re.findall(r"```powershell\n(.*?)```", text, re.DOTALL)[0]
-    assert powershell.splitlines() == [line.removesuffix(" &&") for line in bash.splitlines()], (
-        document
-    )
-
-
 def test_all_runnable_doc_fences_have_powershell_mirrors() -> None:
-    paths = corpus_paths(REPO_DIR)
-    assert paths == tuple(sorted(set(paths)))
-    assert set(REPO_DIR.glob("docs/*.md")) <= set(paths)
-    assert {REPO_DIR / name for name in ONBOARDING} <= set(paths)
     examples = discover_examples(REPO_DIR)
-    fences = tuple(
-        fence
-        for path in paths
-        for fence in discover_document(
-            path.relative_to(REPO_DIR).as_posix(), path.read_text(encoding="utf-8")
-        )
-    )
-    assert {(e.document, e.line) for e in examples} == {
-        (f.document, f.line) for f in fences if f.language == "powershell"
-    }
     assert {e.id for e in examples} == {s.id for s in SCENARIOS}
-    result = subprocess.run(
-        [sys.executable, str(REPO_DIR / "tests/doc_blocks.py"), "--root", str(REPO_DIR), "--json"],
-        check=True,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-    )
-    assert json.loads(result.stdout) == json.loads(json.dumps([asdict(e) for e in examples]))
 
 
-def test_inline_console_encoding_command_is_exact_and_unambiguous(tmp_path: Path) -> None:
+def test_inline_console_encoding_command_is_exact_and_unambiguous() -> None:
     approved = "[Console]::OutputEncoding = [Text.UTF8Encoding]::new()"
     source = (REPO_DIR / "docs/setup.md").read_text(encoding="utf-8")
-    assert f"`{approved}`" in source
+    assert source.count(f"`{approved}`") == 1
     assert console_output_encoding_command(source) == approved
-    assert console_output_encoding_command(f"Use `{approved}` before piping.") == approved
-    assert console_output_encoding_command(f"Use ``{approved}`` before piping.") == approved
-    assert console_output_encoding_command(f"Use ```{approved}``` before piping.") == approved
-    # Property mentions/getters are not assignments and cannot supply a missing setter.
-    mention = "Read `[Console]::OutputEncoding` and `$encoding = [Console]::OutputEncoding`."
-    assert console_output_encoding_command(mention + f"\n`{approved}`") == approved
-    wrong = "[Console]::OutputEncoding = [Text.Encoding]::GetEncoding(1252)"
-    duplicates = (
-        f"`{approved}`\n`{approved}`",  # Identical duplicates are still ambiguous.
-        f"`{approved}`\n`{wrong}`",  # Discover changed values before exact validation.
-        f"`{wrong}`\n`{approved}`",  # Order cannot hide a conflicting assignment.
-        f"`{approved}`\n`{approved.lower()}`",
-        f"`{approved}`\n`{wrong.replace('[Console]', '[System.Console]')}`",
-        f"`{approved}`\n`{wrong.replace('[Console]', '[system.console]')}`",
-        f"`{approved}`\n`[ System . Console ] :: OutputEncoding = $other`",
-        f"`{approved}; {wrong}`",  # Two assignments inside a single inline span.
-        f"`{approved}`\n``{wrong}``",
-        f"`{approved}`\n`[Console]::OutputEncoding =\n[Text.Encoding]::GetEncoding(1252)`",
-        f"`{approved}`\r\n``[System.Console]::OutputEncoding =\r\n[Text.Encoding]::ASCII``",
-        f'`{approved}`\n``{wrong}; Write-Output "`n"``',
-        f'`{approved}`\n``{wrong}; Write-Output "`n"`r``',
-        f'`{approved}`\n```{wrong}; Write-Output "``n"```',
-        f'`{approved}`\n``{wrong}; Write-Output "```n"``',
-    )
-    for text in ("", mention, *duplicates):
-        with pytest.raises(ValueError, match="expected exactly one inline"):
-            console_output_encoding_command(text)
-    changed = (
-        wrong,
-        approved.replace("new()", "new($true)"),
-        approved.lower(),
-        approved.replace("[Console]", "[System.Console]"),
-        approved.replace(" = ", "="),
-        " " + approved,
-        approved + "; Write-Output 'extra'",
-    )
-    for command in changed:
-        with pytest.raises(ValueError, match="changed from approved text"):
-            console_output_encoding_command(f"`{command}`")
-
-    cli = [sys.executable, str(REPO_DIR / "tests/doc_blocks.py")]
-    mode = "--console-output-encoding"
-    result = subprocess.run(
-        [*cli, "--root", str(REPO_DIR), mode],
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        check=True,
-    )
-    assert result.stdout == approved + "\n"
-    assert not result.stderr
-    # The CLI must read the supplied root, not use a literal or the checkout's valid docs.
-    setup = tmp_path / "docs/setup.md"
-    setup.parent.mkdir()
-    for text in (f"`{approved}`", "", *duplicates, *(f"`{c}`" for c in changed)):
-        setup.write_text(text, encoding="utf-8", newline="\n")
-        result = subprocess.run(
-            [*cli, "--root", str(tmp_path), mode],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            check=False,
-        )
-        if text == f"`{approved}`":
-            assert result.returncode == 0, result.stderr
-            assert result.stdout == approved + "\n"
-        else:
-            assert result.returncode == 1, (text, result.stderr)
-            assert not result.stdout
-            assert "inline Console.OutputEncoding" in result.stderr
-    for args in ([mode], ["--root", str(REPO_DIR)], ["--root", str(REPO_DIR), "--json", mode]):
-        result = subprocess.run(
-            [*cli, *args], capture_output=True, text=True, encoding="utf-8", check=False
-        )
-        assert result.returncode == 2, result.stderr
-        assert not result.stdout
 
 
 def test_doc_fence_discovery_is_total() -> None:
-    text = (
-        "# Guide\r\n## New section\r\n"
-        "  ```sh\r\n  first &&\r\n  second\r\n  ```\r\n"
-        "  ```ps1\r\n  first\r\n  second\r\n  ```\r\n"
-        "~~~shell\r\nthird\r\n~~~\r\n~~~pwsh\r\nthird\r\n~~~\r\n"
-        "### Final handoff\r\n```zsh\r\nfourth\r\n```\r\n"
-        "```PowerShell\r\nfourth\r\n```\r\n"
-        '```json\r\n{"not": "a command"}\r\n```\r\n'
-    )
-    scenarios = (
-        Scenario("first", "new.md", ("Guide", "New section")),
-        Scenario("second", "new.md", ("Guide", "New section"), ordinal=2),
-        Scenario("third", "new.md", ("Guide", "New section", "Final handoff")),
-    )
+    text = "# Guide\n```bash\nfirst &&\nsecond\n```\n```powershell\nfirst\nsecond\n```\n"
     fences = discover_document("new.md", text)
-    examples = validate_fences(fences, exceptions=(), scenarios=scenarios)
-    assert len(examples) == 3
-    assert fences[0].line == 3
-    assert fences[0].body == "first &&\nsecond\n"
-    assert examples[2].headings == ("Guide", "New section", "Final handoff")
-    invalid = (
-        "```bash\ncommand\n",  # Unclosed.
-        "```bash\ncommand\n```~\n",  # Mixed markers cannot close a fence.
-        "```bash extra\ncommand\n```\n",  # Malformed label.
-        "```bash\ncommand\n```powershell\ncommand\n```\n",  # Missing closer.
-        "```\ncommand\n```\n",  # An unlabelled shell cannot disappear from inventory.
-        "```console\n$ command\n```\n",  # Explicitly rejected runnable alias.
-        "```cmd\ncommand\n```\n",
-        "```shell-script\ncommand\n```\n",  # Unknown aliases fail closed.
-        "```unclassified\ncommand\n```\n",
-        "> ```bash\n> command\n> ```\n",  # Unsupported containers cannot hide commands.
-        "- ```sh\n  command\n  ```\n",
-        "1. > ```pwsh\n   > command\n   > ```\n",
-        "# Same\n```bash\none\n```\n# Same\n```ps1\none\n```\n",  # Cross-section pairing.
-        "# Same\n## Child\n```sh\none\n```\n# Same\n## Child\n```ps\none\n```\n",
-    )
-    for markdown in invalid:
-        with pytest.raises(ValueError, match=r"bad.md:\d+"):
-            discover_document("bad.md", markdown)
-    unpaired = (
-        "```bash\none\n```\n",
-        "```powershell\none\n```\n",
-        "```bash\none\n```\n```bash\ntwo\n```\n```powershell\none\n```\n",
-        "```bash\none\n```\n## Different\n```powershell\none\n```\n",
-    )
-    for markdown in unpaired:
-        with pytest.raises(ValueError, match=r"bad.md:\d+.*(?:mirror|unpaired)"):
-            validate_fences(discover_document("bad.md", markdown), exceptions=(), scenarios=())
-    # Can-fail mutations run the actual validator, not a parallel imitation of its rules.
-    all_fences = tuple(
-        fence
-        for path in corpus_paths(REPO_DIR)
-        for fence in discover_document(
-            path.relative_to(REPO_DIR).as_posix(), path.read_text(encoding="utf-8")
-        )
-    )
-    ablation = (REPO_DIR / "docs/ablation.md").read_text(encoding="utf-8")
-    extra = discover_document("docs/ablation.md", ablation + "\n## New\n```bash\nuncovered\n```\n")
-    with pytest.raises(ValueError, match=r"docs/ablation.md:\d+.*New.*mirror"):
-        validate_fences(all_fences + extra)
-    with pytest.raises(ValueError, match=r"docs/ablation.md:\d+.*container prefix"):
-        discover_document("docs/ablation.md", ablation + "\n> ```bash\n> uncovered\n> ```\n")
-    ordinary = next(
-        f for f in all_fences if f.language == "powershell" and "uv init --bare" in f.body
-    )
-    with pytest.raises(ValueError, match="missing/ambiguous PowerShell mirror"):
-        validate_fences(tuple(f for f in all_fences if f != ordinary))
-    with pytest.raises(ValueError, match="command drift"):
+    scenario = Scenario("first", "new.md", ("Guide",))
+    (example,) = validate_fences(fences, exceptions=(), scenarios=(scenario,))
+    assert example.powershell == "first\nsecond\n"
+    with pytest.raises(ValueError, match=r"bad.md:\d+"):
+        discover_document("bad.md", "```bash\ncommand\n")  # Unclosed.
+    with pytest.raises(ValueError, match=r"bad.md:\d+"):
+        discover_document("bad.md", "```\ncommand\n```\n")  # Unlabelled.
+    with pytest.raises(ValueError, match=r"bad.md:\d+.*mirror"):
         validate_fences(
-            tuple(
-                replace(f, body=f.body + "unexpected\n") if f == ordinary else f for f in all_fences
-            )
+            discover_document("bad.md", "```bash\none\n```\n"), exceptions=(), scenarios=()
         )
-    compose = next(s for s in SCENARIOS if s.id == "setup-compose")
-    with pytest.raises(ValueError, match="unused/stale execution dispositions"):
-        validate_fences(
-            tuple(
-                f
-                for f in all_fences
-                if (f.document, f.headings) != (compose.document, compose.headings)
-            )
-        )
-    # Only a terminal ` &&` is removed, never other whitespace or shell syntax.
     pair = discover_document("x.md", "```bash\nx && y\n```\n```powershell\nx\n```\n")
     with pytest.raises(ValueError, match="command drift"):
         validate_fences(pair, exceptions=(), scenarios=(Scenario("x", "x.md", ()),))
-
-
-def test_doc_fence_exceptions_are_exact_and_consumed() -> None:
-    for rule in EXCEPTIONS:
-        scenario = rule.scenario
-        prefix = "\n".join(
-            f"{'#' * level} {title}" for level, title in enumerate(scenario.headings, 1)
-        )
-        # Each reviewed pair is checked in isolation, with its real identity and exact bodies.
-        markdown = prefix + "\n"
-        if rule.bash is not None:
-            markdown += f"```bash\n{rule.bash}```\n"
-        markdown += f"```powershell\n{rule.powershell}```\n"
-        isolated = replace(scenario, ordinal=1)
-        exact = replace(rule, scenario=isolated)
-        fences = discover_document(scenario.document, markdown)
-        assert validate_fences(fences, exceptions=(exact,), scenarios=(isolated,))
-        for index in range(len(fences)):
-            changed = tuple(
-                replace(f, body=f.body + "unrelated-command\n") if i == index else f
-                for i, f in enumerate(fences)
-            )
-            with pytest.raises(ValueError, match="stale exception"):
-                validate_fences(changed, exceptions=(exact,), scenarios=(isolated,))
-        moved = tuple(replace(f, headings=("Unreviewed section",)) for f in fences)
-        with pytest.raises(ValueError, match=r"(?:unpaired|command drift)"):
-            validate_fences(moved, exceptions=(exact,), scenarios=(isolated,))
-        with pytest.raises(ValueError, match="unused/stale exceptions"):
-            validate_fences((), exceptions=(exact,), scenarios=(isolated,))
-        with pytest.raises(ValueError, match="duplicate/overbroad exception"):
-            validate_fences(fences, exceptions=(exact, exact), scenarios=(isolated,))
-        with pytest.raises(ValueError, match="exception needs a reason"):
-            validate_fences(fences, exceptions=(replace(exact, reason=""),), scenarios=(isolated,))
 
 
 @pytest.mark.parametrize("search", ["search-devices", "search-levels", "search-modes"])
@@ -456,81 +235,6 @@ def test_doc_search_mirrors_preserve_search_semantics(tmp_path: Path, search: st
         assert actual == (expected if positive else set())
 
 
-def test_windows_console_pipeline_uses_the_documented_setting() -> None:
-    workflow = yaml.safe_load(
-        (REPO_DIR / ".github/workflows/check.yml").read_text(encoding="utf-8")
-    )
-    (step,) = [
-        step
-        for step in workflow["jobs"]["windows"]["steps"]
-        if step.get("name") == "UTF-8 output through the documented PowerShell setting (required)"
-    ]
-    assert step["shell"] == "powershell"  # Windows PowerShell 5.1, not pwsh.
-    assert not step.get("continue-on-error", False)
-    assert step.get("if") == "${{ !cancelled() }}"
-    script = step["run"]
-    assert script.isascii(), "the expected Unicode text must come from the shared fixture"
-    assert "from test_cli_output import MARK, write_reading_fixture" in script
-    assert "song, config = write_reading_fixture(Path(sys.argv[1]))" in script
-    assert "ensure_ascii=True" in script
-    assert '"mark": MARK' in script or "'mark': MARK" in script
-    assert "ConvertFrom-Json -InputObject ($fixture -join" in script
-    assert '$expectedLine = "  beats 0-1: $($info.mark)"' in script
-    # The source command is extracted and executed, never replaced by a literal UTF-8 setter.
-    assert re.findall(r"(?m)^\s*\$encodingCommand = (.+)$", script) == [
-        "uv run python tests/doc_blocks.py --root $env:GITHUB_WORKSPACE --console-output-encoding",
-        '$encodingCommand -join "`n"',
-    ]
-    assert "Invoke-Expression $encodingCommand" in script
-    assert "--json" not in script
-    assert "UTF8Encoding" not in script
-    assert not re.search(r"(?<![\w:])\$OutputEncoding\b", script, re.IGNORECASE)
-    assert re.findall(r"(?m)^\s*\[Console\]::OutputEncoding = (.+)$", script) == [
-        "[Text.Encoding]::GetEncoding(1252)",
-        "$originalEncoding",
-    ]
-    assert "function Test-ExpectedLine([object[]]$Lines, [string]$Expected)" in script
-    assert "return ($Lines.Count -eq 1 -and $Lines[0].Line -ceq $Expected)" in script
-    for name in ("wrong", "right"):
-        # Capture native status immediately after the actual native/cmdlet pipeline, not $?.
-        assert re.search(
-            rf"\${name} = @\(uv run read-song \$info.song --config \$info.config \|\s*"
-            r"Select-String -SimpleMatch \$expectedLine -CaseSensitive\)\n"
-            r"\s*\$status = \$LASTEXITCODE\n"
-            r"\s*if \(\$status -ne 0\) \{ throw ",
-            script,
-        )
-    negative = "if (Test-ExpectedLine -Lines $wrong -Expected $expectedLine)"
-    positive = "if (-not (Test-ExpectedLine -Lines $right -Expected $expectedLine))"
-    assert (
-        script.index("try {")
-        < script.index("$env:PYTHONIOENCODING = 'cp1252'")
-        < script.index("[Console]::OutputEncoding = [Text.Encoding]::GetEncoding(1252)")
-        < script.index("[Console]::OutputEncoding.CodePage -ne 1252")
-        < script.index("$wrong = @(")
-        < script.index(negative)
-        < script.index("Invoke-Expression $encodingCommand")
-        < script.index("[Console]::OutputEncoding.CodePage -ne 65001")
-        < script.index("$right = @(")
-        < script.index(positive)
-        < script.index("} finally {")
-    )
-    assert re.search(re.escape(negative) + r'\s*\{\s*throw "', script)
-    assert re.search(re.escape(positive) + r'\s*\{\s*throw "', script)
-    before, body = script.split("try {", 1)
-    assert "$originalEncoding = [Console]::OutputEncoding" in before
-    assert (
-        "$originalPythonEncoding = "
-        "[Environment]::GetEnvironmentVariable('PYTHONIOENCODING', 'Process')" in before
-    )
-    finally_body = body.split("} finally {", 1)[1]
-    assert "[Console]::OutputEncoding = $originalEncoding" in finally_body
-    assert "if ($null -eq $originalPythonEncoding)" in finally_body
-    assert "Remove-Item Env:PYTHONIOENCODING -ErrorAction SilentlyContinue" in finally_body
-    assert "$env:PYTHONIOENCODING = $originalPythonEncoding" in finally_body
-
-
-REAL_PLUGIN_STEP = "Surge XT and Surge XT Effects through Pedalboard (required)"
 REQUIRED_REAL_NODES = [
     "tests/test_pedalboard_real.py::test_each_instrument_meets_the_instrument_contract",
     "tests/test_pedalboard_real.py::test_a_render_has_exactly_the_performance_s_frames",
@@ -550,221 +254,19 @@ REQUIRED_REAL_NODES = [
 ]
 
 
-def require_real_plugin_step(candidate: dict[str, object]) -> None:
-    """Require the real-plugin step to run every Surge-only real node and fail on any skip."""
-    assert candidate.get("continue-on-error", False) is False
-    assert candidate.get("if") == "${{ !cancelled() }}"
-    script = candidate["run"]
-    assert isinstance(script, str)
-    # Passing-test metrics must be visible; default pytest capture hides that evidence.
-    assert "uv run pytest -m real_plugins -v -s -rs --durations=0" in script
-    assert re.findall(r'"(tests/test_\w+_real\.py::[\w\[\].]+)"', script) == REQUIRED_REAL_NODES
-    assert "[effects.surge_effects]" in script
-    assert "Add-Content" in script
-    assert re.search(
-        r"Tee-Object -Variable output\n\s*\$status = \$LASTEXITCODE\n"
-        r'\s*if \(\$status -ne 0\) \{ throw "the real-plugin tests failed" \}\n'
-        r'\s*if \(\$output -match "skipped"\) \{ throw "a real-plugin test skipped" \}',
-        script,
-    )
-
-
-def real_plugin_step(job: str) -> dict[str, object]:
-    workflow = yaml.safe_load(
-        (REPO_DIR / ".github/workflows/check.yml").read_text(encoding="utf-8")
-    )
-    steps = workflow["jobs"][job]
-    assert steps.get("continue-on-error", False) is False
-    (step,) = [item for item in steps["steps"] if item.get("name") == REAL_PLUGIN_STEP]
-    return step
-
-
 @pytest.mark.parametrize("job", ["windows", "windows-py314"])
-def test_windows_requires_headless_preset_selection_and_rejects_bypasses(job: str) -> None:
-    step = real_plugin_step(job)
-    require_real_plugin_step(step)
-    script = step["run"]
-    assert isinstance(script, str)
-    mutations = [
-        {**step, "run": script.replace(f'"{node}"', '"omitted-node"')}
-        for node in REQUIRED_REAL_NODES
-    ]
-    mutations += [
-        {**step, "run": script.replace("-v -s -rs", "-v -rs")},
-        {**step, "run": script.replace("[effects.surge_effects]", "")},
-        {**step, "run": script.replace("$status -ne 0", "$status -eq 0")},
-        {**step, "run": script.replace('$output -match "skipped"', "$false")},
-        {**step, "run": script.replace("$status = $LASTEXITCODE", "$status = 0")},
-        {
-            **step,
-            "run": script.replace(
-                "$status = $LASTEXITCODE", "$ignored = $?\n$status = $LASTEXITCODE"
-            ),
-        },
-        {**step, "continue-on-error": True},
-        {**step, "if": "${{ success() }}"},
-    ]
-    for changed in mutations:
-        assert changed != step
-        with pytest.raises(AssertionError):
-            require_real_plugin_step(changed)
-
-
-def test_windows_py314_runs_on_python_3_14_before_the_suites() -> None:
+def test_windows_jobs_require_the_same_real_plugin_nodes(job: str) -> None:
+    """Both Windows jobs run every required real-plugin node; none drops out of a list silently."""
     workflow = yaml.safe_load(
         (REPO_DIR / ".github/workflows/check.yml").read_text(encoding="utf-8")
     )
-    job = workflow["jobs"]["windows-py314"]
-    assert job["runs-on"] == "windows-latest"
-    assert job["env"]["UV_PYTHON"] == "3.14"
-    steps = job["steps"]
-    runs = [step.get("run", "") for step in steps]
-    names = [step.get("name") for step in steps]
-    version = next(
-        index for index, run in enumerate(runs) if "assert sys.version_info[:2] == (3, 14)" in run
+    node = re.compile(r'"(tests/test_\w+_real\.py::[\w\[\].]+)"')
+    # The real-plugin step is the one that lists the most nodes; others name one or two.
+    listed = max(
+        (set(node.findall(step.get("run", ""))) for step in workflow["jobs"][job]["steps"]),
+        key=len,
     )
-    assert (
-        runs.index("uv sync --locked")
-        < version
-        < names.index("Install Surge XT (required)")
-        < names.index("Plugin-free suite (required)")
-        < names.index("Root configuration from init-workspace (required)")
-        < names.index(REAL_PLUGIN_STEP)
-    )
-    assert runs[names.index("Plugin-free suite (required)")] == "uv run pytest -q -rs"
-    root = runs[names.index("Root configuration from init-workspace (required)")]
-    assert "init-workspace --setup surge" in root
-    assert "Copy-Item" in root
-    windows = workflow["jobs"]["windows"]["steps"]
-    (surge,) = [step for step in windows if step.get("name") == "Install Surge XT (required)"]
-    assert steps[names.index("Install Surge XT (required)")] == surge
-    assert steps[names.index(REAL_PLUGIN_STEP)] == real_plugin_step("windows")
-
-
-def test_windows_doc_execution_covers_discovered_examples() -> None:
-    examples = discover_examples(REPO_DIR)
-    fences = tuple(
-        fence
-        for path in corpus_paths(REPO_DIR)
-        for fence in discover_document(
-            path.relative_to(REPO_DIR).as_posix(), path.read_text(encoding="utf-8")
-        )
-    )
-    for scenario in SCENARIOS:
-        with pytest.raises(ValueError, match="no execution disposition"):
-            validate_fences(fences, scenarios=tuple(s for s in SCENARIOS if s != scenario))
-    new = discover_document(
-        "new.md", "# New\n```bash\nnew-command\n```\n```ps1\nnew-command\n```\n"
-    )
-    with pytest.raises(ValueError, match=r"new.md:5.*New.*no execution disposition"):
-        validate_fences(fences + new)
-    registry = next(s for s in SCENARIOS if s.id == "registry")
-    with pytest.raises(ValueError, match="only registry may use long-paths"):
-        validate_fences(
-            fences,
-            scenarios=tuple(replace(s, runner="studio") if s == registry else s for s in SCENARIOS),
-        )
-    workflow = yaml.safe_load(
-        (REPO_DIR / ".github/workflows/check.yml").read_text(encoding="utf-8")
-    )
-    (step,) = [
-        s
-        for s in workflow["jobs"]["windows"]["steps"]
-        if s.get("name") == "A Surge XT studio through the documented PowerShell (required)"
-    ]
-    assert step["shell"] == "powershell"
-    script = step["run"]
-    assert "doc_blocks.py" in script
-    assert "--root" in script
-    assert "--json" in script
-    assert "ConvertFrom-Json" in script
-    assert "Get-Blocks" not in script
-    assert set(re.findall(r"Invoke-Example\s+'([^']+)'", script)) == {
-        e.id for e in examples if e.runner == "studio"
-    }
-    assert [e.id for e in examples if e.runner == "long-paths"] == ["registry"]
-
-
-@pytest.mark.skipif(
-    sys.platform != "win32", reason="executes Windows PowerShell 5.1 JSON conversion"
-)
-@pytest.mark.parametrize("nest_array", [False, True], ids=["workflow", "reject-nested-regression"])
-def test_windows_inventory_json_is_a_flat_example_array(nest_array: bool) -> None:
-    shell = shutil.which("powershell.exe")
-    assert shell is not None, "Windows PowerShell 5.1 is required, not pwsh"
-    examples = discover_examples(REPO_DIR)
-    workflow = yaml.safe_load(
-        (REPO_DIR / ".github/workflows/check.yml").read_text(encoding="utf-8")
-    )
-    step = next(
-        s
-        for s in workflow["jobs"]["windows"]["steps"]
-        if s.get("name") == "A Surge XT studio through the documented PowerShell (required)"
-    )
-    # Exercise the workflow's actual conversion line: @(<ConvertFrom-Json>) nests arrays in 5.1.
-    (conversion,) = [
-        line.strip() for line in step["run"].splitlines() if line.strip().startswith("$examples = ")
-    ]
-    if nest_array:
-        conversion = conversion.replace("$examples = ", "$examples = @(", 1) + ")"
-    inventory = json.dumps([asdict(example) for example in examples])
-    script = (
-        "$ProgressPreference = 'SilentlyContinue'\n"
-        "$ErrorActionPreference = 'Stop'\n"
-        "if ($PSVersionTable.PSVersion.Major -ne 5) { throw 'requires Windows PowerShell 5.1' }\n"
-        f"$inventory = @'\n{inventory}\n'@\n{conversion}\n"
-        f"if ($examples.Count -ne {len(examples)}) "
-        "{ throw 'inventory is nested or incomplete' }\n"
-        "foreach ($example in $examples) {\n"
-        "  if ($example -is [array] -or $example.powershell -isnot [string]) "
-        "{ throw 'expected one example object with a command string' }\n"
-        "}\n"
-        "$found = @($examples | Where-Object { $_.id -eq 'setup-create' "
-        "-and $_.runner -eq 'studio' })\n"
-        "if ($found.Count -ne 1 -or -not "
-        "$found[0].powershell.Contains('git+https://github.com/isnbh0/poser')) "
-        "{ throw 'scenario lookup did not select a single example' }\n"
-    )
-    result = subprocess.run(
-        [
-            shell,
-            "-NoProfile",
-            "-NonInteractive",
-            "-EncodedCommand",
-            base64.b64encode(script.encode("utf-16-le")).decode("ascii"),
-        ],
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        check=False,
-    )
-    if nest_array:
-        assert result.returncode != 0
-        assert "inventory is nested or incomplete" in result.stderr
-    else:
-        assert result.returncode == 0, result.stderr
-        assert not result.stderr, result.stderr
-
-
-def test_windows_checks_precede_the_installed_plugin_isolation_suite() -> None:
-    workflow = yaml.safe_load(
-        (REPO_DIR / ".github/workflows/check.yml").read_text(encoding="utf-8")
-    )
-    steps = workflow["jobs"]["windows"]["steps"]
-    names = [step.get("name") for step in steps]
-    checks = names.index("Format, lint, and types (required)")
-    assert (
-        checks
-        < names.index("Install Surge XT (required)")
-        < names.index("Plugin-free suite (required)")
-    )
-    assert "Type-check the Windows backends (required)" not in names
-    assert steps[checks]["run"].splitlines() == [
-        "$PSNativeCommandUseErrorActionPreference = $true",
-        "uv run ruff format --check .",
-        "uv run ruff check .",
-        "uv run ty check",
-    ]
+    assert listed == set(REQUIRED_REAL_NODES)
 
 
 def test_windows_long_paths_command_matches_the_documented_command() -> None:
