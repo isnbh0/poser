@@ -3,10 +3,9 @@
 from collections.abc import Mapping
 from pathlib import Path
 
-from pedalboard.io import ReadableAudioFile, WriteableAudioFile
-
 from poser.adapters.filesystem import FileSystem, native, write_file
 from poser.adapters.loading import refuse_options
+from poser.adapters.windows_host import missing_runtime
 from poser.core.audio import (
     NUM_CHANNELS,
     SAMPLE_RATE,
@@ -17,7 +16,15 @@ from poser.core.audio import (
 )
 from poser.core.jsonvalue import JsonValue
 from poser.core.names import Suffix
-from poser.core.ports import AdapterContext, AudioFileError
+from poser.core.ports import AdapterContext, AudioFileError, UnsupportedPlatformError
+
+try:
+    from pedalboard.io import ReadableAudioFile, WriteableAudioFile
+except ImportError as error:
+    refusal = missing_runtime(error)
+    if refusal is None:
+        raise
+    raise UnsupportedPlatformError(refusal) from error
 
 
 class WavAudioFiles:

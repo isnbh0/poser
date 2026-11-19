@@ -2692,3 +2692,53 @@ def test_the_worker_sends_only_whole_pitches_as_midi_notes() -> None:
 
 def test_a_pedalboard_instrument_plays_semitones(tmp_path: Path) -> None:
     assert make_instrument(tmp_path).pitches is PitchSupport.SEMITONES
+
+
+RUNTIME_ERROR = ImportError(
+    "DLL load failed while importing pedalboard_native: The specified module could not be found."
+)
+
+
+def test_load_problem_names_the_missing_runtime_for_pedalboard_s_dll_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(worker_module, "missing_runtime", lambda error: "install the runtime")
+
+    assert worker_module.load_problem(RUNTIME_ERROR) == "install the runtime"
+    assert worker_module.load_problem(RuntimeError("bad plugin")) == "bad plugin"
+
+
+def test_load_problem_keeps_an_import_error_that_is_not_the_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(worker_module, "missing_runtime", lambda error: None)
+
+    assert worker_module.load_problem(RUNTIME_ERROR) == str(RUNTIME_ERROR)
+
+
+def test_an_instrument_load_reports_the_missing_runtime(
+    loader: FakeLoader, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(worker_module, "missing_runtime", lambda error: "install the runtime")
+    loader.error = RUNTIME_ERROR
+
+    assert render_fresh("/S.vst3", None, None, PERFORMANCE) == NotLoaded("install the runtime")
+
+
+def test_a_group_member_load_reports_the_missing_runtime(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(worker_module, "missing_runtime", lambda error: "install the runtime")
+
+    def refuse(*args: object) -> NoReturn:
+        raise RUNTIME_ERROR
+
+    monkeypatch.setattr(worker_module, "load_effect", refuse)
+
+    result = render_group_job(group_job(tmp_path))
+
+    assert isinstance(result, dict)
+    assert result["status"] == "load_failed"
+    detail = str(result["detail"])
+    assert detail.startswith("member '")
+    assert detail.endswith(": install the runtime")

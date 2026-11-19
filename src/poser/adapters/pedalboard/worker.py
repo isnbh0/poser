@@ -21,6 +21,7 @@ from poser.adapters.isolation import MalformedJobError, job_fields, optional_str
 from poser.adapters.pedalboard.config import INITIALIZATION_TIMEOUT_S
 from poser.adapters.pedalboard.plugin_files import windows_binary
 from poser.adapters.pedalboard.state import decode_state, encode_state
+from poser.adapters.windows_host import missing_runtime
 from poser.core.audio import (
     NUM_CHANNELS,
     SAMPLE_RATE,
@@ -193,6 +194,16 @@ def load_external(path: str, plugin_name: str | None) -> "VST3Plugin | AudioUnit
     )
 
 
+def load_problem(error: Exception) -> str:
+    """Describe a plugin-load failure: the missing-runtime fix when pedalboard itself could not
+    load, otherwise the error's own message."""
+    if isinstance(error, ImportError):
+        refusal = missing_runtime(error)
+        if refusal is not None:
+            return refusal
+    return str(error)
+
+
 def load(path: str, plugin_name: str | None, state: bytes | None) -> "VST3Plugin | AudioUnitPlugin":
     """Load a plugin and restore a state into it. Raises whatever the plugin code raises."""
     plugin = load_external(path, plugin_name)
@@ -316,7 +327,7 @@ def render_effect_fresh(
     try:
         plugin = load_effect(path, builtin, parameters)
     except Exception as error:  # noqa: BLE001
-        return NotLoaded(str(error))
+        return NotLoaded(load_problem(error))
     if plugin.is_instrument:
         return NotLoaded(f"{where} is not an effect")
     return plugin(audio, SAMPLE_RATE, buffer_size=BUFFER_SIZE)
@@ -505,7 +516,7 @@ def _load_group_member(member: GroupMemberJob) -> str | None:
             cast("Mapping[str, JsonValue]", member.recipe["parameters"]),
         )
     except Exception as error:  # noqa: BLE001
-        return str(error)
+        return load_problem(error)
     if plugin.is_instrument:
         return f"{where} is not an effect"
     member.plugin = plugin
@@ -626,7 +637,7 @@ def render_fresh(
     try:
         plugin = load(path, plugin_name, state)
     except Exception as error:  # noqa: BLE001
-        return NotLoaded(str(error))
+        return NotLoaded(load_problem(error))
     if not plugin.is_instrument:
         return NotLoaded(f"{path} is not an instrument")
     if state is not None:
@@ -699,7 +710,7 @@ def capture_job(job: JsonValue) -> JsonValue:
     try:
         plugin = load(path, plugin_name, start)
     except Exception as error:  # noqa: BLE001
-        return {"error": f"cannot load the plugin: {error}"}
+        return {"error": f"cannot load the plugin: {load_problem(error)}"}
     if not plugin.is_instrument:
         return {"error": f"{path} is not an instrument"}
 

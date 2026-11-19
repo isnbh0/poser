@@ -29,6 +29,9 @@ is untested, and the Surge reference setup searches only macOS and Windows locat
 pass `--plugin-path` and `--presets-path` to `init-workspace`. Rendering is offline, so it needs no
 audio interface, ASIO driver, or other audio driver.
 
+On Windows, pedalboard needs the Microsoft Visual C++ Redistributable (x64), which most machines
+already have; if it is missing, poser names it and how to install it.
+
 On Windows, create the studio under a short parent folder such as `C:\studios`, outside
 OneDrive-synced folders. Windows 11 often moves Documents and Desktop into OneDrive, whose longer
 paths spend the path budget below, and sync can lock render files and interfere with the render
@@ -180,6 +183,9 @@ See the [export contract](#export-contract) for exit codes, manifest fields, and
 
 If a command reports that poser's file-system support or plugin worker isolation does not cover
 your platform, it cannot run there yet; see [Prerequisites](#prerequisites).
+
+If a command says pedalboard needs the Microsoft Visual C++ Redistributable, install it as the
+message says and rerun the command.
 
 If initialization reports a missing plugin or invalid path, locate or install Surge, or specify its
 existing location as described in the [Surge guide](../src/poser/reference_setups/surge/README.md),

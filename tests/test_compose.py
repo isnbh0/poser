@@ -41,7 +41,7 @@ from poser.compose import (
     read_config,
 )
 from poser.core.names import Identifier
-from poser.core.ports import AdapterContext, ConfigError
+from poser.core.ports import AdapterContext, ConfigError, UnsupportedPlatformError
 
 if TYPE_CHECKING:
     from poser.core.jsonvalue import JsonValue
@@ -1100,3 +1100,22 @@ def test_vocabularies_are_checked_when_built(
         ConfigError, match=re.escape(f"{tmp_path / 'poser.toml'}: {where}: {problem}")
     ):
         composition.vocabularies()
+
+
+def test_a_module_that_refuses_the_platform_on_import_names_only_the_platform(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    name = f"compose_refusing_{uuid.uuid4().hex}"
+    (tmp_path / f"{name}.py").write_text(
+        "from poser.core.ports import UnsupportedPlatformError\n"
+        "raise UnsupportedPlatformError('this platform lacks a runtime')\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    composition = compose(tmp_path, '[instruments.x]\nadapter = "{module}:instrument"\n', name)
+
+    with pytest.raises(UnsupportedPlatformError) as raised:
+        composition.instruments()
+
+    assert str(raised.value) == "this platform lacks a runtime"

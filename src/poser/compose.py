@@ -447,7 +447,8 @@ class Composition:
         owner: str | None = None,
     ) -> T:
         """Build one adapter from `use`, a name in `builtins` or an import path, naming `where` in
-        any ConfigError but an UnsupportedPlatformError, which names the platform instead.
+        any ConfigError but an UnsupportedPlatformError, which names the platform instead, whether
+        importing the module or calling the factory raised it.
 
         A factory's error that starts with `owner`, such as `instrument 'serum': `, drops it, so
         the message names the instrument once.
@@ -455,6 +456,8 @@ class Composition:
         target = builtins.get(use, use)
         try:
             factory = load_object(target)
+        except UnsupportedPlatformError:
+            raise  # Importing the module found the platform unusable.
         except ConfigError as error:
             raise self._fail(where, str(error)) from error
         if not callable(factory):
