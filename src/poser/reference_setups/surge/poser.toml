@@ -1,4 +1,4 @@
-# Surge XT reference instrument. Run `uv run update-guide` after editing this configuration.
+# Surge XT reference instrument; run `uv run update-guide` after editing.
 [instruments.surge]
 adapter = "pedalboard"
 path = "/Library/Audio/Plug-Ins/VST3/Surge XT.vst3"

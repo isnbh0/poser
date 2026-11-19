@@ -1,6 +1,7 @@
 """`init-workspace`: initialize a workspace from an explicit reference setup."""
 
 import argparse
+import os
 import sys
 from collections.abc import Mapping
 from importlib.resources import files
@@ -21,6 +22,35 @@ SETUP_GUIDE = "https://github.com/isnbh0/poser/blob/main/docs/setup.md"
 SETUP_README = (
     "https://github.com/isnbh0/poser/blob/main/src/poser/reference_setups/surge/README.md"
 )
+
+
+ONEDRIVE_VARIABLES = ("OneDrive", "OneDriveConsumer", "OneDriveCommercial")
+
+
+def onedrive_root(directory: Path, environ: Mapping[str, str]) -> Path | None:
+    """Return the OneDrive root, named by `environ`, that holds `directory`, or None.
+
+    Compares resolved, case-normalized paths, so a studio reached through a junction or a `subst`
+    drive is still found.
+    """
+    target = Path(os.path.normcase(directory.resolve()))
+    for variable in ONEDRIVE_VARIABLES:
+        value = environ.get(variable)
+        if not value:
+            continue
+        root = Path(value)
+        if target.is_relative_to(Path(os.path.normcase(root.resolve()))):
+            return root
+    return None
+
+
+def _warn_about_onedrive(directory: Path, root: Path) -> None:
+    print(
+        f"init-workspace: warning: {directory} is inside OneDrive ({root}). Sync can lock render "
+        "files and interfere with the `latest` links, and OneDrive paths use up the Windows path "
+        "budget. A folder such as C:\\studios avoids both.",
+        file=sys.stderr,
+    )
 
 
 def _scaffold(name: str) -> str:
@@ -101,6 +131,9 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     directory = args.directory.absolute()
     workspace = Workspace(directory)
+    onedrive = onedrive_root(directory, os.environ)
+    if onedrive is not None:
+        _warn_about_onedrive(directory, onedrive)
     try:
         initializer = workspace_initializer(directory)
         setup = prepare(args.setup, args.plugin_path, args.presets_path, Host.current())

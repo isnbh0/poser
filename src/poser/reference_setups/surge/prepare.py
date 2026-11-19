@@ -83,8 +83,16 @@ def windows_data(plugin: Path, host: Host) -> Path | None:
 
 
 def _toml_string(value: str) -> str:
+    """Return `value` as a TOML string: a single-quoted literal, which keeps Windows backslashes
+    as written, when TOML allows it, and otherwise a basic string."""
+    if _LITERAL_FORBIDDEN.isdisjoint(value):
+        return f"'{value}'"
     # JSON string escapes are valid TOML, except literal DEL is forbidden by TOML.
     return json.dumps(value, ensure_ascii=False).replace("\x7f", "\\u007f")
+
+
+# A literal string cannot hold `'` or any control character except tab.
+_LITERAL_FORBIDDEN = frozenset({*(chr(code) for code in range(0x20) if code != 0x09), "\x7f", "'"})
 
 
 @dataclass(frozen=True)

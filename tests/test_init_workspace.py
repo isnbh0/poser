@@ -603,3 +603,64 @@ def test_target_linked_from_another_file_is_a_conflict(
     assert init_workspace.main([*args(target, plugin), "--remove-leftovers"]) == 2
     assert f"{target / 'AGENTS.md'} exists" in capsys.readouterr().err
     assert snapshot(target) == before
+
+
+def test_onedrive_root_finds_a_directory_under_any_onedrive_variable(tmp_path: Path) -> None:
+    root = tmp_path / "OneDrive"
+    studio = root / "Documents" / "studio"
+    studio.mkdir(parents=True)
+    for variable in init_workspace.ONEDRIVE_VARIABLES:
+        assert init_workspace.onedrive_root(studio, {variable: str(root)}) == root
+    assert init_workspace.onedrive_root(root, {"OneDrive": str(root)}) == root
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows paths ignore case")
+def test_onedrive_root_ignores_case_on_windows(tmp_path: Path) -> None:
+    root = tmp_path / "OneDrive"
+    studio = root / "studio"
+    studio.mkdir(parents=True)
+    assert init_workspace.onedrive_root(studio, {"OneDrive": str(root).upper()}) is not None
+
+
+def test_onedrive_root_is_none_outside_or_without_onedrive(tmp_path: Path) -> None:
+    root = tmp_path / "OneDrive"
+    root.mkdir()
+    studio = tmp_path / "studios" / "demo"
+    studio.mkdir(parents=True)
+    assert init_workspace.onedrive_root(studio, {"OneDrive": str(root)}) is None
+    assert init_workspace.onedrive_root(studio, {}) is None
+    assert init_workspace.onedrive_root(studio, {"OneDrive": ""}) is None
+    assert init_workspace.onedrive_root(root / "studio", {"OneDriveCommercial": ""}) is None
+
+
+def test_init_inside_onedrive_warns_and_still_initializes(
+    tmp_path: Path,
+    plugin: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    for variable in init_workspace.ONEDRIVE_VARIABLES:
+        monkeypatch.delenv(variable, raising=False)
+    monkeypatch.setenv("OneDrive", str(tmp_path / "OneDrive"))
+    target = tmp_path / "OneDrive" / "Documents" / "studio"
+
+    assert init_workspace.main(args(target, plugin)) == 0
+
+    assert (target / "poser.toml").is_file()
+    diagnostic = capsys.readouterr().err
+    assert "inside OneDrive" in diagnostic
+    assert "C:\\studios" in diagnostic
+
+
+def test_init_outside_onedrive_does_not_warn(
+    tmp_path: Path,
+    plugin: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    for variable in init_workspace.ONEDRIVE_VARIABLES:
+        monkeypatch.delenv(variable, raising=False)
+
+    assert init_workspace.main(args(tmp_path / "studio", plugin)) == 0
+
+    assert "OneDrive" not in capsys.readouterr().err

@@ -108,6 +108,28 @@ def test_toml_string_round_trips_what_windows_paths_hold(value: str) -> None:
     assert tomllib.loads(f"v = {surge._toml_string(value)}")["v"] == value
 
 
+def test_toml_string_writes_a_windows_path_as_a_literal() -> None:
+    path = "C:\\Program Files\\Common Files\\VST3\\Surge Synth Team\\Surge XT.vst3"
+    rendered = surge._toml_string(path)
+    assert rendered == f"'{path}'"
+    assert tomllib.loads(f"v = {rendered}")["v"] == path
+
+
+@pytest.mark.parametrize(
+    ("value", "rendered"),
+    [
+        ("C:\\Users\\O'Brien", '"C:\\\\Users\\\\O\'Brien"'),
+        ("a\x01b", '"a\\u0001b"'),
+        ("a\x7fb", '"a\\u007fb"'),
+    ],
+)
+def test_toml_string_falls_back_to_a_basic_string_when_a_literal_cannot_hold_it(
+    value: str, rendered: str
+) -> None:
+    assert surge._toml_string(value) == rendered
+    assert tomllib.loads(f"v = {rendered}")["v"] == value
+
+
 def test_windows_searches_the_per_user_then_the_installer_folder(tmp_path: Path) -> None:
     common, local = tmp_path / "Common Files", tmp_path / "Local"
     bundle = Path("Surge Synth Team", "Surge XT.vst3")
