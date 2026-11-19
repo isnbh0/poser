@@ -116,6 +116,7 @@ def main(argv: list[str] | None = None) -> int:
             instruments,
             audio_files,
             effects=effects,
+            scratch=composition.context.scratch,
             timeout_s=RENDER_TIMEOUT_S,
             force=args.force,
             notify=progress(PROG),

@@ -81,6 +81,7 @@ ignore = [
 [tool.ruff.lint.flake8-tidy-imports.banned-api]
 "typing.Any".msg = "Use object, a TypedDict, a Protocol, or a concrete type."
 "typing_extensions.Any".msg = "Use object, a TypedDict, a Protocol, or a concrete type."
+"tempfile.TemporaryDirectory".msg = "Use the scratch port (Scratch, poser.core.ports), whose facility cleanup retries held files and never fails the work."
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

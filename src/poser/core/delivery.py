@@ -22,6 +22,7 @@ from poser.core.ports import (
     Instrument,
     RecordWriter,
     RenderStore,
+    Scratch,
     SongBusyError,
     SongFormat,
 )
@@ -371,6 +372,7 @@ def export_song(
     writer: DeliveryWriter,
     *,
     poser_version: str,
+    scratch: Scratch,
     timeout_s: float,
     force: bool,
     notify: Notify = ignore_progress,
@@ -393,6 +395,7 @@ def export_song(
                 audio_files,
                 effects,
                 timeout_s,
+                scratch=scratch,
                 force=force,
                 notify=notify,
             )

@@ -12,7 +12,9 @@ import sysconfig
 from importlib.metadata import distribution
 from importlib.resources import files
 from pathlib import Path
-from tempfile import TemporaryDirectory
+
+# A release script that runs outside any studio, so no scratch port exists here.
+from tempfile import TemporaryDirectory  # noqa: TID251
 
 
 def require(condition: object, message: str) -> None:

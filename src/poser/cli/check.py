@@ -89,13 +89,14 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         fill_path_options(args)
-        instruments = load_composition(args).instruments()
+        composition = load_composition(args)
+        instruments = composition.instruments()
     except (WorkspaceError, ConfigError) as error:
         fail(PROG, error)
         return EXIT_BAD_CONFIG
 
     results = [
-        check_instrument(instrument, name, RENDER_TIMEOUT_S)
+        check_instrument(instrument, name, RENDER_TIMEOUT_S, scratch=composition.context.scratch)
         for name, instrument in instruments.items()
     ]
     if args.json:

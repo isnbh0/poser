@@ -13,10 +13,11 @@ from poser.core.checks import CheckAnalysis, CheckFailureStatus, MeasuredStatus
 
 @pytest.mark.real_plugins
 def test_each_instrument_returns_a_known_status_with_finite_numbers(tmp_path: Path) -> None:
-    instruments = real_composition(tmp_path).instruments()
+    composition = real_composition(tmp_path)
+    instruments = composition.instruments()
 
     results = [
-        check_instrument(instrument, name, RENDER_TIMEOUT_S)
+        check_instrument(instrument, name, RENDER_TIMEOUT_S, scratch=composition.context.scratch)
         for name, instrument in instruments.items()
     ]
 

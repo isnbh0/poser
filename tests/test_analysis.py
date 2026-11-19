@@ -20,6 +20,7 @@ from fakes import (
     FakeSound,
     FakeVisualizer,
     NpyAudioFiles,
+    TempScratch,
 )
 
 from poser.core.analysis import AnalysisTools, analyze_song, measure
@@ -120,6 +121,7 @@ class Setup:
             self.instruments,
             self.audio_files,
             effects=self.effects,
+            scratch=TempScratch(),
             timeout_s=10.0,
             force=False,
         )
@@ -736,6 +738,7 @@ def test_a_feedback_graph_analyzes_through_its_group_keys(tmp_path: Path) -> Non
         setup.instruments,
         setup.audio_files,
         effects=setup.effects,
+        scratch=TempScratch(),
         timeout_s=10.0,
         force=False,
     )

@@ -20,6 +20,7 @@ from fakes import (
     FakeSound,
     FakeVisualizer,
     NpyAudioFiles,
+    TempScratch,
 )
 
 from poser.core import cache, planning, rendering
@@ -140,6 +141,7 @@ class Setup:
             self.instruments,
             self.audio_files,
             effects=self.effects,
+            scratch=TempScratch(),
             timeout_s=10.0,
             force=force,
             notify=self.progress.append,
@@ -800,7 +802,14 @@ def test_render_order_is_topological_and_report_order_is_song_order(tmp_path: Pa
     tools = AnalysisTools(FakeMixer(), FakeMeasurer(), FakeVisualizer())
 
     rendered = render_song(
-        LoadedSong(song), renders, SONG_ID, instruments, audio_files, timeout_s=10.0, force=False
+        LoadedSong(song),
+        renders,
+        SONG_ID,
+        instruments,
+        audio_files,
+        scratch=TempScratch(),
+        timeout_s=10.0,
+        force=False,
     )
     report = analyze_song(
         LoadedSong(song),

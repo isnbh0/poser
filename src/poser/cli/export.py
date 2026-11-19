@@ -72,6 +72,7 @@ def _run(args: argparse.Namespace) -> DeliveryResult:
         tools,
         writer,
         poser_version=version("poser"),
+        scratch=context.scratch,
         timeout_s=RENDER_TIMEOUT_S,
         force=args.force,
         notify=progress(PROG),

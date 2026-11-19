@@ -113,6 +113,7 @@ def real_render(tmp_path: Path, song: LoadedSong | Song | Graph, song_id: str) -
         composition.instruments(),
         composition.audio_files(),
         effects=composition.effects(),
+        scratch=composition.context.scratch,
         timeout_s=RENDER_TIMEOUT_S,
         force=False,
     )

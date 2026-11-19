@@ -5,7 +5,6 @@ preview.
 propagates; after it, the sound is saved whatever happens to the preview.
 """
 
-import tempfile
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -20,6 +19,7 @@ from poser.core.ports import (
     Instrument,
     RenderStore,
     ResolvedSound,
+    Scratch,
     SoundCapture,
     SoundFailure,
 )
@@ -113,6 +113,8 @@ def save_sound(
     instruments: Mapping[Identifier, Instrument],
     renders: RenderStore,
     audio_files: AudioFiles,
+    *,
+    scratch: Scratch,
 ) -> SaveResult:
     """Let the owner shape a sound, save it, and write its preview.
 
@@ -146,7 +148,7 @@ def save_sound(
     except OSError as error:
         return NotSaved(str(error))
 
-    with tempfile.TemporaryDirectory() as directory:
+    with scratch.directory() as directory:
         capture = CaptureRequest(
             request.name, start, check_pattern(), Path(directory) / "preview.npy"
         )

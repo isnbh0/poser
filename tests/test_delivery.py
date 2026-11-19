@@ -22,6 +22,7 @@ from fakes import (
     FakeSound,
     FakeVisualizer,
     NpyAudioFiles,
+    TempScratch,
 )
 from links import LINK_KINDS, make_dangling_link, make_link
 from workspaces import CommandWorkspace, make_workspace, write_script_song, write_song
@@ -115,6 +116,7 @@ class Harness:
             self.tools,
             self.writer,
             poser_version="test",
+            scratch=TempScratch(),
             timeout_s=10,
             force=True,
         )

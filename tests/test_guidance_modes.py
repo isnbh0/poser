@@ -186,6 +186,7 @@ def test_guidance_toggle_preserves_rendered_bytes_keys_and_cache(
                 configured.instruments(),
                 audio,
                 effects=configured.effects(),
+                scratch=configured.context.scratch,
                 timeout_s=10,
                 force=force,
             )

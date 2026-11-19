@@ -1,7 +1,6 @@
 """Checking: whether an instrument's default sound loads, plays every note, and renders the same
 way twice."""
 
-import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -17,7 +16,7 @@ from poser.core.checks import (
     check_status,
 )
 from poser.core.names import Identifier
-from poser.core.ports import Instrument, RenderFailure, RenderRequest, SoundFailure
+from poser.core.ports import Instrument, RenderFailure, RenderRequest, Scratch, SoundFailure
 from poser.core.sounds import SoundRef
 
 
@@ -42,7 +41,9 @@ class CheckResult:
         return self.outcome.status
 
 
-def check_instrument(instrument: Instrument, name: Identifier, timeout_s: float) -> CheckResult:
+def check_instrument(
+    instrument: Instrument, name: Identifier, timeout_s: float, *, scratch: Scratch
+) -> CheckResult:
     """Render the check pattern twice on the instrument's default sound and judge the renders."""
     adapter = instrument.adapter_id
     sound = instrument.resolve(SoundRef(name, None))
@@ -51,7 +52,7 @@ def check_instrument(instrument: Instrument, name: Identifier, timeout_s: float)
         return CheckResult(name, adapter, CheckFailure(check_status(sound.status), detail))
 
     renders: list[Audio] = []
-    with tempfile.TemporaryDirectory() as directory:
+    with scratch.directory() as directory:
         for index in range(2):
             path = Path(directory) / f"check-{index + 1}.npy"
             failure = instrument.render(RenderRequest(sound, check_pattern(), path), timeout_s)

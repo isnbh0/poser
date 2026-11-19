@@ -5,7 +5,14 @@ from typing import override
 
 import numpy as np
 import pytest
-from fakes import FakeInstrument, FakeRenderStore, FakeSound, NpyAudioFiles, PlainInstrument
+from fakes import (
+    FakeInstrument,
+    FakeRenderStore,
+    FakeSound,
+    NpyAudioFiles,
+    PlainInstrument,
+    TempScratch,
+)
 
 from poser.core.audio import Audio
 from poser.core.capturing import (
@@ -89,7 +96,9 @@ class Setup:
         replace: bool = False,
     ) -> SaveResult:
         request = SaveRequest(Identifier(instrument), NAME, "a bright lead", start, replace=replace)
-        return save_sound(request, self.instruments, self.renders, self.audio_files)
+        return save_sound(
+            request, self.instruments, self.renders, self.audio_files, scratch=TempScratch()
+        )
 
     @property
     def preview(self) -> Path:

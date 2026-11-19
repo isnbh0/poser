@@ -298,3 +298,9 @@ Songs whose pitches are all whole render the same audio.
   **Fix:** build contexts with `poser.compose.adapter_context(root, sounds_dir, renders_dir)`, or
   pass any object whose `directory()` satisfies `poser.core.ports.Scratch`. In the adapter,
   replace `tempfile.TemporaryDirectory()` with `context.scratch.directory()`.
+
+- **Symptom:** code outside poser that calls `render_song`, `export_song`, `check_instrument`, or
+  `save_sound` fails with `TypeError` naming `scratch`.
+  **Cause:** these use cases take a required `scratch` keyword argument.
+  **Fix:** pass `scratch=composition.context.scratch` from the composition that built the
+  instruments.

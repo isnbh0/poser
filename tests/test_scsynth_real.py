@@ -396,6 +396,7 @@ def render(composition: Composition, song: Song, song_id: str, *, force: bool) -
         composition.instruments(),
         composition.audio_files(),
         effects=composition.effects(),
+        scratch=composition.context.scratch,
         timeout_s=RENDER_TIMEOUT_S,
         force=force,
     )

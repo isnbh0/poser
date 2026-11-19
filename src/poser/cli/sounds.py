@@ -150,7 +150,9 @@ def save_main(argv: list[str] | None = None) -> int:
 
     print(f"Opening {request.instrument}. Choose the sound, then close the window to save it.")
     try:
-        result = save_sound(request, instruments, renders, audio_files)
+        result = save_sound(
+            request, instruments, renders, audio_files, scratch=composition.context.scratch
+        )
     except KeyboardInterrupt:
         fail(SAVE_PROG, "interrupted, not saved")
         return EXIT_SOME_FAILED

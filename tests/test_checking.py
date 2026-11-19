@@ -1,7 +1,7 @@
 """Checking an instrument's default sound, on fakes."""
 
 import pytest
-from fakes import BadOutput, FakeInstrument, FakeSound
+from fakes import BadOutput, FakeInstrument, FakeSound, TempScratch
 
 from poser.core.checking import CheckResult, check_instrument
 from poser.core.checks import (
@@ -22,7 +22,7 @@ NAME = Identifier("synth")
 
 def check(sound: FakeSound | None) -> tuple[FakeInstrument, CheckResult]:
     instrument = FakeInstrument(NAME, {} if sound is None else {None: sound})
-    return instrument, check_instrument(instrument, NAME, timeout_s=10.0)
+    return instrument, check_instrument(instrument, NAME, timeout_s=10.0, scratch=TempScratch())
 
 
 def analysis(result: CheckResult) -> CheckAnalysis:
@@ -127,3 +127,14 @@ def test_check_outcomes_refuse_the_other_path_status() -> None:
             repeatable=True,
             max_difference_dbfs=-120.0,
         )
+
+
+def test_a_check_directory_that_cannot_be_removed_keeps_the_result() -> None:
+    scratch = TempScratch(fail_removal=True)
+    instrument = FakeInstrument(NAME, {None: FakeSound()})
+
+    result = check_instrument(instrument, NAME, timeout_s=10.0, scratch=scratch)
+
+    assert result == check(FakeSound())[1]
+    (made,) = scratch.made
+    assert made.is_dir()

@@ -65,7 +65,8 @@ def _long_paths() -> bool:
     hold, so this tries.
     """
     try:
-        with tempfile.TemporaryDirectory(prefix="poser-paths-", ignore_cleanup_errors=True) as root:
+        # The probe is the facility's own and already ignores cleanup errors.
+        with tempfile.TemporaryDirectory(prefix="poser-paths-", ignore_cleanup_errors=True) as root:  # noqa: TID251
             Path(root, *["d" * 100] * 3).mkdir(parents=True)
     except OSError:
         return False

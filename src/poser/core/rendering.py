@@ -17,7 +17,6 @@ published or found in the same run. A feedback graph's cycle groups render one j
 stepped through fixed blocks with previous-block feedback buffers that live in the job.
 """
 
-import tempfile
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -63,6 +62,7 @@ from poser.core.ports import (
     RenderFailure,
     RenderRequest,
     RenderStore,
+    Scratch,
     SongStore,
     StoredUnit,
 )
@@ -202,6 +202,7 @@ class _RenderRun:
     timeout_s: float
     force: bool
     notify: Notify
+    scratch: Scratch
     results: dict[NodeName, TrackResult] = field(default_factory=dict[NodeName, TrackResult])
     published: set[str] = field(default_factory=set[str])
     """Keys published by this run, which a unit with an identical input reuses even when
@@ -216,6 +217,7 @@ def render_song(
     audio_files: AudioFiles,
     *,
     effects: Mapping[Identifier, Effect] = EMPTY_EFFECTS,
+    scratch: Scratch,
     timeout_s: float,
     force: bool,
     notify: Notify = ignore_progress,
@@ -235,7 +237,15 @@ def render_song(
     require_stem_format(renders, audio_files)
     with song_session(renders, song_id) as store:
         return _render(
-            loaded, store, instruments, audio_files, effects, timeout_s, force=force, notify=notify
+            loaded,
+            store,
+            instruments,
+            audio_files,
+            effects,
+            timeout_s,
+            scratch=scratch,
+            force=force,
+            notify=notify,
         )
 
 
@@ -247,6 +257,7 @@ def _render(
     effects: Mapping[Identifier, Effect],
     timeout_s: float,
     *,
+    scratch: Scratch,
     force: bool,
     notify: Notify,
 ) -> list[TrackResult]:
@@ -257,7 +268,7 @@ def _render(
     store.sweep()
     # Results from older stems must not survive a render.
     store.clear_latest()
-    run = _RenderRun(planned, store, audio_files, timeout_s, force, notify)
+    run = _RenderRun(planned, store, audio_files, timeout_s, force, notify, scratch)
     for unit in planned.units:
         for result in _render_unit(run, unit):
             run.results[result.track] = result
@@ -453,7 +464,7 @@ def _run_group(
         return {}, RenderFailure(
             RenderFailureStatus.CRASHED, f"upstream wrote unusable audio: {error}"
         )
-    with tempfile.TemporaryDirectory() as directory:
+    with run.scratch.directory() as directory:
         request = GroupRenderRequest(
             frames=frames,
             members=tuple(members),
@@ -532,7 +543,7 @@ def _render_track_node(run: _RenderRun, unit: TrackUnit) -> Audio | _Failed:
     """
     adapter, sound = unit.resolved.adapter, unit.resolved.resolved
     name, performance, notify = unit.name, unit.input.performance, run.notify
-    with tempfile.TemporaryDirectory() as directory:
+    with run.scratch.directory() as directory:
         attempt = 1
         lateness: list[float] = []
         while True:
@@ -588,7 +599,7 @@ def _render_effect_node(run: _RenderRun, unit: EffectUnit) -> Audio | _Failed:
         )
     except AudioFileError as error:
         return _Failed(RenderFailureStatus.CRASHED, f"upstream wrote unusable audio: {error}")
-    with tempfile.TemporaryDirectory() as directory:
+    with run.scratch.directory() as directory:
         request = EffectRenderRequest(audio, recipe, Path(directory) / "audio.npy", control=control)
         failure = adapter.render(request, run.timeout_s)
         if isinstance(failure, RenderFailure):
