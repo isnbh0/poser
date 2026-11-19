@@ -57,8 +57,10 @@ advice when `[guidance] advice` is enabled.
   Windows-only registry command runs in the separate long-paths step. A new example needs both a
   mirror and an execution disposition. `tests/test_release.py` holds that coverage, the reviewed
   shell-specific search/loop semantics, and the registry command's CI mirror. The job runs the
-  real-plugin tests against the documented studio's `poser.toml` and the real-scsynth tests against
-  SuperCollider from its pinned installer. Keep documented examples runnable when changing them.
+  Pedalboard real-plugin tests and the Surge-only real tests from the render, analyze, checking,
+  and songs files against the documented studio's `poser.toml`, and the real-scsynth tests against
+  SuperCollider from its pinned installer. The `windows-py314` job runs the plugin-free suite and
+  the same real-plugin step on Python 3.14. Keep documented examples runnable when changing them.
 - `make test-real` runs the `real_plugins` tests, which load the instruments in a root
   `poser.toml`, and the `real_scsynth` tests. The test harness finds `scsynth` through
   `SCSYNTH_PATH`, the SuperCollider app bundle, or `PATH`; the adapter itself runs only its

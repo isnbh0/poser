@@ -530,47 +530,63 @@ def test_windows_console_pipeline_uses_the_documented_setting() -> None:
     assert "$env:PYTHONIOENCODING = $originalPythonEncoding" in finally_body
 
 
-def test_windows_requires_headless_preset_selection_and_rejects_bypasses() -> None:
+REAL_PLUGIN_STEP = "Surge XT and Surge XT Effects through Pedalboard (required)"
+REQUIRED_REAL_NODES = [
+    "tests/test_pedalboard_real.py::test_each_instrument_meets_the_instrument_contract",
+    "tests/test_pedalboard_real.py::test_a_render_has_exactly_the_performance_s_frames",
+    "tests/test_pedalboard_real.py::test_a_windows_plugin_loads_from_its_binary_as_from_its_bundle",
+    "tests/test_pedalboard_real.py::test_surge_restored_preset_keeps_its_first_note",
+    "tests/test_pedalboard_real.py::test_surge_factory_presets_take_effect_headlessly",
+    "tests/test_pedalboard_real.py::test_each_effect_renders_as_many_frames_as_it_is_given",
+    "tests/test_render_real.py::test_demo_song_renders_aligned_audible_stems",
+    "tests/test_analyze_real.py::test_demo_song_mixes_and_analyzes",
+    "tests/test_checking_real.py::test_each_instrument_returns_a_known_status_with_finite_numbers",
+    "tests/test_songs_real.py::test_song_renders_without_defects[demo.yaml]",
+]
+
+
+def require_real_plugin_step(candidate: dict[str, object]) -> None:
+    """Require the real-plugin step to run every Surge-only real node and fail on any skip."""
+    assert candidate.get("continue-on-error", False) is False
+    assert candidate.get("if") == "${{ !cancelled() }}"
+    script = candidate["run"]
+    assert isinstance(script, str)
+    # Passing-test metrics must be visible; default pytest capture hides that evidence.
+    assert "uv run pytest -m real_plugins -v -s -rs --durations=0" in script
+    assert re.findall(r'"(tests/test_\w+_real\.py::[\w\[\].]+)"', script) == REQUIRED_REAL_NODES
+    assert "[effects.surge_effects]" in script
+    assert "Add-Content" in script
+    assert re.search(
+        r"Tee-Object -Variable output\n\s*\$status = \$LASTEXITCODE\n"
+        r'\s*if \(\$status -ne 0\) \{ throw "the real-plugin tests failed" \}\n'
+        r'\s*if \(\$output -match "skipped"\) \{ throw "a real-plugin test skipped" \}',
+        script,
+    )
+
+
+def real_plugin_step(job: str) -> dict[str, object]:
     workflow = yaml.safe_load(
         (REPO_DIR / ".github/workflows/check.yml").read_text(encoding="utf-8")
     )
-    job = workflow["jobs"]["windows"]
-    assert job.get("continue-on-error", False) is False
-    (step,) = [
-        item
-        for item in job["steps"]
-        if item.get("name") == "Surge XT and Surge XT Effects through Pedalboard (required)"
-    ]
-    node = "tests/test_pedalboard_real.py::test_surge_factory_presets_take_effect_headlessly"
-    required = [
-        "test_each_instrument_meets_the_instrument_contract",
-        "test_a_render_has_exactly_the_performance_s_frames",
-        "test_a_windows_plugin_loads_from_its_binary_as_from_its_bundle",
-        "test_surge_restored_preset_keeps_its_first_note",
-        "test_surge_factory_presets_take_effect_headlessly",
-        "test_each_effect_renders_as_many_frames_as_it_is_given",
-    ]
+    steps = workflow["jobs"][job]
+    assert steps.get("continue-on-error", False) is False
+    (step,) = [item for item in steps["steps"] if item.get("name") == REAL_PLUGIN_STEP]
+    return step
 
-    def require(candidate: dict[str, object]) -> None:
-        assert candidate.get("continue-on-error", False) is False
-        assert candidate.get("if") == "${{ !cancelled() }}"
-        script = candidate["run"]
-        assert isinstance(script, str)
-        # Passing-test metrics must be visible; default pytest capture hides that evidence.
-        assert "uv run pytest -m real_plugins -v -s -rs --durations=0" in script
-        assert re.findall(r'"tests/test_pedalboard_real.py::(\w+)"', script) == required
-        assert re.search(
-            r"Tee-Object -Variable output\n\s*\$status = \$LASTEXITCODE\n"
-            r'\s*if \(\$status -ne 0\) \{ throw "the real-plugin tests failed" \}\n'
-            r'\s*if \(\$output -match "skipped"\) \{ throw "a real-plugin test skipped" \}',
-            script,
-        )
 
-    require(step)
+@pytest.mark.parametrize("job", ["windows", "windows-py314"])
+def test_windows_requires_headless_preset_selection_and_rejects_bypasses(job: str) -> None:
+    step = real_plugin_step(job)
+    require_real_plugin_step(step)
     script = step["run"]
-    mutations = (
-        {**step, "run": script.replace(f'"{node}"', '"omitted-headless-node"')},
+    assert isinstance(script, str)
+    mutations = [
+        {**step, "run": script.replace(f'"{node}"', '"omitted-node"')}
+        for node in REQUIRED_REAL_NODES
+    ]
+    mutations += [
         {**step, "run": script.replace("-v -s -rs", "-v -rs")},
+        {**step, "run": script.replace("[effects.surge_effects]", "")},
         {**step, "run": script.replace("$status -ne 0", "$status -eq 0")},
         {**step, "run": script.replace('$output -match "skipped"', "$false")},
         {**step, "run": script.replace("$status = $LASTEXITCODE", "$status = 0")},
@@ -582,11 +598,42 @@ def test_windows_requires_headless_preset_selection_and_rejects_bypasses() -> No
         },
         {**step, "continue-on-error": True},
         {**step, "if": "${{ success() }}"},
-    )
+    ]
     for changed in mutations:
         assert changed != step
         with pytest.raises(AssertionError):
-            require(changed)
+            require_real_plugin_step(changed)
+
+
+def test_windows_py314_runs_on_python_3_14_before_the_suites() -> None:
+    workflow = yaml.safe_load(
+        (REPO_DIR / ".github/workflows/check.yml").read_text(encoding="utf-8")
+    )
+    job = workflow["jobs"]["windows-py314"]
+    assert job["runs-on"] == "windows-latest"
+    assert job["env"]["UV_PYTHON"] == "3.14"
+    steps = job["steps"]
+    runs = [step.get("run", "") for step in steps]
+    names = [step.get("name") for step in steps]
+    version = next(
+        index for index, run in enumerate(runs) if "assert sys.version_info[:2] == (3, 14)" in run
+    )
+    assert (
+        runs.index("uv sync --locked")
+        < version
+        < names.index("Install Surge XT (required)")
+        < names.index("Plugin-free suite (required)")
+        < names.index("Root configuration from init-workspace (required)")
+        < names.index(REAL_PLUGIN_STEP)
+    )
+    assert runs[names.index("Plugin-free suite (required)")] == "uv run pytest -q -rs"
+    root = runs[names.index("Root configuration from init-workspace (required)")]
+    assert "init-workspace --setup surge" in root
+    assert "Copy-Item" in root
+    windows = workflow["jobs"]["windows"]["steps"]
+    (surge,) = [step for step in windows if step.get("name") == "Install Surge XT (required)"]
+    assert steps[names.index("Install Surge XT (required)")] == surge
+    assert steps[names.index(REAL_PLUGIN_STEP)] == real_plugin_step("windows")
 
 
 def test_windows_doc_execution_covers_discovered_examples() -> None:
