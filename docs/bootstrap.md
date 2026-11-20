@@ -6,7 +6,8 @@ written for macOS and Linux shells, so if your shell tool is bash on Windows, st
 PowerShell commands, through PowerShell. On Windows on Arm, stop and tell me that poser does not
 support it, even with x64 Python under emulation. On Linux, tell me that poser is untested there and
 that the Surge setup needs explicit paths, then ask before continuing. Preserve existing work, and
-ask before actions that need permission.
+ask before actions that need permission. On Windows, if Surge XT is not installed, prefer its
+portable zip, which needs no administrator approval.
 If I already have a poser studio, upgrade it instead by following
 https://raw.githubusercontent.com/isnbh0/poser/main/docs/upgrading.md.
 If I already requested a song, continue into composition; otherwise offer it after setup.

@@ -38,7 +38,7 @@ OneDrive-synced folders. Windows 11 often moves Documents and Desktop into OneDr
 paths spend the path budget below, and sync can lock render files and interfere with the render
 store's links; `init-workspace` warns when the studio is inside OneDrive. Windows Defender's
 real-time scanning can slow the first plugin load, and SmartScreen may ask before running the Surge
-XT installer.
+XT installer; Surge XT's portable zip skips the installer and its administrator approval.
 
 The studio's filesystem must support directory links and hard links. `init-workspace` checks both
 in the destination before publishing scaffold files. Windows NTFS supports these features;

@@ -33,9 +33,10 @@ the first of these that applies:
 
 ### Windows
 
-Download the Windows 64-bit installer and run it. It installs for all users, which needs
-administrator approval, with the plugin under `%CommonProgramFiles%` and the factory patches in
-`%ProgramData%\Surge XT`.
+Download either the Windows 64-bit installer or the portable zip. The installer installs for all
+users, which needs administrator approval, with the plugin under `%CommonProgramFiles%` and the
+factory patches in `%ProgramData%\Surge XT`. The portable zip, covered at the end of this section,
+needs no administrator approval or installer window.
 
 The initializer searches for the VST3 bundle in Steinberg's priority order, per-user before
 system-wide, so it finds the bundle a VST3 host loads:
